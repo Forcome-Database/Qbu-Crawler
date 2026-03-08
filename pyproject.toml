@@ -1,0 +1,11 @@
+[project]
+name = "basspro-scraper"
+version = "0.1.0"
+description = "Bass Pro Shops 产品爬虫服务"
+requires-python = ">=3.10"
+dependencies = [
+    "drissionpage",
+]
+
+[tool.uv]
+package = false
