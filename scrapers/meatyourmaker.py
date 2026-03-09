@@ -141,18 +141,30 @@ class MeatYourMakerScraper(BaseScraper):
         return False
 
     def _scroll_review_sections(self, tab):
-        """滚动当前页评论 section 触发图片懒加载"""
-        tab.run_js("""
+        """逐个滚动评论 section 到视口，触发图片懒加载"""
+        total = tab.run_js("""
             const c = document.querySelector('[data-bv-show="reviews"]');
-            if (!c || !c.shadowRoot) return;
+            if (!c || !c.shadowRoot) return 0;
             const shadow = c.shadowRoot;
             const container = Array.from(shadow.querySelectorAll('section'))
                 .find(s => s.querySelector('section'));
-            if (!container) return;
-            container.querySelectorAll(':scope > section').forEach(s => {
-                s.scrollIntoView({block: 'center'});
-            });
+            return container ? container.querySelectorAll(':scope > section').length : 0;
         """)
+        if not total:
+            return
+        for i in range(total):
+            tab.run_js(f"""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (c && c.shadowRoot) {{
+                    const container = Array.from(c.shadowRoot.querySelectorAll('section'))
+                        .find(s => s.querySelector('section'));
+                    if (container) {{
+                        const s = container.querySelectorAll(':scope > section')[{i}];
+                        if (s) s.scrollIntoView({{block: 'center'}});
+                    }}
+                }}
+            """)
+            time.sleep(0.3)
         time.sleep(1)
 
     def _extract_page_reviews(self, tab) -> list:
