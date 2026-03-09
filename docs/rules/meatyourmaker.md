@@ -70,7 +70,9 @@
 - **正文提取用位置关系**：无语义属性标记正文 div，靠排除法找第一个长文本叶子 div
 - **价格选择器需限定区域**：页面底部有推荐产品也有 `.price-sales`，必须限定 `.c-product__price` 父级
 - **无限滚动的 data-grid-url**：直接 GET 请求返回的是 HTML 片段，不是完整页面
+- **必须使用 `normal` 加载模式**：meatyourmaker 的 BV 脚本在 `eager` 模式下无法初始化（`.bv_main_container` 永远不出现），必须覆盖 `_build_options` 使用 `normal` 模式。basspro 可以用 `eager`，这是两站点的关键差异
 - **BV 必须展开后才加载**：与 basspro 不同，meatyourmaker 的 BV 脚本在 Reviews toggler 展开后才初始化，`scrape()` 中必须先 `_click_reviews_tab` 再 `_wait_for_bv_data`，否则 BV summary 和 Shadow DOM 永远不会出现
+- **toggler 需等待渲染**：`_click_reviews_tab` 必须轮询等待 `.c-toggler__element` 出现再点击，否则 JS 静默失败
 - **库存判断用两个互斥 div**：`.availability-msg`（In Stock）和 `.not-available-div`（Out of stock）互斥显示，不能只检查一个的 display 状态
 - **无评论产品的 BV 不加载**：部分新产品没有评论时，BV summary 不会注入，`_wait_for_bv_data` 会超时，这是预期行为，评分和评论数保持 None
 - **评论翻页等待时间**：当前每页翻页后 `time.sleep(2)`，评论多的产品（396 条）实测可获取约 209 条，可能需要增加等待或检测页面内容变化来提高覆盖率
