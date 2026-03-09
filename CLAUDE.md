@@ -21,7 +21,7 @@ pachong/
 ├── .env               # 环境变量（MinIO 配置等，不提交）
 ├── .env.example       # 环境变量模板
 ├── config.py          # 配置（数据库路径、浏览器选项、MinIO、等待/重试/反爬参数）
-├── models.py          # SQLite 数据层（products + reviews 表）
+├── models.py          # SQLite 数据层（products + product_snapshots + reviews 表）
 ├── scraper.py         # 爬虫核心（BassProScraper 类）
 ├── minio_client.py    # MinIO 图片上传客户端
 ├── main.py            # CLI 入口
@@ -149,8 +149,14 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | 状态 | 输出示例 | 含义 |
 |------|----------|------|
 | 无评论 | `评论: 无` | `review_count == 0`，产品确实无评论 |
-| 成功抓取 | `评论: 5/12 条` | 有评论且成功抓到部分/全部 |
+| 成功抓取 | `评论: 5/12 条 (新增 3)` | 有评论且成功抓到部分/全部，显示本次新增数 |
 | Shadow DOM 限制 | `评论: 0/2 条 (BV未注入详情数据)` | 有评论但 Shadow DOM 无法获取 |
+
+### 数据存储策略
+
+- **products** 表：UPSERT，始终反映最新状态（当前快照）
+- **product_snapshots** 表：每次抓取 INSERT 一条，记录价格/库存/评分/评论数变化历史，用于趋势分析
+- **reviews** 表：增量 INSERT（不再全删重插），用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重
 
 ### 分类页采集
 

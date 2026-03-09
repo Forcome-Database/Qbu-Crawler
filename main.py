@@ -1,6 +1,6 @@
 import sys
 import os
-from models import init_db, save_product, save_reviews
+from models import init_db, save_product, save_snapshot, save_reviews
 from scraper import BassProScraper
 
 USAGE = """用法:
@@ -30,7 +30,8 @@ def scrape_urls(scraper: BassProScraper, urls: list[str]):
             reviews = data["reviews"]
 
             product_id = save_product(product)
-            save_reviews(product_id, reviews)
+            save_snapshot(product_id, product)
+            new_reviews = save_reviews(product_id, reviews)
 
             print(f"  名称: {product['name']}")
             print(f"  SKU: {product['sku']}")
@@ -42,7 +43,7 @@ def scrape_urls(scraper: BassProScraper, urls: list[str]):
             if review_count == 0:
                 print(f"  评论: 无")
             elif scraped > 0:
-                print(f"  评论: {scraped}/{review_count} 条")
+                print(f"  评论: {scraped}/{review_count} 条 (新增 {new_reviews})")
             else:
                 print(f"  评论: 0/{review_count} 条 (BV未注入详情数据)")
             success += 1
