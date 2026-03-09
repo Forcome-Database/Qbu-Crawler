@@ -6,6 +6,7 @@
 
 当前支持站点：
 - **Bass Pro Shops** — 规则文档：`docs/rules/basspro.md`
+- **Meat Your Maker** — 规则文档：`docs/rules/meatyourmaker.md`
 
 ## 技术栈
 
@@ -19,22 +20,25 @@
 
 ```
 Qbu-Crawler/
-├── CLAUDE.md          # 本文件 - 项目通用指南
-├── pyproject.toml     # 项目配置和依赖
-├── .env               # 环境变量（MinIO 配置等，不提交）
-├── .env.example       # 环境变量模板
-├── config.py          # 配置（数据库路径、浏览器选项、MinIO、等待/重试/反爬参数）
+├── CLAUDE.md
+├── pyproject.toml
+├── .env / .env.example
+├── config.py          # 配置（数据库、浏览器、MinIO、等待/重试/反爬参数）
 ├── models.py          # SQLite 数据层（products + product_snapshots + reviews 表）
-├── scraper.py         # 爬虫核心（BassProScraper 类）
 ├── minio_client.py    # MinIO 图片上传客户端
-├── main.py            # CLI 入口
-├── data/              # 数据目录（.gitignore）
-│   └── products.db    # SQLite 数据库
-└── docs/              # 项目文档
+├── main.py            # CLI 入口（多站点路由 + 并行采集）
+├── scrapers/
+│   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
+│   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
+│   ├── basspro.py     # BassProScraper — Bass Pro Shops
+│   └── meatyourmaker.py  # MeatYourMakerScraper — Meat Your Maker
+├── data/
+│   └── products.db
+└── docs/
     ├── rules/         # 各站点采集规则
     ├── features/      # 需求文档
     ├── plans/         # 实施计划
-    └── devlogs/       # 开发日志和踩坑记录
+    └── devlogs/       # 开发日志
 ```
 
 ## 常用命令

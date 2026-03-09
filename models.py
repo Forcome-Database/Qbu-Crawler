@@ -17,6 +17,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT UNIQUE NOT NULL,
+            site TEXT NOT NULL DEFAULT 'basspro',
             name TEXT,
             sku TEXT,
             price REAL,
@@ -56,6 +57,7 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN images TEXT",
         "ALTER TABLE reviews ADD COLUMN body_hash TEXT",
         "ALTER TABLE reviews ADD COLUMN scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE products ADD COLUMN site TEXT NOT NULL DEFAULT 'basspro'",
     ]
     for sql in migrations:
         try:
@@ -103,9 +105,10 @@ def _body_hash(body: str | None) -> str:
 def save_product(data: dict) -> int:
     conn = get_conn()
     cursor = conn.execute("""
-        INSERT INTO products (url, name, sku, price, stock_status, review_count, rating, scraped_at)
-        VALUES (:url, :name, :sku, :price, :stock_status, :review_count, :rating, CURRENT_TIMESTAMP)
+        INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, scraped_at)
+        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, CURRENT_TIMESTAMP)
         ON CONFLICT(url) DO UPDATE SET
+            site = excluded.site,
             name = excluded.name,
             sku = excluded.sku,
             price = excluded.price,

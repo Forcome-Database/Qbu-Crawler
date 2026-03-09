@@ -1,0 +1,69 @@
+# Meat Your Maker 采集规则
+
+## 站点信息
+
+- **域名**：`www.meatyourmaker.com`
+- **平台**：Salesforce Commerce Cloud (Demandware)
+- **产品 URL 格式**：`/{category}/{subcategory}/{product-name}/{product-id}.html`
+- **分类 URL 格式**：`/{category}/{subcategory}/`
+
+## 产品数据提取（DOM，无 JSON-LD Product）
+
+| 字段 | 选择器/方法 | 说明 |
+|------|------------|------|
+| 名称 | `h1` | 页面标题 |
+| SKU | `[data-pid]` 属性 | Demandware 产品 ID |
+| 价格 | `.product-price.c-product__price .price-sales` | 限定主产品区域，排除推荐产品 |
+| 库存 | `.availability-msg` 可见性 | `display !== 'none'` → in_stock |
+| 评分 | `#bv-jsonld-bvloader-summary` | BV JSON-LD，与 Bass Pro 相同 |
+| 评论数 | `#bv-jsonld-bvloader-summary` | aggregateRating.reviewCount |
+
+## 评论提取流程
+
+1. `_click_reviews_tab(tab)` — 点击 `div.c-toggler__element` 文本为 "Reviews" 的元素展开评论区
+2. `_wait_for_shadow_root(tab)` — 等待 `[data-bv-show="reviews"]` 的 Shadow DOM 加载
+3. `_extract_page_reviews(tab)` — 从当前页 Shadow DOM 提取评论
+4. 循环点击 `a.next`（Shadow DOM 内）翻页，每页提取后合并
+5. `_process_review_images(reviews)` — 下载评论图片到 MinIO
+
+### Shadow DOM 选择器
+
+均在 `[data-bv-show="reviews"].shadowRoot` 内：
+
+| 元素 | S1（优先） | S2 降级 |
+|------|-----------|---------|
+| 评论容器 | 有子 section 的外层 section | — |
+| 评论卡片 | 容器的 `:scope > section` | — |
+| 作者 | `button.bv-rnr-action-bar` | `button[aria-label^="See"]` |
+| 标题 | `h3` | — |
+| 评分 | `[role="img"][aria-label*="out of 5"]` | — |
+| 日期 | `span[class*="g3jej5"]` | span 匹配 `/\d+ (days\|months\|years) ago/` |
+| 正文 | 排除 button/div 后第一个长文本 div（>30字符） | — |
+| 图片 | `.photos-tile img`（src 含 `bazaarvoice.com`） | — |
+| 翻页 | `a.next` / `a.prev`（或 `button.prev` disabled） | — |
+
+### 翻页机制
+
+- 每页替换评论内容（非累积加载）
+- 第一页：`button.prev`（disabled）+ `a.next`
+- 中间页：`a.prev` + `a.next`
+- 最后页：`a.prev`，无 `a.next`
+- URL 格式：`?bvstate=pg:N/ct:r`
+
+## 分类页采集
+
+- 产品卡片选择器：`.product-tile a[href$=".html"]`
+- 翻页方式：无限滚动（非传统分页）
+- 下一页 URL：`.infinite-scroll-placeholder` 的 `data-grid-url` 属性
+- 分页参数格式：`?start=N&sz=12&format=page-element`
+- 无分页箭头（不同于 Bass Pro 的 `.iconPagerArrowRight`）
+
+## 站点专属注意事项
+
+- **无 JSON-LD Product**：产品数据全部从 DOM 提取，不能复用 basspro 的 JSON-LD 策略
+- **Reviews 需要展开**：页面加载后评论区默认折叠，必须先点击 toggler
+- **BV 翻页非累积**：与 basspro 的 Load More（累积）不同，每次翻页替换当前评论
+- **BV Shadow DOM 无 `data-bv-v`**：不能用 `data-bv-v="contentItem"` 等属性定位，需用 section 层级
+- **正文提取用位置关系**：无语义属性标记正文 div，靠排除法找第一个长文本叶子 div
+- **价格选择器需限定区域**：页面底部有推荐产品也有 `.price-sales`，必须限定 `.c-product__price` 父级
+- **无限滚动的 data-grid-url**：直接 GET 请求返回的是 HTML 片段，不是完整页面
