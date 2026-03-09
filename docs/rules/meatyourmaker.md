@@ -14,17 +14,20 @@
 | 名称 | `h1` | 页面标题 |
 | SKU | `[data-pid]` 属性 | Demandware 产品 ID |
 | 价格 | `.product-price.c-product__price .price-sales` | 限定主产品区域，排除推荐产品 |
-| 库存 | `.availability-msg` 可见性 | `display !== 'none'` → in_stock |
+| 库存 | `.availability-msg` + `.not-available-div` 互斥可见性 | 两个 div 互斥显示，需同时检查 |
 | 评分 | `#bv-jsonld-bvloader-summary` | BV JSON-LD，与 Bass Pro 相同 |
 | 评论数 | `#bv-jsonld-bvloader-summary` | aggregateRating.reviewCount |
 
 ## 评论提取流程
 
+**关键**：BV 数据仅在 Reviews 区域展开后才开始加载（与 basspro 不同），因此 `scrape()` 中必须先展开再等 BV。
+
 1. `_click_reviews_tab(tab)` — 点击 `div.c-toggler__element` 文本为 "Reviews" 的元素展开评论区
-2. `_wait_for_shadow_root(tab)` — 等待 `[data-bv-show="reviews"]` 的 Shadow DOM 加载
-3. `_extract_page_reviews(tab)` — 从当前页 Shadow DOM 提取评论
-4. 循环点击 `a.next`（Shadow DOM 内）翻页，每页提取后合并
-5. `_process_review_images(reviews)` — 下载评论图片到 MinIO
+2. `_wait_for_bv_data(tab)` — 展开后轮询等待 `#bv-jsonld-bvloader-summary` 注入（评分摘要）
+3. `_wait_for_shadow_root(tab)` — 等待 `[data-bv-show="reviews"]` 的 Shadow DOM 加载
+4. `_extract_page_reviews(tab)` — 从当前页 Shadow DOM 提取评论
+5. 循环点击 `a.next`（Shadow DOM 内）翻页，每页提取后合并
+6. `_process_review_images(reviews)` — 下载评论图片到 MinIO
 
 ### Shadow DOM 选择器
 
@@ -67,3 +70,7 @@
 - **正文提取用位置关系**：无语义属性标记正文 div，靠排除法找第一个长文本叶子 div
 - **价格选择器需限定区域**：页面底部有推荐产品也有 `.price-sales`，必须限定 `.c-product__price` 父级
 - **无限滚动的 data-grid-url**：直接 GET 请求返回的是 HTML 片段，不是完整页面
+- **BV 必须展开后才加载**：与 basspro 不同，meatyourmaker 的 BV 脚本在 Reviews toggler 展开后才初始化，`scrape()` 中必须先 `_click_reviews_tab` 再 `_wait_for_bv_data`，否则 BV summary 和 Shadow DOM 永远不会出现
+- **库存判断用两个互斥 div**：`.availability-msg`（In Stock）和 `.not-available-div`（Out of stock）互斥显示，不能只检查一个的 display 状态
+- **无评论产品的 BV 不加载**：部分新产品没有评论时，BV summary 不会注入，`_wait_for_bv_data` 会超时，这是预期行为，评分和评论数保持 None
+- **评论翻页等待时间**：当前每页翻页后 `time.sleep(2)`，评论多的产品（396 条）实测可获取约 209 条，可能需要增加等待或检测页面内容变化来提高覆盖率
