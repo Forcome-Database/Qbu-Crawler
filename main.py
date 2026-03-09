@@ -95,6 +95,23 @@ def run_category_site(category_url, max_pages):
 
 
 def main():
+    # ── serve 子命令 ──────────────────────────────────
+    if len(sys.argv) >= 2 and sys.argv[1] == "serve":
+        from server.app import start_server
+        host = None
+        port = None
+        args = sys.argv[2:]
+        i = 0
+        while i < len(args):
+            if args[i] == "--host" and i + 1 < len(args):
+                host = args[i + 1]; i += 2
+            elif args[i] == "--port" and i + 1 < len(args):
+                port = int(args[i + 1]); i += 2
+            else:
+                i += 1
+        start_server(host=host, port=port)
+        return
+
     if len(sys.argv) < 2:
         print(USAGE)
         sys.exit(1)
