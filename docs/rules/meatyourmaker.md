@@ -42,7 +42,7 @@
 | 评分 | `[role="img"][aria-label*="out of 5"]` | — |
 | 日期 | `span[class*="g3jej5"]` | span 匹配 `/\d+ (days\|months\|years) ago/` |
 | 正文 | 排除 button/div 后第一个长文本 div（>30字符） | — |
-| 图片 | `.photos-tile img`（src 含 `bazaarvoice.com`） | — |
+| 图片 | `.photos-tile img`（src 含 `bazaarvoice.com`，`loading="lazy"` 需逐个滚动触发） | — |
 | 翻页 | `a.next` / `a.prev`（或 `button.prev` disabled） | — |
 
 ### 翻页机制
@@ -75,4 +75,6 @@
 - **toggler 需等待渲染**：`_click_reviews_tab` 必须轮询等待 `.c-toggler__element` 出现再点击，否则 JS 静默失败
 - **库存判断用两个互斥 div**：`.availability-msg`（In Stock）和 `.not-available-div`（Out of stock）互斥显示，不能只检查一个的 display 状态
 - **无评论产品的 BV 不加载**：部分新产品没有评论时，BV summary 不会注入，`_wait_for_bv_data` 会超时，这是预期行为，评分和评论数保持 None
+- **评论图片必须逐个 section 慢滚动**：BV 图片使用 `loading="lazy"`，`forEach + scrollIntoView` 同步执行太快无效（图片 img 标签不渲染），必须 Python 循环逐个 section `scrollIntoView` + `time.sleep(0.3)`，每页提取前执行
+- **评论图片回填**：`save_reviews` 增量去重时，如果旧记录无图片而新数据有图片，会自动 UPDATE 回填 images 字段，无需手动清理
 - **评论翻页等待时间**：当前每页翻页后 `time.sleep(2)`，评论多的产品（396 条）实测可获取约 209 条，可能需要增加等待或检测页面内容变化来提高覆盖率

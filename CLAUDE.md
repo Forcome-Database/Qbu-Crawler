@@ -47,19 +47,34 @@ Qbu-Crawler/
 # 安装依赖
 uv sync
 
-# 抓取单个产品
+# 抓取单个产品（自动识别站点）
 uv run python main.py <product-url>
 
-# 从文件批量抓取
+# 从文件批量抓取（支持混合站点 URL，自动分组并行）
 uv run python main.py -f urls.txt
 
 # 从分类页自动采集并抓取（可限制页数）
 uv run python main.py -c <category-url>
 uv run python main.py -c <category-url> 3
 
-# 查询数据库
-uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c.execute('SELECT name,sku,price,rating FROM products').fetchall())"
+# 多站点分类页并行采集
+uv run python main.py -c <basspro-category> -c <meat-category>
+
+# 查询数据库（按站点）
+uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c.execute('SELECT site,name,sku,price,rating FROM products').fetchall())"
 ```
+
+## 多站点架构
+
+采用**轻量继承 + 独立实现**模式：
+
+- `BaseScraper`（`scrapers/base.py`）：仅管理浏览器生命周期和通用工具（类型转换、随机延迟、MinIO 图片上传），不定义抽象方法
+- 各站点子类完全独立实现 `scrape()` 和 `collect_product_urls()`，互不影响
+- `scrapers/__init__.py`：工厂函数 `get_scraper(url)` 根据 URL 域名自动路由到对应子类
+- `main.py`：支持单站点直接运行和多站点 `ThreadPoolExecutor` 并行（每站点独立浏览器实例）
+- 子类可覆盖 `_build_options()` 定制浏览器选项（如 meatyourmaker 需要 `normal` 加载模式）
+
+新增站点：创建 `scrapers/{site}.py` → `SITE_MAP` 加一行 → `docs/rules/{site}.md`
 
 ## 通用配置项（config.py）
 
@@ -92,7 +107,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 - **products** 表：UPSERT，始终反映最新状态（当前快照）
 - **product_snapshots** 表：每次抓取 INSERT 一条，记录价格/库存/评分/评论数变化历史，用于趋势分析
-- **reviews** 表：增量 INSERT（不再全删重插），用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重
+- **reviews** 表：增量 INSERT，用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重；已存在评论如有新图片则回填 `images` 字段（解决首次无图入库后图片丢失问题）
 
 ### 稳定性机制
 
@@ -114,6 +129,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **不要用 `wait.eles_loaded()` 等动态注入的 script 标签**：对动态注入的 `<script>` 标签不可靠，必须用 `tab.run_js()` 轮询 `document.querySelector()`
 - **不要用 `wait.url_change()` 等翻页**：该方法需要 `text` 参数（URL 片段），翻页时 URL 变化不可预测，应使用 `wait.doc_loaded()`
 - **NO_IMAGES=True 不影响图片 URL 获取**：禁用图片只阻止浏览器下载图片资源，滚动触发懒加载后 img 标签和 src 属性仍会渲染
+- **lazy image 必须逐个 section 慢滚动**：`loading="lazy"` 的图片需要元素在视口中停留足够时间才触发，`forEach + scrollIntoView` 同步执行太快无效，必须用 Python 循环逐个滚动 + `time.sleep(0.3)` 延时
+- **`eager` 加载模式可能阻止第三方脚本初始化**：某些站点（如 SFCC/Demandware 平台）的 BV 脚本在 `eager` 模式下无法初始化，需改用 `normal` 模式。各站点子类可通过覆盖 `_build_options()` 定制
 
 ## 工作流程规范
 
