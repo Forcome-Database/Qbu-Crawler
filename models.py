@@ -33,9 +33,15 @@ def init_db():
             body TEXT,
             rating REAL,
             date_published TEXT,
+            images TEXT,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
         );
     """)
+    # 兼容已有数据库：如果 images 列不存在则添加
+    try:
+        conn.execute("ALTER TABLE reviews ADD COLUMN images TEXT")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     conn.close()
 
 
@@ -69,9 +75,9 @@ def save_reviews(product_id: int, reviews: list):
     conn.execute("DELETE FROM reviews WHERE product_id = ?", (product_id,))
     for r in reviews:
         conn.execute("""
-            INSERT INTO reviews (product_id, author, headline, body, rating, date_published)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO reviews (product_id, author, headline, body, rating, date_published, images)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (product_id, r.get("author"), r.get("headline"), r.get("body"),
-              r.get("rating"), r.get("date_published")))
+              r.get("rating"), r.get("date_published"), r.get("images")))
     conn.commit()
     conn.close()

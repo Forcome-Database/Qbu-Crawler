@@ -1,5 +1,9 @@
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "products.db")
@@ -26,3 +30,12 @@ REQUEST_DELAY = (1, 3)  # 请求间随机延迟范围（秒），设为 None 禁
 
 # 稳定性配置
 RESTART_EVERY = 50  # 每抓取 N 个产品后重启浏览器，防止内存泄漏，0 禁用
+
+# MinIO 配置
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "192.168.16.116")
+MINIO_PORT = int(os.getenv("MINIO_PORT", "9000"))
+MINIO_USE_SSL = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "qbu-crawler")
+MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", "https://minio-api.forcome.com")

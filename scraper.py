@@ -47,7 +47,10 @@ class BassProScraper:
         # 等待页面主要内容加载
         tab.wait.ele_displayed('tag:h1', timeout=15)
         # 等待 BV 组件加载（容器一定会出现，但 JSON-LD 数据只有有评论时才有）
-        tab.ele('css:.bv_main_container', timeout=10)
+        bv_container = tab.ele('css:.bv_main_container', timeout=10)
+        # 滚动到 BV 组件位置，触发懒加载（BV 不在视口内不会注入 reviews-data）
+        if bv_container:
+            bv_container.scroll.to_see()
         # 轮询等待 BV JSON-LD 数据注入（summary 和 reviews-data 注入时序不确定）
         self._wait_for_bv_data(tab)
 
@@ -63,7 +66,7 @@ class BassProScraper:
 
         # 通过 JS 一次性提取所有结构化数据，避免 .text 对 script 标签取不到内容的问题
         raw = tab.run_js("""
-            const result = {productLD: null, bvSummary: null, bvReviews: null};
+            const result = {productLD: null, bvSummary: null};
             document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
                 try {
                     const d = JSON.parse(s.textContent);
@@ -85,17 +88,6 @@ class BassProScraper:
             // BV summary (有 id 的 script)
             const bvs = document.querySelector('#bv-jsonld-bvloader-summary');
             if (bvs) try { result.bvSummary = JSON.parse(bvs.textContent); } catch(e) {}
-            // BV reviews (有 id 的 script 或无 id 的 review script)
-            const bvr = document.querySelector('#bv-jsonld-reviews-data');
-            if (bvr) try { result.bvReviews = JSON.parse(bvr.textContent); } catch(e) {}
-            if (!result.bvReviews) {
-                document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
-                    try {
-                        const d = JSON.parse(s.textContent);
-                        if (d.review && !result.bvReviews) result.bvReviews = d;
-                    } catch(e) {}
-                });
-            }
             return JSON.stringify(result);
         """)
         data = json.loads(raw) if isinstance(raw, str) else raw
@@ -128,8 +120,9 @@ class BassProScraper:
             result["rating"] = self._to_float(agg.get("ratingValue"))
             result["review_count"] = self._to_int(agg.get("reviewCount"))
 
-        # 5. BV 评论数据
-        reviews = self._parse_bv_reviews(data.get("bvReviews"))
+        # 5. BV 评论数据（从 Shadow DOM 提取）
+        reviews = self._extract_reviews_from_dom(tab)
+        reviews = self._process_review_images(reviews)
 
         # 6. 库存状态（仅从 JSON-LD offers.availability 判断）
         if product_ld:
@@ -218,28 +211,14 @@ class BassProScraper:
         return unique
 
     def _wait_for_bv_data(self, tab):
-        """轮询等待 BV JSON-LD 数据注入
-        BV 异步注入两个 script 标签：
-        - #bv-jsonld-bvloader-summary (评分摘要，先注入)
-        - #bv-jsonld-reviews-data (评论详情，后注入，且不一定会注入)
-        注入时序不稳定，用轮询方式更可靠
-        """
+        """轮询等待 BV 评分摘要数据注入（仅 summary，评论从 Shadow DOM 获取）"""
         deadline = time.time() + BV_WAIT_TIMEOUT
-        has_summary = False
-        has_reviews = False
         while time.time() < deadline:
             result = tab.run_js(
-                "return (document.querySelector('#bv-jsonld-bvloader-summary') ? 1 : 0)"
-                " + (document.querySelector('#bv-jsonld-reviews-data') ? 2 : 0);"
+                "return document.querySelector('#bv-jsonld-bvloader-summary') ? 1 : 0;"
             )
-            has_summary = bool(result & 1)
-            has_reviews = bool(result & 2)
-            if has_reviews:
-                break  # reviews-data 出现说明 BV 数据已完全注入
-            if has_summary:
-                # summary 已出现但 reviews-data 还没有，再多等一会儿
-                time.sleep(BV_POLL_INTERVAL)
-                continue
+            if result:
+                break
             time.sleep(BV_POLL_INTERVAL)
 
     def _extract_sku_from_dom(self, tab) -> str | None:
@@ -255,40 +234,146 @@ class BassProScraper:
             pass
         return None
 
-    def _parse_bv_reviews(self, data) -> list:
-        """解析 BV 评论数据"""
-        if not data:
-            return []
-        raw_reviews = []
-        if isinstance(data, list):
-            raw_reviews = data
-        elif isinstance(data, dict) and "review" in data:
-            raw_reviews = data["review"]
-        elif isinstance(data, dict) and "@graph" in data:
-            raw_reviews = data["@graph"]
-
-        reviews = []
-        for r in raw_reviews:
-            if not isinstance(r, dict):
-                continue
-            review = {
-                "author": None,
-                "headline": r.get("headline") or r.get("name"),
-                "body": r.get("reviewBody") or r.get("description"),
-                "rating": None,
-                "date_published": r.get("datePublished"),
+    def _click_reviews_tab(self, tab):
+        """点击 Reviews Accordion 展开评论区"""
+        tab.run_js("""
+            const accordions = document.querySelectorAll('.styles_AccordionWrapper__JYyM_');
+            for (const acc of accordions) {
+                const title = acc.querySelector('.styles_Title__zBr7o');
+                if (title && title.textContent.includes('Reviews')) {
+                    title.click();
+                    break;
+                }
             }
-            author = r.get("author")
-            if isinstance(author, dict):
-                review["author"] = author.get("name")
-            elif isinstance(author, str):
-                review["author"] = author
-            rating = r.get("reviewRating")
-            if isinstance(rating, dict):
-                review["rating"] = self._to_float(rating.get("ratingValue"))
-            elif r.get("ratingValue"):
-                review["rating"] = self._to_float(r["ratingValue"])
-            reviews.append(review)
+        """)
+        time.sleep(1)
+
+    def _load_all_reviews(self, tab):
+        """循环点击 LOAD MORE 按钮，直到加载全部评论
+        策略：点击后等待评论数量增加，而不是简单 sleep，避免按钮暂时隐藏导致误判
+        """
+        max_clicks = 200  # 安全上限
+        for i in range(max_clicks):
+            # 获取当前评论数 + 点击按钮
+            result = tab.run_js("""
+                const container = document.querySelector('[data-bv-show="reviews"]');
+                if (!container || !container.shadowRoot) return JSON.stringify({clicked: false, count: 0});
+                const shadow = container.shadowRoot;
+                const count = shadow.querySelectorAll('section').length;
+                const btn = shadow.querySelector('button[aria-label*="Load More"]');
+                if (btn) {
+                    btn.scrollIntoView({block: 'center'});
+                    btn.click();
+                    return JSON.stringify({clicked: true, count: count});
+                }
+                return JSON.stringify({clicked: false, count: count});
+            """)
+            data = json.loads(result) if isinstance(result, str) else (result or {})
+            if not data.get("clicked"):
+                break
+            prev_count = data.get("count", 0)
+            # 等待评论数量增加（最多等 5 秒）
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                time.sleep(0.5)
+                new_count = tab.run_js("""
+                    const c = document.querySelector('[data-bv-show="reviews"]');
+                    if (!c || !c.shadowRoot) return 0;
+                    return c.shadowRoot.querySelectorAll('section').length;
+                """)
+                if isinstance(new_count, int) and new_count > prev_count:
+                    break
+
+    def _scroll_all_reviews(self, tab):
+        """滚动浏览所有评论，触发图片懒加载"""
+        total = tab.run_js("""
+            const c = document.querySelector('[data-bv-show="reviews"]');
+            return c && c.shadowRoot ? c.shadowRoot.querySelectorAll('section').length : 0;
+        """)
+        if not total:
+            return
+        # 逐个 section 滚动到视口中央
+        for i in range(total):
+            tab.run_js(f"""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (c && c.shadowRoot) {{
+                    const s = c.shadowRoot.querySelectorAll('section')[{i}];
+                    if (s) s.scrollIntoView({{block: 'center'}});
+                }}
+            """)
+            time.sleep(0.2)
+        time.sleep(1)
+
+    def _extract_reviews_from_dom(self, tab) -> list:
+        """从 BV Shadow DOM 提取所有评论数据"""
+        self._click_reviews_tab(tab)
+        self._load_all_reviews(tab)
+        self._scroll_all_reviews(tab)
+
+        raw = tab.run_js("""
+            const container = document.querySelector('[data-bv-show="reviews"]');
+            if (!container || !container.shadowRoot) return '[]';
+            const shadow = container.shadowRoot;
+
+            // 只选叶子级评论 section（不包含子 section，排除外层包裹容器）
+            const sections = Array.from(shadow.querySelectorAll('section')).filter(
+                s => s.querySelector('button[class*="16dr7i1-6"]') && !s.querySelector('section')
+            );
+
+            const reviews = [];
+            const seen = new Set();
+            for (const s of sections) {
+                const authorEl = s.querySelector('button[class*="16dr7i1-6"]');
+                const author = authorEl ? authorEl.textContent.trim() : '';
+                const headlineEl = s.querySelector('h3');
+                const headline = headlineEl ? headlineEl.textContent.trim() : '';
+
+                const key = author + '|' + headline;
+                if (seen.has(key)) continue;
+                seen.add(key);
+
+                const bodyEl = s.querySelector('p');
+                const body = bodyEl ? bodyEl.textContent.trim() : '';
+
+                let rating = null;
+                const ratingEl = s.querySelector('span[class*="bm6gry"]');
+                if (ratingEl) {
+                    const m = ratingEl.textContent.match(/(\\d+)\\s+out\\s+of\\s+5/);
+                    if (m) rating = parseInt(m[1]);
+                }
+
+                const dateEl = s.querySelector('span[class*="g3jej5"]');
+                const date = dateEl ? dateEl.textContent.trim() : '';
+
+                const imgs = [];
+                s.querySelectorAll('.photos-tile img').forEach(img => {
+                    const src = img.getAttribute('src');
+                    if (src && src.includes('photos-us.bazaarvoice.com')) {
+                        imgs.push(src);
+                    }
+                });
+
+                reviews.push({author, headline, body, rating, date_published: date, images: imgs});
+            }
+            return JSON.stringify(reviews);
+        """)
+        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+
+    def _process_review_images(self, reviews: list) -> list:
+        """下载评论图片到 MinIO，将 BV URL 替换为 MinIO URL"""
+        from minio_client import upload_image
+
+        for review in reviews:
+            bv_urls = review.get("images", [])
+            if not bv_urls:
+                review["images"] = None
+                continue
+            minio_urls = []
+            for url in bv_urls:
+                minio_url = upload_image(url)
+                if minio_url:
+                    minio_urls.append(minio_url)
+            review["images"] = json.dumps(minio_urls) if minio_urls else None
         return reviews
 
     @staticmethod

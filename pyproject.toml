@@ -5,6 +5,9 @@ description = "Bass Pro Shops 产品爬虫服务"
 requires-python = ">=3.10"
 dependencies = [
     "drissionpage",
+    "minio",
+    "python-dotenv",
+    "requests",
 ]
 
 [tool.uv]
