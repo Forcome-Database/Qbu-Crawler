@@ -86,9 +86,8 @@ class TaskManager:
         if task.status not in (TaskStatus.pending, TaskStatus.running):
             return False
         flag.set()
-        task.status = TaskStatus.cancelled
-        task.finished_at = datetime.now(timezone.utc).isoformat()
-        self._persist(task)
+        # Don't mutate task state here — let the worker thread handle it
+        # to avoid race conditions between API thread and worker thread.
         return True
 
     def get_task(self, task_id: str) -> dict | None:
@@ -162,6 +161,8 @@ class TaskManager:
             task.finished_at = datetime.now(timezone.utc).isoformat()
             task.progress["current_url"] = None
             self._persist(task)
+            self._tasks.pop(task_id, None)
+            self._cancel_flags.pop(task_id, None)
 
     def _run_collect(self, task_id: str):
         task = self._tasks[task_id]
@@ -238,6 +239,8 @@ class TaskManager:
             task.finished_at = datetime.now(timezone.utc).isoformat()
             task.progress["current_url"] = None
             self._persist(task)
+            self._tasks.pop(task_id, None)
+            self._cancel_flags.pop(task_id, None)
 
     def _persist(self, task: Task):
         try:
