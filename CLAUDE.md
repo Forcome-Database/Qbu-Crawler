@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-基于 DrissionPage 的多站点产品数据爬虫框架，抓取产品详情（名称、SKU、价格、库存、评分、评论）并存储到 SQLite。
+基于 DrissionPage 的多站点产品数据爬虫框架，抓取产品详情（名称、SKU、价格、库存、评分、评论）并存储到 SQLite。支持通过 HTTP API 和 MCP 协议远程管理爬虫任务和查询数据。
 
 当前支持站点：
 - **Bass Pro Shops** — 规则文档：`docs/rules/basspro.md`
@@ -15,6 +15,8 @@
 - **SQLite** — 数据存储（`data/products.db`）
 - **MinIO** — 评论图片对象存储
 - **python-dotenv** — 环境变量管理（`.env`）
+- **FastAPI + Uvicorn** — HTTP API 服务
+- **FastMCP** — MCP 协议服务（Streamable HTTP 传输）
 
 ## 项目结构
 
@@ -24,9 +26,22 @@ Qbu-Crawler/
 ├── pyproject.toml
 ├── .env / .env.example
 ├── config.py          # 配置（数据库、浏览器、MinIO、等待/重试/反爬参数）
-├── models.py          # SQLite 数据层（products + product_snapshots + reviews 表）
+├── models.py          # SQLite 数据层（products + product_snapshots + reviews + tasks 表）
 ├── minio_client.py    # MinIO 图片上传客户端
-├── main.py            # CLI 入口（多站点路由 + 并行采集）
+├── main.py            # CLI 入口（多站点路由 + 并行采集 + serve 子命令）
+├── server/
+│   ├── __init__.py
+│   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
+│   ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── auth.py         # API Key 认证中间件
+│   │   ├── tasks.py        # 任务管理 endpoints
+│   │   └── products.py     # 数据查询 endpoints
+│   └── mcp/
+│       ├── __init__.py
+│       ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL）
+│       └── resources.py    # MCP Resources（数据库元数据）
 ├── scrapers/
 │   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
 │   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
@@ -46,6 +61,10 @@ Qbu-Crawler/
 ```bash
 # 安装依赖
 uv sync
+
+# 启动 HTTP API + MCP 服务
+uv run python main.py serve
+uv run python main.py serve --host 0.0.0.0 --port 9000
 
 # 抓取单个产品（自动识别站点）
 uv run python main.py <product-url>
@@ -89,6 +108,17 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `REQUEST_DELAY` | `(1, 3)` | 请求间随机延迟范围（秒），`None` 禁用 |
 | `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用 |
 
+### 服务器配置（.env）
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `SERVER_HOST` | `0.0.0.0` | 服务监听地址 |
+| `SERVER_PORT` | `8000` | 服务监听端口 |
+| `API_KEY` | （必填） | HTTP API 认证密钥 |
+| `MAX_WORKERS` | `3` | 爬虫任务线程池大小 |
+| `SQL_QUERY_TIMEOUT` | `5` | execute_sql 超时（秒） |
+| `SQL_QUERY_MAX_ROWS` | `500` | execute_sql 最大返回行数 |
+
 ### MinIO 配置（.env）
 
 | 配置 | 说明 |
@@ -108,6 +138,17 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **products** 表：UPSERT，始终反映最新状态（当前快照）
 - **product_snapshots** 表：每次抓取 INSERT 一条，记录价格/库存/评分/评论数变化历史，用于趋势分析
 - **reviews** 表：增量 INSERT，用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重；已存在评论如有新图片则回填 `images` 字段（解决首次无图入库后图片丢失问题）
+- **tasks** 表：记录通过 API/MCP 提交的爬虫任务历史，params/progress/result 为 JSON 字段
+
+### HTTP API + MCP 服务架构
+
+单进程 ASGI 服务，`main.py serve` 启动：
+- **FastAPI** 处理 `/api/*`（RESTful，Bearer Token 认证）
+- **FastMCP** 挂载到 `/mcp`（Streamable HTTP 传输）
+- **TaskManager** 单例，HTTP 和 MCP 共享，管理爬虫任务生命周期
+- 爬虫在 `ThreadPoolExecutor` 中同步执行，支持 URL 粒度取消
+- MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL
+- MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
 
 ### 稳定性机制
 
