@@ -51,7 +51,7 @@ def register_tools(mcp: FastMCP):
     # ── Task Operations ──────────────────────────────
 
     @mcp.tool
-    def start_scrape(urls: list[str]) -> dict:
+    def start_scrape(urls: list[str]):
         """提交一个或多个产品页 URL 开始爬取，返回任务 ID 用于后续查询进度。
         支持 Bass Pro Shops (www.basspro.com) 和 Meat Your Maker (www.meatyourmaker.com) 站点。
         URL 会自动识别所属站点。可同时提交不同站点的 URL。"""
@@ -60,7 +60,7 @@ def register_tools(mcp: FastMCP):
         return {"task_id": task.id, "status": task.status.value, "total": len(urls)}
 
     @mcp.tool
-    def start_collect(category_url: str, max_pages: int = 0) -> dict:
+    def start_collect(category_url: str, max_pages: int = 0):
         """从分类/列表页自动采集所有产品 URL 并逐一爬取详情。
         先翻页收集产品链接，再逐个抓取产品数据和评论。
         max_pages 限制最多翻几页，0 表示采集所有页。
@@ -70,7 +70,7 @@ def register_tools(mcp: FastMCP):
         return {"task_id": task.id, "status": task.status.value}
 
     @mcp.tool
-    def get_task_status(task_id: str) -> dict:
+    def get_task_status(task_id: str):
         """查询爬虫任务的实时状态。
         返回信息包括：状态（pending/running/completed/failed/cancelled）、
         进度（已完成数/总数、当前正在处理的 URL）、
@@ -85,7 +85,7 @@ def register_tools(mcp: FastMCP):
     def list_tasks(
         status: TaskStatusEnum | None = None,
         limit: int = 20,
-    ) -> dict:
+    ):
         """列出爬虫任务记录，默认按创建时间倒序返回最近 20 条。
         可按状态筛选：pending（等待中）、running（执行中）、
         completed（已完成）、failed（失败）、cancelled（已取消）。"""
@@ -96,7 +96,7 @@ def register_tools(mcp: FastMCP):
         return {"tasks": tasks, "total": total}
 
     @mcp.tool
-    def cancel_task(task_id: str) -> dict:
+    def cancel_task(task_id: str):
         """取消正在运行或等待中的爬虫任务。
         当前正在处理的 URL 会完成（不会中途打断），但后续 URL 不再执行。
         已完成或已失败的任务无法取消。"""
@@ -119,7 +119,7 @@ def register_tools(mcp: FastMCP):
         order: SortOrderEnum = SortOrderEnum.desc,
         limit: int = 20,
         offset: int = 0,
-    ) -> dict:
+    ):
         """搜索和筛选已采集的产品数据。
         - site: 按站点筛选（basspro 或 meatyourmaker）
         - search: 按产品名称关键词模糊搜索
@@ -142,7 +142,7 @@ def register_tools(mcp: FastMCP):
         product_id: int | None = None,
         url: str | None = None,
         sku: str | None = None,
-    ) -> dict:
+    ):
         """获取单个产品的完整信息，包含最新价格、库存状态、评分，
         以及最近 5 条评论摘要和最近 10 条价格快照。
         支持三种查找方式（任选其一）：product_id, url, 或 sku。"""
@@ -176,7 +176,7 @@ def register_tools(mcp: FastMCP):
         order: SortOrderEnum = SortOrderEnum.desc,
         limit: int = 20,
         offset: int = 0,
-    ) -> dict:
+    ):
         """查询产品评论，支持多维度筛选。
         - product_id: 指定产品的评论
         - site: 按站点筛选（不指定 product_id 时可跨产品搜索）
@@ -196,7 +196,7 @@ def register_tools(mcp: FastMCP):
         return {"items": items, "total": total}
 
     @mcp.tool
-    def get_price_history(product_id: int, days: int = 30) -> dict:
+    def get_price_history(product_id: int, days: int = 30):
         """获取产品的价格和库存变化历史（来自 snapshots 表）。
         默认返回最近 30 天的数据，按时间正序排列，适合绘制趋势图。
         每条记录包含：price, stock_status, review_count, rating, scraped_at。"""
@@ -204,7 +204,7 @@ def register_tools(mcp: FastMCP):
         return {"product_id": product_id, "days": days, "data_points": total, "history": items}
 
     @mcp.tool
-    def get_stats() -> dict:
+    def get_stats():
         """获取数据库整体统计概览。
         包含：各站点产品数量、评论总数、最近采集时间、平均价格、平均评分等。
         适合快速了解当前数据规模和分布。"""
@@ -213,7 +213,7 @@ def register_tools(mcp: FastMCP):
     # ── Advanced Query ───────────────────────────────
 
     @mcp.tool
-    def execute_sql(sql: str) -> dict:
+    def execute_sql(sql: str):
         """对采集数据库执行只读 SQL 查询，适合语义化工具无法覆盖的复杂分析场景。
         规则：仅允许 SELECT 语句，超时 5 秒，最多返回 500 行。
         数据库包含 4 张表：products, product_snapshots, reviews, tasks。
