@@ -1,4 +1,5 @@
 import hashlib
+import json as _json
 import sqlite3
 from config import DB_PATH
 
@@ -50,6 +51,18 @@ def init_db():
             images TEXT,
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS tasks (
+            id           TEXT PRIMARY KEY,
+            type         TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending',
+            params       TEXT NOT NULL,
+            progress     TEXT,
+            result       TEXT,
+            error        TEXT,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at   TIMESTAMP,
+            finished_at  TIMESTAMP
         );
     """)
     # 兼容旧表：添加缺失的列
@@ -167,3 +180,290 @@ def save_reviews(product_id: int, reviews: list) -> int:
     conn.commit()
     conn.close()
     return new_count
+
+
+# ---------------------------------------------------------------------------
+# Task persistence
+# ---------------------------------------------------------------------------
+
+def save_task(task_dict: dict) -> None:
+    """INSERT or UPDATE a task record."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO tasks (id, type, status, params, progress, result, error,
+                                  created_at, started_at, finished_at)
+               VALUES (:id, :type, :status, :params, :progress, :result, :error,
+                       :created_at, :started_at, :finished_at)
+               ON CONFLICT(id) DO UPDATE SET
+                   status=excluded.status, progress=excluded.progress,
+                   result=excluded.result, error=excluded.error,
+                   started_at=excluded.started_at, finished_at=excluded.finished_at
+            """,
+            {
+                "id": task_dict["id"],
+                "type": task_dict["type"],
+                "status": task_dict["status"],
+                "params": _json.dumps(task_dict.get("params")),
+                "progress": _json.dumps(task_dict.get("progress")),
+                "result": _json.dumps(task_dict.get("result")),
+                "error": task_dict.get("error"),
+                "created_at": task_dict.get("created_at"),
+                "started_at": task_dict.get("started_at"),
+                "finished_at": task_dict.get("finished_at"),
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_task(task_id: str) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for k in ("params", "progress", "result"):
+            if d.get(k):
+                d[k] = _json.loads(d[k])
+        return d
+    finally:
+        conn.close()
+
+
+def list_tasks(status: str | None = None, limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
+    conn = get_conn()
+    try:
+        where = "WHERE status = ?" if status else ""
+        params = [status] if status else []
+
+        total = conn.execute(f"SELECT COUNT(*) FROM tasks {where}", params).fetchone()[0]
+
+        rows = conn.execute(
+            f"SELECT * FROM tasks {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+
+        tasks = []
+        for row in rows:
+            d = dict(row)
+            for k in ("params", "progress", "result"):
+                if d.get(k):
+                    d[k] = _json.loads(d[k])
+            tasks.append(d)
+        return tasks, total
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Data query functions (used by HTTP API and MCP Tools)
+# ---------------------------------------------------------------------------
+
+def query_products(
+    site: str | None = None,
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    stock_status: str | None = None,
+    sort_by: str = "scraped_at",
+    order: str = "desc",
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    conn = get_conn()
+    try:
+        conditions, params = [], []
+        if site:
+            conditions.append("site = ?"); params.append(site)
+        if search:
+            conditions.append("name LIKE ?"); params.append(f"%{search}%")
+        if min_price is not None:
+            conditions.append("price >= ?"); params.append(min_price)
+        if max_price is not None:
+            conditions.append("price <= ?"); params.append(max_price)
+        if stock_status:
+            conditions.append("stock_status = ?"); params.append(stock_status)
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        allowed_sorts = {"price", "rating", "review_count", "scraped_at", "name"}
+        if sort_by not in allowed_sorts:
+            sort_by = "scraped_at"
+        order_dir = "ASC" if order.lower() == "asc" else "DESC"
+
+        total = conn.execute(f"SELECT COUNT(*) FROM products {where}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM products {where} ORDER BY {sort_by} {order_dir} LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def get_product_by_id(product_id: int) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_product_by_url(url: str) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM products WHERE url = ?", (url,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_product_by_sku(sku: str) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def query_reviews(
+    product_id: int | None = None,
+    site: str | None = None,
+    min_rating: float | None = None,
+    max_rating: float | None = None,
+    author: str | None = None,
+    keyword: str | None = None,
+    has_images: bool | None = None,
+    sort_by: str = "scraped_at",
+    order: str = "desc",
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    conn = get_conn()
+    try:
+        conditions, params = [], []
+        if product_id is not None:
+            conditions.append("r.product_id = ?"); params.append(product_id)
+        if site:
+            conditions.append("p.site = ?"); params.append(site)
+        if min_rating is not None:
+            conditions.append("r.rating >= ?"); params.append(min_rating)
+        if max_rating is not None:
+            conditions.append("r.rating <= ?"); params.append(max_rating)
+        if author:
+            conditions.append("r.author LIKE ?"); params.append(f"%{author}%")
+        if keyword:
+            conditions.append("(r.headline LIKE ? OR r.body LIKE ?)")
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+        if has_images is True:
+            conditions.append("r.images IS NOT NULL AND r.images != '[]' AND r.images != ''")
+        elif has_images is False:
+            conditions.append("(r.images IS NULL OR r.images = '[]' OR r.images = '')")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        allowed_sorts = {"rating": "r.rating", "scraped_at": "r.scraped_at", "date_published": "r.date_published"}
+        sort_col = allowed_sorts.get(sort_by, "r.scraped_at")
+        order_dir = "ASC" if order.lower() == "asc" else "DESC"
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            f"""SELECT r.*, p.name as product_name, p.site as product_site
+                FROM reviews r JOIN products p ON r.product_id = p.id
+                {where} ORDER BY {sort_col} {order_dir} LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            d = dict(row)
+            if d.get("images"):
+                d["images"] = _json.loads(d["images"]) if isinstance(d["images"], str) else d["images"]
+            results.append(d)
+        return results, total
+    finally:
+        conn.close()
+
+
+def get_snapshots(
+    product_id: int,
+    days: int = 30,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    conn = get_conn()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM product_snapshots WHERE product_id = ? AND scraped_at >= datetime('now', ?)",
+            (product_id, f"-{days} days"),
+        ).fetchone()[0]
+        rows = conn.execute(
+            """SELECT * FROM product_snapshots
+               WHERE product_id = ? AND scraped_at >= datetime('now', ?)
+               ORDER BY scraped_at ASC LIMIT ? OFFSET ?""",
+            (product_id, f"-{days} days", limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows], total
+    finally:
+        conn.close()
+
+
+def get_stats() -> dict:
+    conn = get_conn()
+    try:
+        total_products = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+        total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+
+        by_site = {}
+        for row in conn.execute("SELECT site, COUNT(*) as cnt FROM products GROUP BY site").fetchall():
+            by_site[row["site"]] = row["cnt"]
+
+        last_scrape = conn.execute("SELECT MAX(scraped_at) FROM products").fetchone()[0]
+
+        avg_price = conn.execute("SELECT AVG(price) FROM products WHERE price IS NOT NULL").fetchone()[0]
+        avg_rating = conn.execute("SELECT AVG(rating) FROM products WHERE rating IS NOT NULL").fetchone()[0]
+
+        return {
+            "total_products": total_products,
+            "total_reviews": total_reviews,
+            "by_site": by_site,
+            "last_scrape_at": last_scrape,
+            "avg_price": round(avg_price, 2) if avg_price else None,
+            "avg_rating": round(avg_rating, 2) if avg_rating else None,
+        }
+    finally:
+        conn.close()
+
+
+def execute_readonly_sql(sql: str, timeout: int = 5, max_rows: int = 500) -> dict:
+    """Execute a read-only SQL query. Raises ValueError for non-SELECT statements."""
+    stripped = sql.strip().rstrip(";").strip()
+    if not stripped.upper().startswith("SELECT"):
+        raise ValueError("Only SELECT statements are allowed")
+
+    conn = get_conn()
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {timeout * 1000}")
+        cursor = conn.execute(stripped)
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        rows = cursor.fetchmany(max_rows + 1)
+        truncated = len(rows) > max_rows
+        if truncated:
+            rows = rows[:max_rows]
+        return {
+            "columns": columns,
+            "rows": [list(r) for r in rows],
+            "row_count": len(rows),
+            "truncated": truncated,
+        }
+    finally:
+        conn.close()
