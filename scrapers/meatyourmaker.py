@@ -1,10 +1,28 @@
 import json
 import time
+from DrissionPage import ChromiumOptions
 from scrapers.base import BaseScraper
-from config import BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, PAGE_LOAD_TIMEOUT
+from config import (
+    HEADLESS, PAGE_LOAD_TIMEOUT, NO_IMAGES,
+    RETRY_TIMES, RETRY_INTERVAL,
+    BV_WAIT_TIMEOUT, BV_POLL_INTERVAL,
+)
 
 
 class MeatYourMakerScraper(BaseScraper):
+
+    @staticmethod
+    def _build_options() -> ChromiumOptions:
+        """覆盖基类：使用 normal 模式，meatyourmaker 的 BV 在 eager 模式下无法初始化"""
+        options = ChromiumOptions()
+        if HEADLESS:
+            options.headless()
+        if NO_IMAGES:
+            options.no_imgs(True)
+        options.set_load_mode("normal")
+        options.set_retry(times=RETRY_TIMES, interval=RETRY_INTERVAL)
+        options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
+        return options
 
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
@@ -90,16 +108,23 @@ class MeatYourMakerScraper(BaseScraper):
             time.sleep(BV_POLL_INTERVAL)
 
     def _click_reviews_tab(self, tab):
-        """点击 Reviews toggler 展开评论区"""
-        tab.run_js("""
-            const togglers = document.querySelectorAll('.c-toggler__element');
-            for (const el of togglers) {
-                if (el.textContent.trim() === 'Reviews') {
-                    el.click();
-                    break;
+        """点击 Reviews toggler 展开评论区（先等待 toggler 渲染）"""
+        # 等待 toggler 元素出现（最多 10 秒）
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            clicked = tab.run_js("""
+                const togglers = document.querySelectorAll('.c-toggler__element');
+                for (const el of togglers) {
+                    if (el.textContent.trim() === 'Reviews') {
+                        el.click();
+                        return true;
+                    }
                 }
-            }
-        """)
+                return false;
+            """)
+            if clicked:
+                break
+            time.sleep(0.5)
         time.sleep(2)
 
     def _wait_for_shadow_root(self, tab, timeout=10):
