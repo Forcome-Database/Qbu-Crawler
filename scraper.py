@@ -235,15 +235,35 @@ class BassProScraper:
         return None
 
     def _click_reviews_tab(self, tab):
-        """点击 Reviews Accordion 展开评论区"""
+        """点击 Reviews Accordion 展开评论区（多选择器降级）"""
         tab.run_js("""
-            const accordions = document.querySelectorAll('.styles_AccordionWrapper__JYyM_');
-            for (const acc of accordions) {
-                const title = acc.querySelector('.styles_Title__zBr7o');
+            let clicked = false;
+            // S1: CSS Modules 语义前缀 [class*="AccordionWrapper"] > [class*="Title"]
+            document.querySelectorAll('[class*="AccordionWrapper"]').forEach(acc => {
+                if (clicked) return;
+                const title = acc.querySelector('[class*="Title"]');
                 if (title && title.textContent.includes('Reviews')) {
                     title.click();
-                    break;
+                    clicked = true;
                 }
+            });
+            // S2: ARIA role="region" aria-label="Section Title" 文本为 Reviews
+            if (!clicked) {
+                document.querySelectorAll('[role="region"][aria-label="Section Title"]').forEach(el => {
+                    if (clicked) return;
+                    if (el.textContent.trim() === 'Reviews') {
+                        // 点击最近的可点击祖先（cursor: pointer）
+                        let p = el.parentElement;
+                        for (let i = 0; i < 5 && p; i++) {
+                            if (window.getComputedStyle(p).cursor === 'pointer') {
+                                p.click();
+                                clicked = true;
+                                break;
+                            }
+                            p = p.parentElement;
+                        }
+                    }
+                });
             }
         """)
         time.sleep(1)
@@ -315,36 +335,90 @@ class BassProScraper:
             if (!container || !container.shadowRoot) return '[]';
             const shadow = container.shadowRoot;
 
-            // 只选叶子级评论 section（不包含子 section，排除外层包裹容器）
+            // --- 降级辅助函数 ---
+            function findFirst(root, ...selectors) {
+                for (const sel of selectors) {
+                    if (typeof sel === 'string') {
+                        const el = root.querySelector(sel);
+                        if (el) return el;
+                    } else {
+                        const el = sel(root);
+                        if (el) return el;
+                    }
+                }
+                return null;
+            }
+
+            // 评论 section：S1 data-bv-v（稳定）→ S2 hash class 降级
             const sections = Array.from(shadow.querySelectorAll('section')).filter(
-                s => s.querySelector('button[class*="16dr7i1-6"]') && !s.querySelector('section')
+                s => !s.querySelector('section') && (
+                    s.querySelector('[data-bv-v="contentItem"]') ||
+                    s.querySelector('button[class*="16dr7i1-6"]')
+                )
             );
 
             const reviews = [];
             const seen = new Set();
             for (const s of sections) {
-                const authorEl = s.querySelector('button[class*="16dr7i1-6"]');
+                const header = s.querySelector('[data-bv-v="contentHeader"]');
+                const summary = s.querySelector('[data-bv-v="contentSummary"]');
+
+                // 作者：S1 hash → S2 .bv-rnr-action-bar → S3 aria-label^="See"
+                const authorEl = findFirst(
+                    header || s,
+                    'button[class*="16dr7i1-6"]',
+                    'button.bv-rnr-action-bar',
+                    'button[aria-label^="See"]'
+                );
                 const author = authorEl ? authorEl.textContent.trim() : '';
-                const headlineEl = s.querySelector('h3');
+
+                const headlineEl = (header || s).querySelector('h3');
                 const headline = headlineEl ? headlineEl.textContent.trim() : '';
 
                 const key = author + '|' + headline;
                 if (seen.has(key)) continue;
                 seen.add(key);
 
-                const bodyEl = s.querySelector('p');
-                const body = bodyEl ? bodyEl.textContent.trim() : '';
+                // 正文：S1 contentSummary 第一个子元素 → S2 querySelector('p')
+                let body = '';
+                if (summary && summary.children[0]) {
+                    body = summary.children[0].textContent.trim();
+                } else {
+                    const pEl = s.querySelector('p');
+                    if (pEl) body = pEl.textContent.trim();
+                }
 
+                // 评分：S1 role="img" aria-label（稳定 ARIA）→ S2 hash span
                 let rating = null;
-                const ratingEl = s.querySelector('span[class*="bm6gry"]');
+                const ratingEl = findFirst(
+                    header || s,
+                    '[role="img"][aria-label*="out of 5"]',
+                    'span[class*="bm6gry"]'
+                );
                 if (ratingEl) {
-                    const m = ratingEl.textContent.match(/(\\d+)\\s+out\\s+of\\s+5/);
+                    const label = ratingEl.getAttribute('aria-label') || ratingEl.textContent;
+                    const m = label.match(/(\\d+)\\s+out\\s+of\\s+5/);
                     if (m) rating = parseInt(m[1]);
                 }
 
-                const dateEl = s.querySelector('span[class*="g3jej5"]');
-                const date = dateEl ? dateEl.textContent.trim() : '';
+                // 日期：S1 hash span → S2 文本正则匹配
+                let date = '';
+                const dateEl = (header || s).querySelector('span[class*="g3jej5"]');
+                if (dateEl) {
+                    date = dateEl.textContent.trim();
+                } else {
+                    (header || s).querySelectorAll('span').forEach(sp => {
+                        if (!date) {
+                            const t = sp.textContent.trim();
+                            if (t.match(/\\d+\\s+(days?|months?|years?)\\s+ago/) ||
+                                t.match(/^a\\s+(day|month|year)\\s+ago$/)) {
+                                date = t;
+                            }
+                        }
+                    });
+                }
 
+                // 图片：.photos-tile img（BV 语义类名，稳定）
                 const imgs = [];
                 s.querySelectorAll('.photos-tile img').forEach(img => {
                     const src = img.getAttribute('src');

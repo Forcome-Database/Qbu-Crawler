@@ -115,18 +115,24 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 4. `_extract_reviews_from_dom(tab)` — 从 Shadow DOM 的叶子级 `section` 元素提取评论数据
 5. `_process_review_images(reviews)` — 下载评论图片到 MinIO，替换为公开 URL
 
-**Shadow DOM 选择器**（均在 `[data-bv-show="reviews"].shadowRoot` 内）：
+**Shadow DOM 选择器**（均在 `[data-bv-show="reviews"].shadowRoot` 内，每个元素有多级降级）：
 
-| 元素 | 选择器 |
-|------|--------|
-| 评论卡片 | `section`（含 `button[class*="16dr7i1-6"]` 且不含子 `section`，排除外层容器） |
-| 作者 | `button[class*="16dr7i1-6"]` |
-| 标题 | `h3` |
-| 评分 | `span[class*="bm6gry"]`（文本 "X out of 5 stars."） |
-| 日期 | `span[class*="g3jej5"]`（相对时间如 "10 days ago"） |
-| 正文 | `p` |
-| 图片 | `.photos-tile img`（src 含 `photos-us.bazaarvoice.com`） |
-| Load More | `button[aria-label*="Load More"]` |
+| 元素 | S1（优先） | S2 降级 | S3 降级 |
+|------|-----------|---------|---------|
+| 评论卡片 | `section` 含 `[data-bv-v="contentItem"]` 且无子 section | `section` 含 `button[class*="16dr7i1-6"]` | — |
+| 作者 | `[data-bv-v="contentHeader"] button[class*="16dr7i1-6"]` | `button.bv-rnr-action-bar` | `button[aria-label^="See"]` |
+| 标题 | `[data-bv-v="contentHeader"] h3` | — | — |
+| 评分 | `[data-bv-v="contentHeader"] [role="img"][aria-label*="out of 5"]`（ARIA） | `span[class*="bm6gry"]` | — |
+| 日期 | `[data-bv-v="contentHeader"] span[class*="g3jej5"]` | span 文本匹配 `/\d+ (days\|months\|years) ago/` | — |
+| 正文 | `[data-bv-v="contentSummary"].children[0]` | `querySelector('p')` | — |
+| 图片 | `.photos-tile img`（src 含 `photos-us.bazaarvoice.com`） | — | — |
+| Load More | `button[aria-label*="Load More"]`（ARIA，稳定） | — | — |
+
+**Reviews Accordion 选择器**（主 DOM）：
+
+| S1 | `[class*="AccordionWrapper"]` > `[class*="Title"]` 含文本 "Reviews" |
+|---|---|
+| S2 | `[role="region"][aria-label="Section Title"]` 文本为 "Reviews"，向上找 cursor:pointer 祖先 |
 
 **图片存储**：评论图片下载后上传到 MinIO，路径格式 `images/YYYY-MM/{url_md5_hash}.{ext}`，存储桶 `qbu-crawler`。
 
