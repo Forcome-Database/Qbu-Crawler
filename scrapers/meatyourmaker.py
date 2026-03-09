@@ -12,10 +12,9 @@ class MeatYourMakerScraper(BaseScraper):
         tab.get(url)
         tab.wait.ele_displayed('tag:h1', timeout=15)
 
-        # 等待 BV 容器加载
-        bv_container = tab.ele('css:.bv_main_container', timeout=10)
-        if bv_container:
-            bv_container.scroll.to_see()
+        # meatyourmaker 的 BV 需要先展开 Reviews 区域才会加载
+        # 先点击 Reviews toggler，再等待 BV 数据
+        self._click_reviews_tab(tab)
         self._wait_for_bv_data(tab)
 
         result = {
@@ -48,11 +47,13 @@ class MeatYourMakerScraper(BaseScraper):
         if price_text:
             result["price"] = self._to_float(price_text.replace("$", "").replace(",", ""))
 
-        # 4. 库存: .availability-msg 可见性判断
+        # 4. 库存: .availability-msg 和 .not-available-div 互斥显示
         stock = tab.run_js("""
-            const msg = document.querySelector('.availability-msg');
-            if (!msg) return 'unknown';
-            return window.getComputedStyle(msg).display !== 'none' ? 'in_stock' : 'out_of_stock';
+            const inStock = document.querySelector('.availability-msg');
+            const oos = document.querySelector('.not-available-div');
+            if (inStock && window.getComputedStyle(inStock).display !== 'none') return 'in_stock';
+            if (oos && window.getComputedStyle(oos).display !== 'none') return 'out_of_stock';
+            return 'unknown';
         """)
         result["stock_status"] = stock or "unknown"
 
@@ -189,8 +190,7 @@ class MeatYourMakerScraper(BaseScraper):
         return json.loads(raw) if isinstance(raw, str) else (raw or [])
 
     def _extract_all_reviews(self, tab) -> list:
-        """展开评论区 → 逐页翻页提取全部评论"""
-        self._click_reviews_tab(tab)
+        """逐页翻页提取全部评论（Reviews 已在 scrape() 中展开）"""
         if not self._wait_for_shadow_root(tab):
             return []
 
