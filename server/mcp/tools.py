@@ -29,7 +29,12 @@ def register_tools(mcp: FastMCP):
         URL 会自动识别所属站点。可同时提交不同站点的 URL。"""
         tm = _get_tm()
         task = tm.submit_scrape(urls)
-        return _json.dumps({"task_id": task.id, "status": task.status.value, "total": len(urls)})
+        return _json.dumps({
+            "message": f"任务启动成功，共 {len(urls)} 个产品待抓取。使用 get_task_status 查询进度。",
+            "task_id": task.id,
+            "status": task.status.value,
+            "total": len(urls),
+        })
 
     @mcp.tool
     def start_collect(category_url: str, max_pages: int = 0) -> str:
@@ -39,7 +44,12 @@ def register_tools(mcp: FastMCP):
         返回任务 ID，可用 get_task_status 查询采集进度。"""
         tm = _get_tm()
         task = tm.submit_collect(category_url, max_pages)
-        return _json.dumps({"task_id": task.id, "status": task.status.value})
+        pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
+        return _json.dumps({
+            "message": f"采集任务启动成功，将从分类页采集产品（{pages_info}）并逐一抓取。使用 get_task_status 查询进度。",
+            "task_id": task.id,
+            "status": task.status.value,
+        })
 
     @mcp.tool
     def get_task_status(task_id: str) -> str:
