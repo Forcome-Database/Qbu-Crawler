@@ -39,3 +39,15 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "qbu-crawler")
 MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", "https://minio-api.forcome.com")
+
+# ── Server ──────────────────────────────────────────
+SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+API_KEY = os.getenv("API_KEY", "")
+
+# ── Task Manager ────────────────────────────────────
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3"))
+
+# ── SQL Query Limits ────────────────────────────────
+SQL_QUERY_TIMEOUT = 5
+SQL_QUERY_MAX_ROWS = 500
