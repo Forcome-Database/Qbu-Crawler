@@ -140,6 +140,7 @@ def save_snapshot(product_id: int, data: dict):
 
 def save_reviews(product_id: int, reviews: list) -> int:
     """增量保存评论，用 product_id + author + headline + body_hash 去重
+    已存在的评论如果有新图片则更新 images 字段
     返回新增评论数
     """
     conn = get_conn()
@@ -147,15 +148,22 @@ def save_reviews(product_id: int, reviews: list) -> int:
     for r in reviews:
         body = r.get("body") or ""
         bh = _body_hash(body)
+        images = r.get("images")
         try:
             conn.execute("""
                 INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, images)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (product_id, r.get("author"), r.get("headline"), body, bh,
-                  r.get("rating"), r.get("date_published"), r.get("images")))
+                  r.get("rating"), r.get("date_published"), images))
             new_count += 1
         except sqlite3.IntegrityError:
-            pass  # 已存在，跳过
+            # 已存在：如果新数据有图片而旧数据没有，更新图片
+            if images:
+                conn.execute("""
+                    UPDATE reviews SET images = ?
+                    WHERE product_id = ? AND author = ? AND headline = ? AND body_hash = ?
+                    AND (images IS NULL OR images = '')
+                """, (images, product_id, r.get("author"), r.get("headline"), bh))
     conn.commit()
     conn.close()
     return new_count
