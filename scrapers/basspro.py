@@ -307,110 +307,119 @@ class BassProScraper(BaseScraper):
         time.sleep(1)
 
     def _extract_reviews_from_dom(self, tab) -> list:
-        """从 BV Shadow DOM 提取所有评论数据"""
+        """从 BV Shadow DOM 提取所有评论数据（分批提取，避免 JS 超时）"""
         self._click_reviews_tab(tab)
         self._load_all_reviews(tab)
         self._scroll_all_reviews(tab)
 
-        raw = tab.run_js("""
-            const container = document.querySelector('[data-bv-show="reviews"]');
-            if (!container || !container.shadowRoot) return '[]';
-            const shadow = container.shadowRoot;
+        # 先获取评论总数
+        total = tab.run_js("""
+            const c = document.querySelector('[data-bv-show="reviews"]');
+            if (!c || !c.shadowRoot) return 0;
+            return c.shadowRoot.querySelectorAll('section').length;
+        """) or 0
 
-            // --- 降级辅助函数 ---
-            function findFirst(root, ...selectors) {
-                for (const sel of selectors) {
-                    if (typeof sel === 'string') {
+        if not total:
+            return []
+
+        # 分批提取，每批 50 个 section，避免单次 JS 执行超时
+        EXTRACT_BATCH = 50
+        all_reviews = []
+        seen = set()
+
+        for batch_start in range(0, total, EXTRACT_BATCH):
+            batch_end = min(batch_start + EXTRACT_BATCH, total)
+            raw = tab.run_js(f"""
+                const container = document.querySelector('[data-bv-show="reviews"]');
+                if (!container || !container.shadowRoot) return '[]';
+                const shadow = container.shadowRoot;
+                const allSections = shadow.querySelectorAll('section');
+                const sections = [];
+                for (let i = {batch_start}; i < {batch_end} && i < allSections.length; i++) {{
+                    const s = allSections[i];
+                    if (!s.querySelector('section') && (
+                        s.querySelector('[data-bv-v="contentItem"]') ||
+                        s.querySelector('button[class*="16dr7i1-6"]')
+                    )) sections.push(s);
+                }}
+
+                function findFirst(root, ...sels) {{
+                    for (const sel of sels) {{
                         const el = root.querySelector(sel);
                         if (el) return el;
-                    } else {
-                        const el = sel(root);
-                        if (el) return el;
-                    }
-                }
-                return null;
-            }
+                    }}
+                    return null;
+                }}
 
-            // 评论 section：S1 data-bv-v（稳定）→ S2 hash class 降级
-            const sections = Array.from(shadow.querySelectorAll('section')).filter(
-                s => !s.querySelector('section') && (
-                    s.querySelector('[data-bv-v="contentItem"]') ||
-                    s.querySelector('button[class*="16dr7i1-6"]')
-                )
-            );
+                const reviews = [];
+                for (const s of sections) {{
+                    const header = s.querySelector('[data-bv-v="contentHeader"]');
+                    const summary = s.querySelector('[data-bv-v="contentSummary"]');
 
-            const reviews = [];
-            const seen = new Set();
-            for (const s of sections) {
-                const header = s.querySelector('[data-bv-v="contentHeader"]');
-                const summary = s.querySelector('[data-bv-v="contentSummary"]');
+                    const authorEl = findFirst(
+                        header || s,
+                        'button[class*="16dr7i1-6"]',
+                        'button.bv-rnr-action-bar',
+                        'button[aria-label^="See"]'
+                    );
+                    const author = authorEl ? authorEl.textContent.trim() : '';
 
-                // 作者：S1 hash → S2 .bv-rnr-action-bar → S3 aria-label^="See"
-                const authorEl = findFirst(
-                    header || s,
-                    'button[class*="16dr7i1-6"]',
-                    'button.bv-rnr-action-bar',
-                    'button[aria-label^="See"]'
-                );
-                const author = authorEl ? authorEl.textContent.trim() : '';
+                    const headlineEl = (header || s).querySelector('h3');
+                    const headline = headlineEl ? headlineEl.textContent.trim() : '';
 
-                const headlineEl = (header || s).querySelector('h3');
-                const headline = headlineEl ? headlineEl.textContent.trim() : '';
+                    let body = '';
+                    if (summary && summary.children[0]) {{
+                        body = summary.children[0].textContent.trim();
+                    }} else {{
+                        const pEl = s.querySelector('p');
+                        if (pEl) body = pEl.textContent.trim();
+                    }}
 
-                const key = author + '|' + headline;
-                if (seen.has(key)) continue;
-                seen.add(key);
+                    let rating = null;
+                    const ratingEl = findFirst(
+                        header || s,
+                        '[role="img"][aria-label*="out of 5"]',
+                        'span[class*="bm6gry"]'
+                    );
+                    if (ratingEl) {{
+                        const label = ratingEl.getAttribute('aria-label') || ratingEl.textContent;
+                        const m = label.match(/(\\d+)\\s+out\\s+of\\s+5/);
+                        if (m) rating = parseInt(m[1]);
+                    }}
 
-                // 正文：S1 contentSummary 第一个子元素 → S2 querySelector('p')
-                let body = '';
-                if (summary && summary.children[0]) {
-                    body = summary.children[0].textContent.trim();
-                } else {
-                    const pEl = s.querySelector('p');
-                    if (pEl) body = pEl.textContent.trim();
-                }
+                    let date = '';
+                    const dateEl = (header || s).querySelector('span[class*="g3jej5"]');
+                    if (dateEl) {{
+                        date = dateEl.textContent.trim();
+                    }} else {{
+                        (header || s).querySelectorAll('span').forEach(sp => {{
+                            if (!date) {{
+                                const t = sp.textContent.trim();
+                                if (t.match(/\\d+\\s+(days?|months?|years?)\\s+ago/) ||
+                                    t.match(/^a\\s+(day|month|year)\\s+ago$/)) {{
+                                    date = t;
+                                }}
+                            }}
+                        }});
+                    }}
 
-                // 评分：S1 role="img" aria-label（稳定 ARIA）→ S2 hash span
-                let rating = null;
-                const ratingEl = findFirst(
-                    header || s,
-                    '[role="img"][aria-label*="out of 5"]',
-                    'span[class*="bm6gry"]'
-                );
-                if (ratingEl) {
-                    const label = ratingEl.getAttribute('aria-label') || ratingEl.textContent;
-                    const m = label.match(/(\\d+)\\s+out\\s+of\\s+5/);
-                    if (m) rating = parseInt(m[1]);
-                }
+                    const imgs = [];
+                    s.querySelectorAll('.photos-tile img').forEach(img => {{
+                        const src = img.getAttribute('src');
+                        if (src && src.includes('photos-us.bazaarvoice.com')) {{
+                            imgs.push(src);
+                        }}
+                    }});
 
-                // 日期：S1 hash span → S2 文本正则匹配
-                let date = '';
-                const dateEl = (header || s).querySelector('span[class*="g3jej5"]');
-                if (dateEl) {
-                    date = dateEl.textContent.trim();
-                } else {
-                    (header || s).querySelectorAll('span').forEach(sp => {
-                        if (!date) {
-                            const t = sp.textContent.trim();
-                            if (t.match(/\\d+\\s+(days?|months?|years?)\\s+ago/) ||
-                                t.match(/^a\\s+(day|month|year)\\s+ago$/)) {
-                                date = t;
-                            }
-                        }
-                    });
-                }
+                    reviews.push({{author, headline, body, rating, date_published: date, images: imgs}});
+                }}
+                return JSON.stringify(reviews);
+            """)
+            batch_reviews = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            for r in batch_reviews:
+                key = (r.get("author", ""), r.get("headline", ""))
+                if key not in seen:
+                    seen.add(key)
+                    all_reviews.append(r)
 
-                // 图片：.photos-tile img（BV 语义类名，稳定）
-                const imgs = [];
-                s.querySelectorAll('.photos-tile img').forEach(img => {
-                    const src = img.getAttribute('src');
-                    if (src && src.includes('photos-us.bazaarvoice.com')) {
-                        imgs.push(src);
-                    }
-                });
-
-                reviews.push({author, headline, body, rating, date_published: date, images: imgs});
-            }
-            return JSON.stringify(reviews);
-        """)
-        return json.loads(raw) if isinstance(raw, str) else (raw or [])
+        return all_reviews
