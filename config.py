@@ -30,6 +30,7 @@ REQUEST_DELAY = (1, 3)  # 请求间随机延迟范围（秒），设为 None 禁
 
 # 稳定性配置
 RESTART_EVERY = 50  # 每抓取 N 个产品后重启浏览器，防止内存泄漏，0 禁用
+MAX_REVIEWS = 200  # 单个产品最多加载的评论数，0 表示不限制（大量评论会导致浏览器崩溃）
 
 # MinIO 配置
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "192.168.16.116")
