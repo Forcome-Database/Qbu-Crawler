@@ -11,19 +11,19 @@
 
 ### 任务管理
 
-- `start_scrape` — 抓取产品页，参数：`urls`（URL列表）
-- `start_collect` — 从分类页采集，参数：`category_url`、`max_pages`（0=全部）
+- `start_scrape` — 抓取产品页，参数：`urls`（URL列表）、`ownership`（必填，own 或 competitor）
+- `start_collect` — 从分类页采集，参数：`category_url`、`max_pages`（0=全部）、`ownership`（必填，own 或 competitor）
 - `get_task_status` — 查询任务进度，参数：`task_id`
 - `list_tasks` — 列出任务记录，参数：`status`（可选）、`limit`
 - `cancel_task` — 取消任务，参数：`task_id`
 
 ### 数据查询
 
-- `list_products` — 搜索/筛选产品，参数：`site`、`search`、`min_price`、`max_price`、`sort_by`
+- `list_products` — 搜索/筛选产品，参数：`site`、`search`、`min_price`、`max_price`、`sort_by`、`ownership`（可选）
 - `get_product_detail` — 产品详情+评论+快照，参数：`product_id` 或 `url` 或 `sku`
-- `query_reviews` — 查询评论，参数：`product_id`、`min_rating`、`keyword`、`has_images`
+- `query_reviews` — 查询评论，参数：`product_id`、`min_rating`、`keyword`、`has_images`、`ownership`（可选）
 - `get_price_history` — 价格趋势，参数：`product_id`、`days`（默认30）
-- `get_stats` — 数据统计总览，无参数
+- `get_stats` — 数据统计总览，无参数，返回结果包含 by_ownership 分组
 - `execute_sql` — 只读SQL（仅SELECT），参数：`sql`，最多500行，5秒超时
 
 ## 工具选择规则
@@ -175,6 +175,11 @@
 
 - 🏪 **Bass Pro Shops**：180 个产品
 - 🥩 **Meat Your Maker**：65 个产品
+
+### 产品归属
+
+- 🏠 **自有产品**：N 个
+- 🎯 **竞品**：N 个
 ```
 
 **差评分析格式**：
@@ -233,6 +238,61 @@
 ---
 
 **结论**：Bass Pro 产品更多、均价更低、评分更高。Meat Your Maker 定位高端但评分偏低，建议关注差评原因。
+```
+
+## URL 验证规则
+
+支持站点域名：
+- `www.basspro.com` → basspro（Bass Pro Shops）
+- `www.meatyourmaker.com` → meatyourmaker（Meat Your Maker）
+
+验证流程：
+1. 提取 URL 域名部分
+2. 匹配上述列表 → 通过，可写入 CSV 或提交任务
+3. 不匹配 → 告知用户"该站点不在支持范围内，无法加入定时任务"
+4. 非支持站点可用浏览器/搜索技能临时获取内容，但不走 MCP 任务流
+
+## CSV 管理规范
+
+两个 CSV 文件位于 `~/.openclaw/workspace/data/`：
+
+- `sku-list-source.csv` — 分类页 URL（用于 `start_collect`）
+- `sku-product-details.csv` — 产品详情页 URL（用于 `start_scrape`）
+
+格式：两列 `url,ownership`，一行一条，有表头，ownership 值为 `own` 或 `competitor`。
+
+写入规则：
+1. URL 必须通过域名验证
+2. ownership 必须明确指定，未指定时向用户追问
+3. 用户无法回答 ownership 时，不写入 CSV
+4. 累积式管理，无需清理（服务端 UPSERT 去重）
+
+## 定时任务汇报格式
+
+### 任务启动通知
+
+```
+🚀 每日爬虫任务已启动
+
+- **提交时间**：YYYY-MM-DD HH:MM
+- **分类采集**：N 个任务
+- **产品抓取**：N 个任务（N 个产品）
+- **任务 ID**：xxx, yyy
+
+将自动监控任务进度，完成后汇报。
+```
+
+### 任务完成通知
+
+```
+✅ 每日爬虫任务已完成
+
+- **完成时间**：YYYY-MM-DD HH:MM
+- **产品抓取**：成功 N，失败 N
+- **新增评论**：N 条
+- **自有产品**：N 个 | **竞品**：N 个
+- **邮件发送**：✅ 已发送至 N 位收件人
+- **报告文件**：scrape-report-YYYY-MM-DD.xlsx
 ```
 
 ## 参数说明
