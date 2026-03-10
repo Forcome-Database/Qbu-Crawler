@@ -38,10 +38,26 @@ Qbu-Crawler/
 │   │   ├── auth.py         # API Key 认证中间件
 │   │   ├── tasks.py        # 任务管理 endpoints
 │   │   └── products.py     # 数据查询 endpoints
-│   └── mcp/
-│       ├── __init__.py
-│       ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL）
-│       └── resources.py    # MCP Resources（数据库元数据）
+│   ├── mcp/
+│   │   ├── __init__.py
+│   │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL）
+│   │   └── resources.py    # MCP Resources（数据库元数据）
+│   └── openclaw/
+│       ├── README.md
+│       ├── plugin/                 # MCP 插件
+│       └── workspace/
+│           ├── SOUL.md
+│           ├── TOOLS.md
+│           ├── HEARTBEAT.md        # 心跳检查清单
+│           ├── state/              # 运行时状态
+│           ├── config/             # 邮件收件人等配置
+│           ├── reports/            # Excel 报告输出
+│           ├── data/               # CSV（分类页+产品页 URL）
+│           └── skills/
+│               ├── qbu-product-data/
+│               ├── daily-scrape-submit/
+│               ├── daily-scrape-report/
+│               └── csv-management/
 ├── scrapers/
 │   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
 │   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
@@ -139,6 +155,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **product_snapshots** 表：每次抓取 INSERT 一条，记录价格/库存/评分/评论数变化历史，用于趋势分析
 - **reviews** 表：增量 INSERT，用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重；已存在评论如有新图片则回填 `images` 字段（解决首次无图入库后图片丢失问题）
 - **tasks** 表：记录通过 API/MCP 提交的爬虫任务历史，params/progress/result 为 JSON 字段
+- **products.ownership**：产品归属字段，值为 `own`（自有）或 `competitor`（竞品），通过任务参数传入，爬虫不感知
 
 ### HTTP API + MCP 服务架构
 
@@ -149,6 +166,15 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - 爬虫在 `ThreadPoolExecutor` 中同步执行，支持 URL 粒度取消
 - MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL
 - MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
+
+### OpenClaw 定时工作流
+
+三阶段架构：
+1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect → 存 task_id 到 state/active-tasks.json → DingTalk 通知
+2. **Heartbeat（每 5 分钟，main session，lightContext）**：检查 active-tasks.json → 轮询 get_task_status → 全部完成则触发阶段 3
+3. **Cron Job（一次性，isolated）**：查新增数据 → 翻译评论 → xlsx 生成 Excel → himalaya 发邮件 → DingTalk 汇报 → 清除状态
+
+CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。
 
 ### 稳定性机制
 
