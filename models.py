@@ -25,7 +25,8 @@ def init_db():
             stock_status TEXT,
             review_count INTEGER,
             rating REAL,
-            scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ownership TEXT NOT NULL DEFAULT 'competitor'
         );
 
         CREATE TABLE IF NOT EXISTS product_snapshots (
@@ -71,6 +72,7 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN body_hash TEXT",
         "ALTER TABLE reviews ADD COLUMN scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE products ADD COLUMN site TEXT NOT NULL DEFAULT 'basspro'",
+        "ALTER TABLE products ADD COLUMN ownership TEXT NOT NULL DEFAULT 'competitor'",
     ]
     for sql in migrations:
         try:
@@ -118,8 +120,8 @@ def _body_hash(body: str | None) -> str:
 def save_product(data: dict) -> int:
     conn = get_conn()
     cursor = conn.execute("""
-        INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, scraped_at)
-        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, CURRENT_TIMESTAMP)
+        INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, ownership, scraped_at)
+        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, CURRENT_TIMESTAMP)
         ON CONFLICT(url) DO UPDATE SET
             site = excluded.site,
             name = excluded.name,
@@ -128,6 +130,7 @@ def save_product(data: dict) -> int:
             stock_status = excluded.stock_status,
             review_count = excluded.review_count,
             rating = excluded.rating,
+            ownership = excluded.ownership,
             scraped_at = CURRENT_TIMESTAMP
     """, data)
     product_id = cursor.lastrowid
@@ -333,6 +336,7 @@ def get_product_by_sku(sku: str) -> dict | None:
 
 def query_reviews(
     product_id: int | None = None,
+    sku: str | None = None,
     site: str | None = None,
     min_rating: float | None = None,
     max_rating: float | None = None,
@@ -349,6 +353,8 @@ def query_reviews(
         conditions, params = [], []
         if product_id is not None:
             conditions.append("r.product_id = ?"); params.append(product_id)
+        if sku:
+            conditions.append("p.sku = ?"); params.append(sku)
         if site:
             conditions.append("p.site = ?"); params.append(site)
         if min_rating is not None:
