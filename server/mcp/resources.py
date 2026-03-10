@@ -22,6 +22,7 @@ tasks (爬虫任务记录)
 - products 表使用 UPSERT，始终是最新状态
 - product_snapshots 每次采集 INSERT，记录变化趋势
 - reviews 增量写入，用 (product_id, author, headline, body_hash) 去重
+- products.ownership 区分自有产品(own)和竞品(competitor)
 - tasks 记录任务历史，params/progress/result 为 JSON 字段
 """
 
@@ -42,12 +43,14 @@ SCHEMA_PRODUCTS = """
 | review_count | INTEGER | | 评论总数 |
 | rating | REAL | | 平均评分 (0-5) |
 | scraped_at | TIMESTAMP | | 最后采集时间 |
+| ownership | TEXT | NOT NULL, DEFAULT 'competitor' | 产品归属：own(自有) 或 competitor(竞品) |
 
 ### 常用查询示例
 ```sql
 SELECT * FROM products WHERE site = 'basspro' AND rating >= 4.5 ORDER BY rating DESC;
 SELECT * FROM products WHERE name LIKE '%fishing%' ORDER BY price ASC;
 SELECT site, stock_status, COUNT(*) FROM products GROUP BY site, stock_status;
+SELECT ownership, COUNT(*), AVG(price) FROM products GROUP BY ownership;
 ```
 """
 
