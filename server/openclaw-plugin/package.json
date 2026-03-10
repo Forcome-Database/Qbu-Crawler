@@ -1,0 +1,11 @@
+{
+  "name": "mcp-products",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./index.js",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "installDependencies": false
+  }
+}

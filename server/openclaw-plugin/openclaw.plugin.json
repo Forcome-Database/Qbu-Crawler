@@ -1,0 +1,27 @@
+{
+  "id": "mcp-products",
+  "name": "MCP Products (Streamable HTTP)",
+  "description": "Expose Qbu-Crawler MCP server as OpenClaw agent tools for product data scraping and analysis",
+  "version": "1.0.0",
+  "kind": "tools",
+  "main": "./index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "description": "MCP endpoint URL (Streamable HTTP)",
+        "default": "http://8.153.109.16:15087/mcp/"
+      },
+      "protocolVersion": {
+        "type": "string",
+        "default": "2025-03-26"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "default": 60000
+      }
+    },
+    "additionalProperties": false
+  }
+}
