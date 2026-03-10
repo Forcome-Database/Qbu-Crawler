@@ -271,6 +271,7 @@ def query_products(
     min_price: float | None = None,
     max_price: float | None = None,
     stock_status: str | None = None,
+    ownership: str | None = None,
     sort_by: str = "scraped_at",
     order: str = "desc",
     limit: int = 20,
@@ -289,6 +290,8 @@ def query_products(
             conditions.append("price <= ?"); params.append(max_price)
         if stock_status:
             conditions.append("stock_status = ?"); params.append(stock_status)
+        if ownership:
+            conditions.append("ownership = ?"); params.append(ownership)
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -338,6 +341,7 @@ def query_reviews(
     product_id: int | None = None,
     sku: str | None = None,
     site: str | None = None,
+    ownership: str | None = None,
     min_rating: float | None = None,
     max_rating: float | None = None,
     author: str | None = None,
@@ -357,6 +361,8 @@ def query_reviews(
             conditions.append("p.sku = ?"); params.append(sku)
         if site:
             conditions.append("p.site = ?"); params.append(site)
+        if ownership:
+            conditions.append("p.ownership = ?"); params.append(ownership)
         if min_rating is not None:
             conditions.append("r.rating >= ?"); params.append(min_rating)
         if max_rating is not None:
@@ -438,10 +444,15 @@ def get_stats() -> dict:
         avg_price = conn.execute("SELECT AVG(price) FROM products WHERE price IS NOT NULL").fetchone()[0]
         avg_rating = conn.execute("SELECT AVG(rating) FROM products WHERE rating IS NOT NULL").fetchone()[0]
 
+        by_ownership = {}
+        for row in conn.execute("SELECT ownership, COUNT(*) as cnt FROM products GROUP BY ownership").fetchall():
+            by_ownership[row["ownership"]] = row["cnt"]
+
         return {
             "total_products": total_products,
             "total_reviews": total_reviews,
             "by_site": by_site,
+            "by_ownership": by_ownership,
             "last_scrape_at": last_scrape,
             "avg_price": round(avg_price, 2) if avg_price else None,
             "avg_rating": round(avg_rating, 2) if avg_rating else None,
