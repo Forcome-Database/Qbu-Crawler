@@ -82,6 +82,75 @@ openclaw doctor
 
 ---
 
+## 定时工作流配置
+
+### Cron Job（每日任务提交）
+
+```bash
+openclaw cron add --name "daily-scrape-submit" \
+  --cron "0 8 * * *" --tz "Asia/Shanghai" \
+  --session isolated \
+  --message "执行每日爬虫任务提交，使用 daily-scrape-submit 技能" \
+  --announce --to "<dingtalk-channel-id>"
+```
+
+### Heartbeat（任务监控）
+
+在 `openclaw.json` 中配置：
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "5m",
+        lightContext: true,
+        target: "none",
+        activeHours: {
+          start: "07:00",
+          end: "23:00",
+          timezone: "Asia/Shanghai"
+        }
+      }
+    }
+  }
+}
+```
+
+### 新增 Workspace 文件
+
+安装到 `~/.openclaw/workspace/`：
+
+```bash
+# 心跳
+cp server/openclaw/workspace/HEARTBEAT.md ~/.openclaw/workspace/
+
+# Skills
+for skill in daily-scrape-submit daily-scrape-report csv-management; do
+  mkdir -p ~/.openclaw/workspace/skills/$skill
+  cp server/openclaw/workspace/skills/$skill/SKILL.md ~/.openclaw/workspace/skills/$skill/
+done
+
+# 数据和配置模板
+mkdir -p ~/.openclaw/workspace/{data,config,state,reports}
+cp server/openclaw/workspace/data/*.csv ~/.openclaw/workspace/data/
+cp server/openclaw/workspace/config/email-recipients.txt ~/.openclaw/workspace/config/
+cp server/openclaw/workspace/state/active-tasks.json ~/.openclaw/workspace/state/
+```
+
+### 新增 Skills 说明
+
+- `daily-scrape-submit` — 每日定时任务提交（Cron Job 使用）
+- `daily-scrape-report` — 任务完成汇报（含翻译 + Excel + 邮件）
+- `csv-management` — URL/SKU 验证与 CSV 管理
+
+### ownership 字段
+
+products 表新增 `ownership` 字段（`own`/`competitor`），区分自有产品与竞品。
+`start_scrape` 和 `start_collect` 工具的 `ownership` 参数为必填。
+
+---
+
 ## OpenClaw 架构经验
 
 ### Workspace 文件体系
