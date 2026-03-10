@@ -38,14 +38,12 @@ def register_tools(mcp: FastMCP):
         })
 
     @mcp.tool
-    def start_collect(category_url: str, ownership: str = "", max_pages: int = 0) -> str:
+    def start_collect(category_url: str, ownership: str, max_pages: int = 0) -> str:
         """从分类/列表页自动采集所有产品 URL 并逐一爬取详情。
         先翻页收集产品链接，再逐个抓取产品数据和评论。
         max_pages 限制最多翻几页，0 表示采集所有页。
-        ownership: 产品归属，own 表示自有产品，competitor 表示竞品，必填。
+        ownership 必填：own（自有产品）或 competitor（竞品）。
         返回任务 ID，可用 get_task_status 查询采集进度。"""
-        if not ownership:
-            return _json.dumps({"error": "ownership is required, must be 'own' or 'competitor'"})
         tm = _get_tm()
         task = tm.submit_collect(category_url, max_pages, ownership=ownership)
         pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
