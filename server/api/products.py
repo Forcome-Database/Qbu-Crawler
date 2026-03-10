@@ -13,6 +13,7 @@ async def list_products(
     min_price: float | None = None,
     max_price: float | None = None,
     stock_status: str | None = None,
+    ownership: str | None = None,
     sort_by: str = "scraped_at",
     order: str = "desc",
     limit: int = 20,
@@ -20,7 +21,7 @@ async def list_products(
 ):
     items, total = models.query_products(
         site=site, search=search, min_price=min_price, max_price=max_price,
-        stock_status=stock_status, sort_by=sort_by, order=order,
+        stock_status=stock_status, ownership=ownership, sort_by=sort_by, order=order,
         limit=limit, offset=offset,
     )
     return {"items": items, "total": total}
