@@ -44,6 +44,7 @@ def scrape_urls(scraper, urls, site=""):
             data = scraper.scrape(url)
             product = data["product"]
             reviews = data["reviews"]
+            product.setdefault("ownership", "competitor")
 
             product_id = save_product(product)
             save_snapshot(product_id, product)

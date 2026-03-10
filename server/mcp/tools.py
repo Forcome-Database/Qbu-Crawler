@@ -28,6 +28,8 @@ def register_tools(mcp: FastMCP):
         支持 Bass Pro Shops (www.basspro.com) 和 Meat Your Maker (www.meatyourmaker.com) 站点。
         URL 会自动识别所属站点。可同时提交不同站点的 URL。
         ownership: 产品归属，own 表示自有产品，competitor 表示竞品。"""
+        if ownership not in ("own", "competitor"):
+            return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
         tm = _get_tm()
         task = tm.submit_scrape(urls, ownership=ownership)
         return _json.dumps({
@@ -44,6 +46,8 @@ def register_tools(mcp: FastMCP):
         max_pages 限制最多翻几页，0 表示采集所有页。
         ownership 必填：own（自有产品）或 competitor（竞品）。
         返回任务 ID，可用 get_task_status 查询采集进度。"""
+        if ownership not in ("own", "competitor"):
+            return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
         tm = _get_tm()
         task = tm.submit_collect(category_url, max_pages, ownership=ownership)
         pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
