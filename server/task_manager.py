@@ -60,8 +60,8 @@ class TaskManager:
         self._tasks: dict[str, Task] = {}
         self._cancel_flags: dict[str, Event] = {}
 
-    def submit_scrape(self, urls: list[str]) -> Task:
-        task = Task(type="scrape", params={"urls": urls})
+    def submit_scrape(self, urls: list[str], ownership: str = "competitor") -> Task:
+        task = Task(type="scrape", params={"urls": urls, "ownership": ownership})
         task.progress = {"total": len(urls), "completed": 0, "failed": 0, "current_url": None}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()
@@ -69,8 +69,8 @@ class TaskManager:
         self._executor.submit(self._run_scrape, task.id)
         return task
 
-    def submit_collect(self, category_url: str, max_pages: int = 0) -> Task:
-        task = Task(type="collect", params={"category_url": category_url, "max_pages": max_pages})
+    def submit_collect(self, category_url: str, max_pages: int = 0, ownership: str = "competitor") -> Task:
+        task = Task(type="collect", params={"category_url": category_url, "max_pages": max_pages, "ownership": ownership})
         task.progress = {"phase": "collecting", "urls_found": 0, "completed": 0, "failed": 0}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()
@@ -128,6 +128,7 @@ class TaskManager:
 
                     data = scraper.scrape(url)
                     product = data.get("product", {})
+                    product["ownership"] = task.params["ownership"]
                     reviews = data.get("reviews", [])
 
                     pid = models.save_product(product)
@@ -206,6 +207,7 @@ class TaskManager:
                 try:
                     data = scraper.scrape(url)
                     product = data.get("product", {})
+                    product["ownership"] = task.params["ownership"]
                     reviews = data.get("reviews", [])
 
                     pid = models.save_product(product)
