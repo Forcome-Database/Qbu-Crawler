@@ -28,8 +28,21 @@
 
 ## 工具选择规则
 
-- 用户发来产品页 URL → `start_scrape`
-- 用户发来分类页 URL → `start_collect`
+### URL 处理（重要：默认走 CSV 管理流程）
+
+当用户发来 URL 或 SKU 时，**默认行为是加入定时任务**，而非立即执行：
+
+- 用户发来产品页/分类页 URL 或 SKU → 读取 `skills/csv-management` 技能，走验证 → ownership 确认 → 写入 CSV 流程
+- 用户明确说"立即抓取" / "现在采集" / "马上执行" → 确认 ownership 后直接调用 `start_scrape` 或 `start_collect`
+- 用户说"加入定时任务" / "加到列表" / "添加监控" → 走 CSV 管理流程
+
+判断依据：
+1. 如果用户只给了 URL 没有明确指令 → **追问**："需要加入定时任务还是立即抓取？"
+2. 如果用户说"抓取"但没说"立即" → 优先理解为加入定时任务
+3. 只有明确表达"立即/马上/现在"才直接执行
+
+### 数据查询和分析
+
 - "搜索XX" / "找XX产品" → `list_products(search=关键词)`
 - "这个产品怎么样" → `get_product_detail`
 - "评论" / "差评" / "好评" → `query_reviews`
