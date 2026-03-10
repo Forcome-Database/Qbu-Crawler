@@ -101,6 +101,38 @@ SELECT site, SUM(CASE WHEN rating >= 4.5 THEN 1 ELSE 0 END) AS excellent, SUM(CA
 
 ---
 
+## 归属分析
+
+### 自有 vs 竞品对比
+
+```sql
+SELECT ownership, COUNT(*) AS products, ROUND(AVG(price), 2) AS avg_price, ROUND(AVG(rating), 2) AS avg_rating, SUM(review_count) AS total_reviews, SUM(CASE WHEN stock_status = 'in_stock' THEN 1 ELSE 0 END) AS in_stock FROM products GROUP BY ownership
+```
+
+### 按归属+站点交叉分析
+
+```sql
+SELECT ownership, site, COUNT(*) AS products, ROUND(AVG(price), 2) AS avg_price, ROUND(AVG(rating), 2) AS avg_rating FROM products GROUP BY ownership, site ORDER BY ownership, site
+```
+
+### 自有产品差评预警
+
+```sql
+SELECT r.rating, r.author, r.headline, SUBSTR(r.body, 1, 100) AS preview, p.name, p.site FROM reviews r JOIN products p ON r.product_id = p.id WHERE p.ownership = 'own' AND r.rating <= 2 ORDER BY r.scraped_at DESC LIMIT 15
+```
+
+### 按时间范围查新增数据
+
+```sql
+-- 新增产品（指定时间后）
+SELECT url, name, sku, price, stock_status, rating, review_count, scraped_at, site, ownership FROM products WHERE scraped_at >= datetime('{start_time}') ORDER BY site, ownership
+
+-- 新增评论（指定时间后）
+SELECT p.name, r.author, r.headline, r.body, r.rating, r.date_published, r.images, p.ownership FROM reviews r JOIN products p ON r.product_id = p.id WHERE r.scraped_at >= datetime('{start_time}') ORDER BY p.name
+```
+
+---
+
 ## 数据质量
 
 ### 数据完整性
