@@ -123,6 +123,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `RETRY_INTERVAL` | `2` | 重试间隔（秒） |
 | `REQUEST_DELAY` | `(1, 3)` | 请求间随机延迟范围（秒），`None` 禁用 |
 | `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用 |
+| `MAX_REVIEWS` | `200` | 单产品最多加载评论数，`0` 不限（大量评论会导致浏览器崩溃） |
 
 ### 服务器配置（.env）
 
@@ -183,6 +184,9 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **定期重启**：每 N 个产品重启浏览器，防止内存泄漏（`RESTART_EVERY` 配置）
 - **随机延迟**：请求间随机等待（`REQUEST_DELAY` 配置），降低反爬检测
 - **智能点击**：翻页使用 `click(by_js=None)`，优先模拟，被遮挡自动改 JS
+- **评论加载上限**：`MAX_REVIEWS` 限制单产品最多加载 200 条评论，防止 DOM 膨胀导致 JS 超时和浏览器崩溃
+- **分批提取 + 分批滚动**：评论提取每批 50 个 section，滚动每批 20 个，避免单次 JS 调用超时
+- **评论异常容错**：评论加载/滚动阶段的异常不会导致整个产品抓取失败，会尝试提取已加载的评论
 
 ### 图片存储
 
@@ -196,7 +200,9 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **不要用 `wait.eles_loaded()` 等动态注入的 script 标签**：对动态注入的 `<script>` 标签不可靠，必须用 `tab.run_js()` 轮询 `document.querySelector()`
 - **不要用 `wait.url_change()` 等翻页**：该方法需要 `text` 参数（URL 片段），翻页时 URL 变化不可预测，应使用 `wait.doc_loaded()`
 - **NO_IMAGES=True 不影响图片 URL 获取**：禁用图片只阻止浏览器下载图片资源，滚动触发懒加载后 img 标签和 src 属性仍会渲染
-- **lazy image 必须逐个 section 慢滚动**：`loading="lazy"` 的图片需要元素在视口中停留足够时间才触发，`forEach + scrollIntoView` 同步执行太快无效，必须用 Python 循环逐个滚动 + `time.sleep(0.3)` 延时
+- **lazy image 必须批量滚动而非逐个**：`loading="lazy"` 的图片需要元素在视口中停留足够时间才触发。逐个 `scrollIntoView` 在评论数超过 200 时会导致 JS 超时和视口抽搐。改用每 20 个 section 批量滚动一次（`block: 'end'` 单向向下），1000 条评论从 200 秒降到 15 秒
+- **大量评论会导致浏览器崩溃**：1000+ 条评论全部加载到 Shadow DOM 后，DOM 节点爆炸导致 `querySelectorAll` 变慢、JS 执行超时（30 秒限制），最终浏览器进程内存耗尽崩溃，后续所有产品都失败。必须用 `MAX_REVIEWS` 限制加载数量
+- **Shadow DOM 大量节点提取必须分批**：在 Shadow DOM 中一次性遍历 1000+ section 提取数据（每个做多次 querySelector + 正则匹配）会超过 DrissionPage 的 30 秒 JS 超时。改用每批 50 个 section 分批执行，Python 端做跨批次去重
 - **`eager` 加载模式可能阻止第三方脚本初始化**：某些站点（如 SFCC/Demandware 平台）的 BV 脚本在 `eager` 模式下无法初始化，需改用 `normal` 模式。各站点子类可通过覆盖 `_build_options()` 定制
 
 ## 工作流程规范
