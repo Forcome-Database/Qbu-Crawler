@@ -273,23 +273,37 @@ class BassProScraper(BaseScraper):
                     break
 
     def _scroll_all_reviews(self, tab):
-        """滚动浏览所有评论，触发图片懒加载"""
+        """批量滚动评论区，触发图片懒加载。
+        每 BATCH_SIZE 个 section 滚动一次到最后一个，减少 JS 调用次数。
+        """
+        BATCH_SIZE = 20
         total = tab.run_js("""
             const c = document.querySelector('[data-bv-show="reviews"]');
             return c && c.shadowRoot ? c.shadowRoot.querySelectorAll('section').length : 0;
         """)
         if not total:
             return
-        # 逐个 section 滚动到视口中央
-        for i in range(total):
+        # 按批次滚动：每批滚到该批最后一个 section，停留足够时间触发懒加载
+        for batch_end in range(BATCH_SIZE - 1, total, BATCH_SIZE):
+            idx = min(batch_end, total - 1)
             tab.run_js(f"""
                 const c = document.querySelector('[data-bv-show="reviews"]');
                 if (c && c.shadowRoot) {{
-                    const s = c.shadowRoot.querySelectorAll('section')[{i}];
-                    if (s) s.scrollIntoView({{block: 'center'}});
+                    const s = c.shadowRoot.querySelectorAll('section')[{idx}];
+                    if (s) s.scrollIntoView({{block: 'end'}});
                 }}
             """)
-            time.sleep(0.2)
+            time.sleep(0.3)
+        # 确保最后一批也被滚动到
+        if (total - 1) % BATCH_SIZE != BATCH_SIZE - 1:
+            tab.run_js(f"""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (c && c.shadowRoot) {{
+                    const s = c.shadowRoot.querySelectorAll('section')[{total - 1}];
+                    if (s) s.scrollIntoView({{block: 'end'}});
+                }}
+            """)
+            time.sleep(0.3)
         time.sleep(1)
 
     def _extract_reviews_from_dom(self, tab) -> list:
