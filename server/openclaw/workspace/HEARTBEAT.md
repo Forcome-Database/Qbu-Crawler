@@ -9,7 +9,7 @@
    - 如果所有任务都有终态（completed/failed/cancelled/not found）→ 执行以下命令触发汇报：
 
 ```
-openclaw cron add --name "scrape-report" --at +0m --session isolated --message "执行爬虫任务汇报，使用 daily-scrape-report 技能" --announce --to "<dingtalk-channel-id>" --delete-after-run
+openclaw cron add --name "scrape-report" --at +0m --session isolated --message "执行爬虫任务汇报，使用 daily-scrape-report 技能" --announce --to "chat:cidoOQUuAEydsdghncIE5INqg==" --delete-after-run
 ```
 
 触发后回复 HEARTBEAT_OK
