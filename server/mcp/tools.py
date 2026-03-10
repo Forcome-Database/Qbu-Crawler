@@ -23,12 +23,13 @@ def register_tools(mcp: FastMCP):
     # ── Task Operations ──────────────────────────────
 
     @mcp.tool
-    def start_scrape(urls: list[str]) -> str:
+    def start_scrape(urls: list[str], ownership: str) -> str:
         """提交一个或多个产品页 URL 开始爬取，返回任务 ID 用于后续查询进度。
         支持 Bass Pro Shops (www.basspro.com) 和 Meat Your Maker (www.meatyourmaker.com) 站点。
-        URL 会自动识别所属站点。可同时提交不同站点的 URL。"""
+        URL 会自动识别所属站点。可同时提交不同站点的 URL。
+        ownership: 产品归属，own 表示自有产品，competitor 表示竞品。"""
         tm = _get_tm()
-        task = tm.submit_scrape(urls)
+        task = tm.submit_scrape(urls, ownership=ownership)
         return _json.dumps({
             "message": f"任务启动成功，共 {len(urls)} 个产品待抓取。使用 get_task_status 查询进度。",
             "task_id": task.id,
@@ -37,13 +38,16 @@ def register_tools(mcp: FastMCP):
         })
 
     @mcp.tool
-    def start_collect(category_url: str, max_pages: int = 0) -> str:
+    def start_collect(category_url: str, ownership: str = "", max_pages: int = 0) -> str:
         """从分类/列表页自动采集所有产品 URL 并逐一爬取详情。
         先翻页收集产品链接，再逐个抓取产品数据和评论。
         max_pages 限制最多翻几页，0 表示采集所有页。
+        ownership: 产品归属，own 表示自有产品，competitor 表示竞品，必填。
         返回任务 ID，可用 get_task_status 查询采集进度。"""
+        if not ownership:
+            return _json.dumps({"error": "ownership is required, must be 'own' or 'competitor'"})
         tm = _get_tm()
-        task = tm.submit_collect(category_url, max_pages)
+        task = tm.submit_collect(category_url, max_pages, ownership=ownership)
         pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
         return _json.dumps({
             "message": f"采集任务启动成功，将从分类页采集产品（{pages_info}）并逐一抓取。使用 get_task_status 查询进度。",
@@ -95,6 +99,7 @@ def register_tools(mcp: FastMCP):
         min_price: float = -1,
         max_price: float = -1,
         stock_status: str = "",
+        ownership: str = "",
         sort_by: str = "scraped_at",
         order: str = "desc",
         limit: int = 20,
@@ -105,6 +110,7 @@ def register_tools(mcp: FastMCP):
         - search: 按产品名称关键词模糊搜索
         - min_price/max_price: 价格区间过滤（美元），-1 表示不限制
         - stock_status: 库存状态，可选 in_stock/out_of_stock/unknown，留空不筛选
+        - ownership: 产品归属筛选，可选 own（自有）或 competitor（竞品），留空不筛选
         - sort_by: 排序字段，可选 price/rating/review_count/scraped_at/name
         - order: 排序方向，asc 升序或 desc 降序
         返回产品列表和总数，支持分页。"""
@@ -114,6 +120,7 @@ def register_tools(mcp: FastMCP):
             min_price=min_price if min_price >= 0 else None,
             max_price=max_price if max_price >= 0 else None,
             stock_status=stock_status if stock_status else None,
+            ownership=ownership if ownership else None,
             sort_by=sort_by, order=order,
             limit=limit, offset=offset,
         )
@@ -148,7 +155,9 @@ def register_tools(mcp: FastMCP):
     @mcp.tool
     def query_reviews(
         product_id: int = -1,
+        sku: str = "",
         site: str = "",
+        ownership: str = "",
         min_rating: float = -1,
         max_rating: float = -1,
         author: str = "",
@@ -161,7 +170,9 @@ def register_tools(mcp: FastMCP):
     ) -> str:
         """查询产品评论，支持多维度筛选。
         - product_id: 指定产品的评论，-1 表示不限
+        - sku: 按产品 SKU 精确匹配，留空不限
         - site: 按站点筛选（basspro 或 meatyourmaker），留空不限
+        - ownership: 按产品归属筛选，可选 own（自有）或 competitor（竞品），留空不限
         - min_rating/max_rating: 评分区间（0-5），-1 表示不限
         - author: 作者名模糊匹配
         - keyword: 在标题和正文中搜索关键词
@@ -175,7 +186,9 @@ def register_tools(mcp: FastMCP):
 
         items, total = models.query_reviews(
             product_id=product_id if product_id >= 0 else None,
+            sku=sku if sku else None,
             site=site if site else None,
+            ownership=ownership if ownership else None,
             min_rating=min_rating if min_rating >= 0 else None,
             max_rating=max_rating if max_rating >= 0 else None,
             author=author if author else None,
