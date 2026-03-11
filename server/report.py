@@ -102,20 +102,24 @@ _IMG_DOWNLOAD_TIMEOUT = 10  # 单张图片下载超时（秒）
 
 
 def _download_and_resize(url: str) -> XlImage | None:
-    """Download an image URL and return a resized openpyxl Image, or None on failure."""
+    """Download an image and return an openpyxl Image with thumbnail display size.
+
+    Keeps original resolution for clarity when zoomed in;
+    only sets the display dimensions to thumbnail size in Excel.
+    """
     try:
         resp = requests.get(url, timeout=_IMG_DOWNLOAD_TIMEOUT)
         resp.raise_for_status()
-        img = PILImage.open(BytesIO(resp.content))
-        # Resize to fixed height, keep aspect ratio
+        buf = BytesIO(resp.content)
+        # Read original dimensions for aspect ratio calculation
+        img = PILImage.open(buf)
         ratio = _IMG_THUMB_HEIGHT / img.height
-        new_width = int(img.width * ratio)
-        img = img.resize((new_width, _IMG_THUMB_HEIGHT), PILImage.LANCZOS)
-        buf = BytesIO()
-        img.save(buf, format="PNG")
+        display_width = int(img.width * ratio)
+        # Create openpyxl Image from original bytes (no pixel resize)
         buf.seek(0)
         xl_img = XlImage(buf)
-        xl_img.width = new_width
+        # Set display size only — original resolution preserved
+        xl_img.width = display_width
         xl_img.height = _IMG_THUMB_HEIGHT
         return xl_img
     except Exception as exc:
