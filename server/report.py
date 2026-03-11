@@ -11,8 +11,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from io import BytesIO
+
+import requests
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XlImage
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from PIL import Image as PILImage
 
 import config
 import models
@@ -89,6 +95,34 @@ def _cell_value(v):
     return v
 
 
+_IMG_THUMB_HEIGHT = 80   # 缩略图高度（像素）
+_IMG_THUMB_SPACING = 5   # 多张图片间距（像素）
+_IMG_COL_WIDTH = 17      # 照片列宽度（字符数，约 120px）
+_IMG_DOWNLOAD_TIMEOUT = 10  # 单张图片下载超时（秒）
+
+
+def _download_and_resize(url: str) -> XlImage | None:
+    """Download an image URL and return a resized openpyxl Image, or None on failure."""
+    try:
+        resp = requests.get(url, timeout=_IMG_DOWNLOAD_TIMEOUT)
+        resp.raise_for_status()
+        img = PILImage.open(BytesIO(resp.content))
+        # Resize to fixed height, keep aspect ratio
+        ratio = _IMG_THUMB_HEIGHT / img.height
+        new_width = int(img.width * ratio)
+        img = img.resize((new_width, _IMG_THUMB_HEIGHT), PILImage.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        xl_img = XlImage(buf)
+        xl_img.width = new_width
+        xl_img.height = _IMG_THUMB_HEIGHT
+        return xl_img
+    except Exception as exc:
+        logger.warning("_download_and_resize: failed for %s — %s", url[:80], exc)
+        return None
+
+
 def generate_excel(
     products: list[dict],
     reviews: list[dict],
@@ -98,6 +132,7 @@ def generate_excel(
 
     Creates ``config.REPORT_DIR/scrape-report-YYYY-MM-DD.xlsx``.
     Empty data still produces a valid file with headers.
+    Review images are downloaded and embedded as thumbnails in cells.
     """
     if report_date is None:
         report_date = config.now_shanghai()
@@ -158,12 +193,80 @@ def generate_excel(
         "产品名称", "评论人", "标题（原文）", "内容（原文）",
         "标题（中文）", "内容（中文）", "打分", "评论时间", "照片",
     ]
-    review_keys = [
-        "product_name", "author", "headline", "body",
-        "headline_cn", "body_cn", "rating", "date_published", "images",
-    ]
-    review_rows = [[r.get(k) for k in review_keys] for r in reviews]
-    _write_sheet(ws_reviews, review_headers, review_rows)
+    # Write header
+    ws_reviews.append(review_headers)
+    for col_idx, _ in enumerate(review_headers, start=1):
+        cell = ws_reviews.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    images_col = len(review_headers)  # "照片" is the last column
+    images_col_letter = get_column_letter(images_col)
+
+    # Write review rows with embedded images
+    for row_idx, r in enumerate(reviews, start=2):
+        ws_reviews.cell(row=row_idx, column=1, value=_cell_value(r.get("product_name")))
+        ws_reviews.cell(row=row_idx, column=2, value=_cell_value(r.get("author")))
+        ws_reviews.cell(row=row_idx, column=3, value=_cell_value(r.get("headline")))
+        ws_reviews.cell(row=row_idx, column=4, value=_cell_value(r.get("body")))
+        ws_reviews.cell(row=row_idx, column=5, value=_cell_value(r.get("headline_cn")))
+        ws_reviews.cell(row=row_idx, column=6, value=_cell_value(r.get("body_cn")))
+        ws_reviews.cell(row=row_idx, column=7, value=_cell_value(r.get("rating")))
+        ws_reviews.cell(row=row_idx, column=8, value=_cell_value(r.get("date_published")))
+
+        # Embed images as thumbnails
+        image_urls = r.get("images") or []
+        if isinstance(image_urls, str):
+            try:
+                image_urls = json.loads(image_urls)
+            except Exception:
+                image_urls = []
+
+        embedded_count = 0
+        for img_idx, url in enumerate(image_urls):
+            xl_img = _download_and_resize(url)
+            if xl_img:
+                y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+                from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+                from openpyxl.drawing.xdr import XDRPositiveSize2D
+                from openpyxl.utils.units import pixels_to_EMU
+                marker = AnchorMarker(
+                    col=images_col - 1,  # 0-indexed
+                    row=row_idx - 1,     # 0-indexed
+                    colOff=0,
+                    rowOff=pixels_to_EMU(y_offset),
+                )
+                size = XDRPositiveSize2D(
+                    pixels_to_EMU(xl_img.width),
+                    pixels_to_EMU(xl_img.height),
+                )
+                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+                ws_reviews.add_image(xl_img)
+                embedded_count += 1
+
+        if embedded_count > 0:
+            # Adjust row height to fit stacked images
+            row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            ws_reviews.row_dimensions[row_idx].height = row_height_px * 0.75  # px to points
+        else:
+            # Fallback: write URLs as text
+            ws_reviews.cell(row=row_idx, column=images_col, value=_cell_value(image_urls))
+
+    # Auto-adjust non-image column widths
+    for col in ws_reviews.columns:
+        col_letter = col[0].column_letter
+        if col_letter == images_col_letter:
+            ws_reviews.column_dimensions[col_letter].width = _IMG_COL_WIDTH
+            continue
+        max_len = 0
+        for cell in col:
+            try:
+                cell_len = len(str(cell.value)) if cell.value is not None else 0
+                max_len = max(max_len, cell_len)
+            except Exception:
+                pass
+        ws_reviews.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 60)
 
     wb.save(filepath)
     logger.info("generate_excel: saved to %s", filepath)

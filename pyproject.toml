@@ -10,6 +10,7 @@ dependencies = [
     "minio",
     "openai>=1.0.0",
     "openpyxl>=3.1.0",
+    "pillow>=12.1.1",
     "python-dotenv",
     "requests",
     "uvicorn[standard]",
