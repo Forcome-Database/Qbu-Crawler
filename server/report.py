@@ -249,8 +249,8 @@ def generate_excel(
             # Adjust row height to fit stacked images
             row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
             ws_reviews.row_dimensions[row_idx].height = row_height_px * 0.75  # px to points
-        else:
-            # Fallback: write URLs as text
+        elif image_urls:
+            # Fallback: write URLs as text (only if non-empty)
             ws_reviews.cell(row=row_idx, column=images_col, value=_cell_value(image_urls))
 
     # Auto-adjust non-image column widths

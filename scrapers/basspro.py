@@ -466,7 +466,11 @@ class BassProScraper(BaseScraper):
                     if (!photoEls.length) photoEls = s.querySelectorAll('img[src*="photos-us.bazaarvoice.com"]');
                     photoEls.forEach(img => {{
                         const src = img.getAttribute('src');
-                        if (src && src.includes('bazaarvoice.com') && !src.includes('apps.bazaarvoice.com')) {{
+                        if (src && src.includes('bazaarvoice.com')
+                            && !src.includes('apps.bazaarvoice.com')
+                            && !src.includes('YXR0cmlidXRpb25sb2dv')) {{
+                            // 排除 apps.bazaarvoice.com（徽章图标）
+                            // 排除 URL 含 base64("attributionlogo") 的归属徽标
                             imgs.push(src);
                         }}
                     }});
