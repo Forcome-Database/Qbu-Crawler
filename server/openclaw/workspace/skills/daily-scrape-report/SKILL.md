@@ -28,15 +28,19 @@ IMPORTANT: 如果文件不存在、为空、内容为 `{}`、或缺少 `submitte
 
 IMPORTANT: 你**必须**使用 `generate_report` 工具（这是 mcp-products 插件提供的 MCP 工具，和 `start_scrape`、`get_task_status` 是同一套工具）。不要说"无法调用"——如果你能调用 `get_task_status`，你就能调用 `generate_report`。
 
+**可选：检查翻译完成度**
+
+调用 `get_translate_status(since=submitted_at)` 查看翻译进度。如果 `pending > 0`，可等待 1-2 分钟后再生成报告。最多等 3 轮（每轮 1 分钟），超时则直接生成报告（邮件中会标注未翻译数量）。
+
 调用方式：
 ```
 工具名：generate_report
 参数：
-  since: "<active-tasks.json 中的 submitted_at 值，UTC 格式>"
+  since: "<active-tasks.json 中的 submitted_at 值，上海时间格式>"
   send_email: "true"
 ```
 
-该工具由服务端程序化执行：查询新增数据 → LLM 翻译评论 → 生成 Excel → SMTP 发送邮件。不需要你本地做任何事。
+该工具由服务端程序化执行：查询新增数据（含已翻译的中文）→ 生成 Excel → SMTP 发送邮件。翻译由后台线程在爬虫采集期间自动完成。不需要你本地做任何事。
 
 从返回结果中提取：
 - 新增产品数、评论数

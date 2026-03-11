@@ -28,6 +28,8 @@
 | `get_stats` | — | — |
 | `execute_sql` | sql | — |
 | `generate_report` | since | send_email（默认 true） |
+| `trigger_translate` | — | reset_skipped（默认 false） |
+| `get_translate_status` | — | since（上海时间戳，可选） |
 
 ### 参数说明
 
@@ -36,7 +38,7 @@
 - `max_pages`：`0` 表示采集全部页
 - `has_images`：字符串 `"true"` 或 `"false"`
 - `execute_sql`：仅 SELECT，500 行上限，5 秒超时
-- `generate_report`：`since` 为 UTC 时间戳（`YYYY-MM-DDTHH:MM:SS`），`send_email` 字符串 `"true"`/`"false"`
+- `generate_report`：`since` 为上海时间戳（`YYYY-MM-DDTHH:MM:SS`），`send_email` 字符串 `"true"`/`"false"`
 
 ## CSV 文件
 
@@ -243,6 +245,7 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 - **完成时间**：YYYY-MM-DD HH:MM
 - **产品抓取**：成功 N，失败 N
 - **新增评论**：N 条
+- **翻译进度**：N/M 已完成
 - **自有产品**：N 个 | **竞品**：N 个
 - **邮件发送**：✅ 已发送至 N 位收件人
 - **报告文件**：scrape-report-YYYY-MM-DD.xlsx
