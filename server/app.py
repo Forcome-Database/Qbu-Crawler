@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 import config
 import models
 from server.task_manager import TaskManager
+from server.translator import TranslationWorker
 from server.api.tasks import router as tasks_router
 from server.api.products import router as products_router
 from server.mcp.tools import register_tools
@@ -21,8 +22,12 @@ logger = logging.getLogger(__name__)
 # causing them to be parsed as requests and fail validation.
 logging.getLogger("mcp.shared.session").setLevel(logging.ERROR)
 
-# ── Shared TaskManager singleton ────────────────────
-task_manager = TaskManager(max_workers=config.MAX_WORKERS)
+# ── Shared singletons ──────────────────────────────
+translator = TranslationWorker(
+    interval=config.TRANSLATE_INTERVAL,
+    batch_size=config.LLM_TRANSLATE_BATCH_SIZE,
+)
+task_manager = TaskManager(max_workers=config.MAX_WORKERS, translator=translator)
 
 # ── MCP Server ──────────────────────────────────────
 mcp = FastMCP(
@@ -62,6 +67,7 @@ async def health():
 def start_server(host: str | None = None, port: int | None = None):
     """Start the ASGI server."""
     models.init_db()
+    translator.start()
     h = host or config.SERVER_HOST
     p = port or config.SERVER_PORT
 
