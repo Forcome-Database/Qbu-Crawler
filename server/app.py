@@ -16,6 +16,11 @@ from server.mcp.resources import register_resources
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy Pydantic validation errors when MCP clients send
+# notifications (e.g. notifications/initialized) with an id field,
+# causing them to be parsed as requests and fail validation.
+logging.getLogger("mcp.shared.session").setLevel(logging.ERROR)
+
 # ── Shared TaskManager singleton ────────────────────
 task_manager = TaskManager(max_workers=config.MAX_WORKERS)
 

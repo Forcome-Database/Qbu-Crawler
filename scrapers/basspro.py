@@ -11,12 +11,52 @@ logger = logging.getLogger(__name__)
 
 class BassProScraper(BaseScraper):
 
+    def _dismiss_age_gate(self, tab):
+        """检测并关闭年龄验证弹窗（部分产品页会触发，如枪械/弹药相关）
+
+        弹窗结构：
+        div.styles_DisclosureContent__*
+          ├── div.restriction_disclosure_container  (标题+描述+问题)
+          └── div.styles_DiscolusreButtonsWrapper__*
+              ├── button (Yes) ← 带 DisclosurePrimaryButton class
+              └── button (No)
+
+        使用多级备用选择器，防止 CSS Module hash 变化导致失效：
+        1. 精确 class（当前有效）
+        2. 按钮包装器内首个 button
+        3. JS 文本匹配兜底
+        """
+        try:
+            # 先快速检测弹窗是否存在（用稳定的非 hash class）
+            gate = tab.ele('css:.restriction_disclosure_container', timeout=2)
+            if not gate:
+                return
+
+            # 选择器优先级：精确 class > 包装器首个按钮 > JS 文本匹配
+            btn = (
+                tab.ele('css:button[class*="DisclosurePrimaryButton"]', timeout=1)
+                or tab.ele('css:div[class*="DiscolusreButtonsWrapper"] button:first-child', timeout=1)
+            )
+            if not btn:
+                # 兜底：通过 JS 找文本为 Yes 的 button
+                btn = tab.ele('tag:button@@text()=Yes', timeout=1)
+
+            if btn:
+                btn.click()
+                logger.info("  [年龄验证] 已自动点击 Yes 关闭弹窗")
+                tab.wait(0.5, 1)
+            else:
+                logger.warning("  [年龄验证] 检测到弹窗但未找到 Yes 按钮")
+        except Exception:
+            pass  # 无弹窗或异常，正常继续
+
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
 
         tab = self.browser.latest_tab
         tab.get(url)
         # eager 模式下 get() 在 DOM 就绪后自动返回
+        self._dismiss_age_gate(tab)
         # 等待页面主要内容加载
         tab.wait.ele_displayed('tag:h1', timeout=15)
         # 等待 BV 组件加载（容器一定会出现，但 JSON-LD 数据只有有评论时才有）
@@ -119,6 +159,7 @@ class BassProScraper(BaseScraper):
         tab = self.browser.latest_tab
         tab.get(category_url)
         tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
+        self._dismiss_age_gate(tab)
         tab.wait.ele_displayed('tag:h1', timeout=15)
 
         all_urls = []

@@ -236,3 +236,25 @@ def register_tools(mcp: FastMCP):
             return _json.dumps({"error": str(e)})
         except Exception as e:
             return _json.dumps({"error": f"Query failed: {e}"})
+
+    # ── Report Generation ─────────────────────────────
+
+    @mcp.tool
+    def generate_report(since: str, send_email: str = "true") -> str:
+        """生成爬虫数据报告：查询新增数据 → 翻译评论为中文 → 生成 Excel → 发送邮件。
+        - since: UTC 时间戳（YYYY-MM-DDTHH:MM:SS），查询该时间之后的新增数据
+        - send_email: 是否发送邮件，"true" 或 "false"
+        返回报告摘要：新增产品数、评论数、翻译数、Excel 路径、邮件发送结果。"""
+        from datetime import datetime
+        from server.report import generate_report as _generate_report
+        try:
+            since_dt = datetime.fromisoformat(since)
+            result = _generate_report(
+                since=since_dt,
+                send_email=(send_email.lower() == "true"),
+            )
+            return _json.dumps(result, default=str, ensure_ascii=False)
+        except ValueError as e:
+            return _json.dumps({"error": f"Invalid 'since' format: {e}. Use YYYY-MM-DDTHH:MM:SS"})
+        except Exception as e:
+            return _json.dumps({"error": f"Report generation failed: {e}"})

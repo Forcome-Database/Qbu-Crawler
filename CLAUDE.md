@@ -17,6 +17,8 @@
 - **python-dotenv** — 环境变量管理（`.env`）
 - **FastAPI + Uvicorn** — HTTP API 服务
 - **FastMCP** — MCP 协议服务（Streamable HTTP 传输）
+- **openpyxl** — Excel 报告生成
+- **openai SDK** — LLM 翻译（OpenAI 兼容 API）
 
 ## 项目结构
 
@@ -32,6 +34,7 @@ Qbu-Crawler/
 ├── server/
 │   ├── __init__.py
 │   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
+│   ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
 │   ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
 │   ├── api/
 │   │   ├── __init__.py
@@ -40,15 +43,18 @@ Qbu-Crawler/
 │   │   └── products.py     # 数据查询 endpoints
 │   ├── mcp/
 │   │   ├── __init__.py
-│   │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL）
+│   │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL + 报告生成）
 │   │   └── resources.py    # MCP Resources（数据库元数据）
 │   └── openclaw/
 │       ├── README.md
 │       ├── plugin/                 # MCP 插件
 │       └── workspace/
-│           ├── SOUL.md
-│           ├── TOOLS.md
+│           ├── AGENTS.md           # 操作规范（URL路由、ownership、安全边界）
+│           ├── SOUL.md             # 身份定义（豆沙）
+│           ├── TOOLS.md            # 工具参数参考 + 输出格式模板
 │           ├── HEARTBEAT.md        # 心跳检查清单
+│           ├── USER.md             # 用户信息
+│           ├── IDENTITY.md         # Agent 身份
 │           ├── state/              # 运行时状态
 │           ├── config/             # 邮件收件人等配置
 │           ├── reports/            # Excel 报告输出
@@ -136,6 +142,32 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `SQL_QUERY_TIMEOUT` | `5` | execute_sql 超时（秒） |
 | `SQL_QUERY_MAX_ROWS` | `500` | execute_sql 最大返回行数 |
 
+### LLM 翻译配置（.env）
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `LLM_API_BASE` | （必填） | OpenAI 兼容 API 地址 |
+| `LLM_API_KEY` | （必填） | API 密钥 |
+| `LLM_MODEL` | `gpt-4o-mini` | 翻译模型 |
+| `LLM_TRANSLATE_BATCH_SIZE` | `20` | 每批翻译评论数 |
+
+### 邮件 SMTP 配置（.env）
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `SMTP_HOST` | （必填） | SMTP 服务器地址 |
+| `SMTP_PORT` | `587` | SMTP 端口 |
+| `SMTP_USER` | — | SMTP 登录用户 |
+| `SMTP_PASSWORD` | — | SMTP 登录密码 |
+| `SMTP_FROM` | — | 发件人地址 |
+| `SMTP_USE_SSL` | `false` | 使用 SMTP_SSL（true）还是 STARTTLS（false） |
+
+### 报告配置（.env）
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `REPORT_DIR` | `data/reports` | Excel 报告输出目录 |
+
 ### MinIO 配置（.env）
 
 | 配置 | 说明 |
@@ -165,7 +197,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **FastMCP** 挂载到 `/mcp`（Streamable HTTP 传输）
 - **TaskManager** 单例，HTTP 和 MCP 共享，管理爬虫任务生命周期
 - 爬虫在 `ThreadPoolExecutor` 中同步执行，支持 URL 粒度取消
-- MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL
+- MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL + 报告生成（generate_report）
+- `generate_report` Tool：查询新增数据 → LLM 翻译评论 → openpyxl 生成 Excel → smtplib 发送邮件，全部服务端程序化执行
 - MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
 
 ### OpenClaw 定时工作流
@@ -173,7 +206,14 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 三阶段架构：
 1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect → 存 task_id 到 state/active-tasks.json → DingTalk 通知
 2. **Heartbeat（每 5 分钟，main session，lightContext）**：检查 active-tasks.json → 轮询 get_task_status → 全部完成则触发阶段 3
-3. **Cron Job（一次性，isolated）**：查新增数据 → 翻译评论 → xlsx 生成 Excel → himalaya 发邮件 → DingTalk 汇报 → 清除状态
+3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
+
+Workspace 文件体系（按 OpenClaw 最佳实践重构）：
+- `AGENTS.md` — 操作规范 SOP（URL 路由规则、ownership 规则、安全边界），每次 session 启动加载
+- `SOUL.md` — 纯身份定义（豆沙），不含操作规则
+- `TOOLS.md` — 工具参数参考 + 输出格式模板（钉钉 Markdown 规范）
+- `HEARTBEAT.md` — 极简心跳检查清单，用 IMPORTANT 标记关键步骤
+- `USER.md` / `IDENTITY.md` — 用户和 agent 身份信息
 
 CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。
 

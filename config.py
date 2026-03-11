@@ -49,6 +49,24 @@ API_KEY = os.getenv("API_KEY", "")
 # ── Task Manager ────────────────────────────────────
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3"))
 
+# ── LLM Translation (OpenAI-compatible) ───────────
+LLM_API_BASE = os.getenv("LLM_API_BASE", "")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_TRANSLATE_BATCH_SIZE = int(os.getenv("LLM_TRANSLATE_BATCH_SIZE", "20"))
+
+# ── Email SMTP ────────────────────────────────────
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "")
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
+
+# ── Report ────────────────────────────────────────
+REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(BASE_DIR, "data", "reports")
+os.makedirs(REPORT_DIR, exist_ok=True)
+
 # ── SQL Query Limits ────────────────────────────────
 SQL_QUERY_TIMEOUT = 5
 SQL_QUERY_MAX_ROWS = 500

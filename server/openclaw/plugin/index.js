@@ -206,25 +206,27 @@ function createMcpClient(options) {
 var TOOLS = [
   {
     name: "start_scrape",
-    description: "Submit product URLs for scraping. Params: urls (array of URL strings).",
+    description: "Submit product URLs for scraping. Params: urls (array of URL strings), ownership (required: 'own' or 'competitor').",
     parameters: {
       type: "object",
       properties: {
-        urls: { type: "array", items: { type: "string" }, description: "Product page URLs to scrape" }
+        urls: { type: "array", items: { type: "string" }, description: "Product page URLs to scrape" },
+        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor' (required)" }
       },
-      required: ["urls"]
+      required: ["urls", "ownership"]
     }
   },
   {
     name: "start_collect",
-    description: "Collect products from a category page then scrape each. Params: category_url (string), max_pages (int, 0=all).",
+    description: "Collect products from a category page then scrape each. Params: category_url (string), ownership (required: 'own' or 'competitor'), max_pages (int, 0=all).",
     parameters: {
       type: "object",
       properties: {
         category_url: { type: "string", description: "Category page URL" },
+        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor' (required)" },
         max_pages: { type: "integer", description: "Max pages to collect, 0 for all" }
       },
-      required: ["category_url"]
+      required: ["category_url", "ownership"]
     }
   },
   {
@@ -271,6 +273,7 @@ var TOOLS = [
         min_price: { type: "number", description: "Min price filter (USD), -1 to skip" },
         max_price: { type: "number", description: "Max price filter (USD), -1 to skip" },
         stock_status: { type: "string", description: "Stock status: in_stock, out_of_stock, unknown" },
+        ownership: { type: "string", description: "Ownership filter: own or competitor" },
         sort_by: { type: "string", description: "Sort field: price, rating, review_count, scraped_at, name" },
         order: { type: "string", description: "Sort direction: asc or desc" },
         limit: { type: "integer", description: "Page size, default 20" },
@@ -297,7 +300,9 @@ var TOOLS = [
       type: "object",
       properties: {
         product_id: { type: "integer", description: "Filter by product ID, -1 to skip" },
+        sku: { type: "string", description: "Filter by product SKU" },
         site: { type: "string", description: "Site filter: basspro or meatyourmaker" },
+        ownership: { type: "string", description: "Ownership filter: own or competitor" },
         min_rating: { type: "number", description: "Min rating (0-5), -1 to skip" },
         max_rating: { type: "number", description: "Max rating (0-5), -1 to skip" },
         author: { type: "string", description: "Author name search" },
@@ -339,6 +344,18 @@ var TOOLS = [
         sql: { type: "string", description: "SELECT SQL query" }
       },
       required: ["sql"]
+    }
+  },
+  {
+    name: "generate_report",
+    description: "Generate scrape report: query new data since timestamp, translate reviews to Chinese, generate Excel, send email. Returns summary with counts and email status.",
+    parameters: {
+      type: "object",
+      properties: {
+        since: { type: "string", description: "UTC timestamp (YYYY-MM-DDTHH:MM:SS), query data after this time" },
+        send_email: { type: "string", description: "Send email with report: 'true' or 'false', default 'true'" }
+      },
+      required: ["since"]
     }
   }
 ];

@@ -1,93 +1,60 @@
+---
+name: daily-scrape-report
+description: 爬虫任务完成后的汇报技能。由 Heartbeat 检测到所有任务终态后触发。汇总任务结果、调用 generate_report 生成报告和发送邮件、在钉钉输出完成通知。
+---
+
 # 每日爬虫任务汇报
 
-由 Heartbeat 检测到任务完成后触发，生成报告、发送邮件并汇报结果。
+由 Heartbeat 检测到任务完成后触发。
 
-## 执行步骤
+IMPORTANT: 严格按以下步骤执行，不可跳过。
 
-### 1. 汇总任务结果
+## 步骤 0：前置校验（防重复执行）
 
-读取 `~/.openclaw/workspace/state/active-tasks.json`，获取 task_id 列表和 submitted_at。
+读取 `~/.openclaw/workspace/state/active-tasks.json`。
 
-对每个 task_id 调用 `get_task_status`，记录：
-- 成功的产品数（result.products_saved）
-- 成功的评论数（result.reviews_saved）
-- 失败数（progress.failed）
+IMPORTANT: 如果文件不存在、为空、内容为 `{}`、或缺少 `submitted_at` 字段、或 `tasks` 数组为空 → **静默退出，不输出任何内容，不发送钉钉消息**。这说明状态已被另一次汇报清空，当前是重复触发。
 
-### 2. 查询新增数据
+## 步骤 1：汇总任务结果
 
-使用 `execute_sql` 查询本次新增的产品和评论：
+从 `active-tasks.json` 获取 `submitted_at` 和 `tasks` 列表。
 
-产品查询：
-```sql
-SELECT url, name, sku, price, stock_status, rating, review_count, scraped_at, site, ownership FROM products WHERE scraped_at >= datetime('{submitted_at}') ORDER BY site, ownership
+对每个 task_id 调用 `get_task_status`，统计：
+- 成功数（status = completed）
+- 失败数（status = failed / cancelled / not found）
+- 产品数和评论数（从 result 中提取）
+
+## 步骤 2：生成报告并发送邮件
+
+IMPORTANT: 你**必须**使用 `generate_report` 工具（这是 mcp-products 插件提供的 MCP 工具，和 `start_scrape`、`get_task_status` 是同一套工具）。不要说"无法调用"——如果你能调用 `get_task_status`，你就能调用 `generate_report`。
+
+调用方式：
+```
+工具名：generate_report
+参数：
+  since: "<active-tasks.json 中的 submitted_at 值，UTC 格式>"
+  send_email: "true"
 ```
 
-评论查询：
-```sql
-SELECT p.name, r.author, r.headline, r.body, r.rating, r.date_published, r.images, p.ownership FROM reviews r JOIN products p ON r.product_id = p.id WHERE r.scraped_at >= datetime('{submitted_at}') ORDER BY p.name
-```
+该工具由服务端程序化执行：查询新增数据 → LLM 翻译评论 → 生成 Excel → SMTP 发送邮件。不需要你本地做任何事。
 
-将 `{submitted_at}` 替换为 active-tasks.json 中的值（UTC 格式）。
+从返回结果中提取：
+- 新增产品数、评论数
+- 翻译成功数
+- Excel 文件路径
+- 邮件发送状态（成功/失败及原因）
 
-### 3. 翻译评论
+## 步骤 3：钉钉汇报 + 清理状态
 
-将评论的 headline 和 body 翻译为中文。
+输出任务完成通知（参考 TOOLS.md 中的"定时任务完成通知"格式），包含：
+- 任务执行结果（成功/失败数）
+- 新增数据量
+- 邮件发送状态
+- 报告文件名
 
-翻译规则：
-- 每批 30-50 条，使用低端模型
-- 指令："将以下英文评论标题和内容翻译为中文，保持原意，简洁自然"
-- 翻译结果暂存，不回写数据库
-- 翻译失败的条目中文列留空
+IMPORTANT: 最后将 `~/.openclaw/workspace/state/active-tasks.json` 清空为 `{}`。
 
-### 4. 生成 Excel
+## 异常处理
 
-使用 xlsx 技能创建 `~/.openclaw/workspace/reports/scrape-report-YYYY-MM-DD.xlsx`。
-
-Sheet1 — 产品：
-- 产品地址（url）
-- 产品名称（name）
-- SKU（sku）
-- 售价$（price）
-- 库存状态（stock_status）
-- 综合评分（rating）
-- 评分数量（review_count）
-- 抓取时间（scraped_at）
-- 站点（site）
-- 归属（ownership）
-
-Sheet2 — 评论：
-- 产品名称（p.name）
-- 评论人（author）
-- 标题（原文）（headline）
-- 内容（原文）（body）
-- 标题（中文）（翻译结果）
-- 内容（中文）（翻译结果）
-- 打分（rating）
-- 评论时间（date_published）
-- 照片（images URL）
-
-### 5. 发送邮件
-
-从 `~/.openclaw/workspace/config/email-recipients.txt` 读取收件人列表（一行一个邮箱，# 开头为注释）。
-
-使用 himalaya 技能发送邮件：
-- 主题：`[Qbu-Crawler] 每日爬虫报告 YYYY-MM-DD`
-- 正文：简要统计（新增 N 个产品，N 条评论，自有 N 个，竞品 N 个）
-- 附件：Excel 文件（使用绝对路径 `~/.openclaw/workspace/reports/scrape-report-YYYY-MM-DD.xlsx`）
-
-记录邮件发送结果（成功/失败+原因）。
-
-### 6. DingTalk 汇报
-
-输出任务完成通知（参考 TOOLS.md 中的"任务完成通知"格式），包含邮件发送状态。
-
-### 7. 清理状态
-
-将 `~/.openclaw/workspace/state/active-tasks.json` 内容清空为 `{}`。
-
-### 异常处理
-
-- 无新增数据 → Excel 保留表头但数据行为空，仍发送邮件
-- 邮件发送失败 → DingTalk 汇报中标注 "❌ 邮件发送失败：{原因}"
-- 翻译部分失败 → Excel 中对应中文列留空，不阻断流程
-- 所有任务都失败 → 仍执行汇报流程，Excel 为空，DingTalk 列出失败详情
+- `generate_report` 返回错误 → 在钉钉通知中标注失败原因，仍然清理状态
+- 部分任务失败 → 仍然执行报告生成（只汇报成功任务的数据）

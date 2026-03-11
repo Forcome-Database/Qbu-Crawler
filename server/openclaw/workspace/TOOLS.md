@@ -1,113 +1,98 @@
-# 产品数据工具
+# 工具参考
 
-你可以通过 MCP 工具管理多站点产品爬虫、查询数据和分析趋势。
+## 支持站点
 
-## 支持的站点
+- 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com` — 户外运动装备
+- 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com` — 肉类加工设备
 
-- 🏪 **Bass Pro Shops**（basspro）— 户外运动装备
-- 🥩 **Meat Your Maker**（meatyourmaker）— 肉类加工设备
-
-## 可用工具
+## 工具参数速查
 
 ### 任务管理
 
-- `start_scrape` — 抓取产品页，参数：`urls`（URL列表）、`ownership`（必填，own 或 competitor）
-- `start_collect` — 从分类页采集，参数：`category_url`、`max_pages`（0=全部）、`ownership`（必填，own 或 competitor）
-- `get_task_status` — 查询任务进度，参数：`task_id`
-- `list_tasks` — 列出任务记录，参数：`status`（可选）、`limit`
-- `cancel_task` — 取消任务，参数：`task_id`
+| 工具 | 必填参数 | 可选参数 |
+|------|---------|---------|
+| `start_scrape` | urls, ownership | — |
+| `start_collect` | category_url, ownership | max_pages（0=全部） |
+| `get_task_status` | task_id | — |
+| `list_tasks` | — | status, limit |
+| `cancel_task` | task_id | — |
 
 ### 数据查询
 
-- `list_products` — 搜索/筛选产品，参数：`site`、`search`、`min_price`、`max_price`、`sort_by`、`ownership`（可选）
-- `get_product_detail` — 产品详情+评论+快照，参数：`product_id` 或 `url` 或 `sku`
-- `query_reviews` — 查询评论，参数：`product_id`、`min_rating`、`keyword`、`has_images`、`ownership`（可选）
-- `get_price_history` — 价格趋势，参数：`product_id`、`days`（默认30）
-- `get_stats` — 数据统计总览，无参数，返回结果包含 by_ownership 分组
-- `execute_sql` — 只读SQL（仅SELECT），参数：`sql`，最多500行，5秒超时
+| 工具 | 必填参数 | 可选参数 |
+|------|---------|---------|
+| `list_products` | — | site, search, min_price, max_price, stock_status, ownership, sort_by, order, limit, offset |
+| `get_product_detail` | product_id 或 url 或 sku | — |
+| `query_reviews` | — | product_id, sku, site, ownership, min_rating, max_rating, author, keyword, has_images, sort_by, order, limit, offset |
+| `get_price_history` | product_id | days（默认30） |
+| `get_stats` | — | — |
+| `execute_sql` | sql | — |
+| `generate_report` | since | send_email（默认 true） |
 
-## 工具选择规则
+### 参数说明
 
-### URL 处理（重要：默认走 CSV 管理流程）
+- `ownership`：`own`（自有）或 `competitor`（竞品），start_scrape/start_collect 中**必填**
+- `min_price`/`max_price`/`min_rating`/`max_rating`：`-1` 表示不限制
+- `max_pages`：`0` 表示采集全部页
+- `has_images`：字符串 `"true"` 或 `"false"`
+- `execute_sql`：仅 SELECT，500 行上限，5 秒超时
+- `generate_report`：`since` 为 UTC 时间戳（`YYYY-MM-DDTHH:MM:SS`），`send_email` 字符串 `"true"`/`"false"`
 
-当用户发来 URL 或 SKU 时，**默认行为是加入定时任务**，而非立即执行：
+## CSV 文件
 
-- 用户发来产品页/分类页 URL 或 SKU → 读取 `skills/csv-management` 技能，走验证 → ownership 确认 → 写入 CSV 流程
-- 用户明确说"立即抓取" / "现在采集" / "马上执行" → 确认 ownership 后直接调用 `start_scrape` 或 `start_collect`
-- 用户说"加入定时任务" / "加到列表" / "添加监控" → 走 CSV 管理流程
+- 分类页：`~/.openclaw/workspace/data/sku-list-source.csv`
+- 产品页：`~/.openclaw/workspace/data/sku-product-details.csv`
+- 格式：`url,ownership`（有表头），一行一条
 
-判断依据：
-1. 如果用户只给了 URL 没有明确指令 → **追问**："需要加入定时任务还是立即抓取？"
-2. 如果用户说"抓取"但没说"立即" → 优先理解为加入定时任务
-3. 只有明确表达"立即/马上/现在"才直接执行
+## 邮件收件人
 
-### 数据查询和分析
+`~/.openclaw/workspace/config/email-recipients.txt`（一行一个邮箱，`#` 为注释）
 
-- "搜索XX" / "找XX产品" → `list_products(search=关键词)`
-- "这个产品怎么样" → `get_product_detail`
-- "评论" / "差评" / "好评" → `query_reviews`
-- "价格变化" / "趋势" → `get_price_history`
-- "数据概览" / "统计" → `get_stats`
-- 需要聚合、排名、对比分析 → `execute_sql`
-- 复杂分析需求 → 读取 `skills/qbu-product-data` 技能获取分析模板
+## 任务状态文件
 
-## 输出规范
+`~/.openclaw/workspace/state/active-tasks.json`
+
+---
+
+## 输出格式规范
+
+IMPORTANT: 以下格式规范必须严格遵守，特别是钉钉渠道的限制。
 
 ### 基本原则
 
-- **绝不向用户展示 JSON、SQL、代码或工具名称**
-- 价格格式：**$XX.XX**，评分：**X.X/5** ⭐
-- 库存状态：✅ 有货 / ❌ 缺货
+- **绝不**向用户展示 JSON、SQL、代码或工具名称
+- 价格：**$XX.XX** | 评分：**X.X/5** ⭐ | 库存：✅ 有货 / ❌ 缺货
 - 任务状态：⏳ 进行中 / ✔️ 完成 / ❌ 失败 / 🚫 已取消
 - 给完结果后**主动建议下一步**
+- **标题、加粗、列表**用得恰到好处，格式工整
 
-### 钉钉渠道排版规则（必须严格遵守）
+### 钉钉渠道排版（必须遵守）
 
-钉钉 Markdown 支持有限，**不支持表格**。所有输出必须用标题、列表、加粗来组织。
+IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 
-**钉钉支持的格式**：
-- 标题：# ## ### ####
-- 加粗：**粗体**
-- 无序列表：- 项目
-- 有序列表：1. 项目
-- 嵌套列表（缩进）
-- 任务列表：- [x] 已完成 / - [ ] 未完成
-- 引用：> 内容
-- 链接：[文字](URL)
-- 分隔线：---
-- 行内代码和代码块
+**钉钉支持**：标题（# ## ###）、加粗（**粗体**）、列表（- 和 1.）、嵌套列表、引用（>）、链接、分隔线（---）、代码块
 
-**钉钉不支持**：
-- ❌ 表格（绝对不要用）
-- ❌ 删除线
+**钉钉不支持**：❌ 表格 | ❌ 删除线
 
 **排版规则**：
+1. **禁止表格** — 用列表代替
+2. **标题分隔板块** — 每个维度用 ### + emoji
+3. **加粗关键数据** — 每个要点一行
+4. **一段文字不超过 3 行** — 超过就拆成列表
 
-1. **禁止使用 Markdown 表格** — 钉钉无法渲染，会显示为乱码
-2. **用列表代替表格** — 每个产品/评论/数据项用列表呈现
-3. **用标题分隔板块** — 每个维度用 ### + emoji 隔开
-4. **短句加粗关键词** — 每个要点一行，关键数据加粗
-5. **一段文字不超过3行** — 超过就拆成列表
-
-**产品列表格式**（替代表格）：
+### 产品列表
 
 ```
 ## 🔍 搜索结果：共 **15** 个产品
 
 ### 1. Product Name A
 - **价格**：$129.99
-- **评分**：4.5/5 ⭐（128条评论）
+- **评分**：4.5/5 ⭐（128 条评论）
 - **库存**：✅ 有货
 - **站点**：Bass Pro Shops
-
-### 2. Product Name B
-- **价格**：$89.99
-- **评分**：4.2/5 ⭐（56条评论）
-- **库存**：❌ 缺货
-- **站点**：Meat Your Maker
 ```
 
-**评分分布格式**（替代表格）：
+### 评分分布
 
 ```
 ## 📊 评分分布（共 573 条）
@@ -119,7 +104,7 @@
 - ⭐ **1星**：79 条（13.8%）████
 ```
 
-**任务状态格式**：
+### 任务状态
 
 ```
 ## 🚀 任务已启动
@@ -131,6 +116,8 @@
 稍后可以问我"任务进度"查看采集状态。
 ```
 
+### 任务进度
+
 ```
 ## 📊 任务进度
 
@@ -141,7 +128,7 @@
 - **进度**：▓▓▓▓▓▓░░░░ 40%
 ```
 
-**产品详情格式**：
+### 产品详情
 
 ```
 ## 📦 Product Full Name
@@ -171,7 +158,7 @@
 > 30天价格波动：$129.99 ~ $139.99
 ```
 
-**数据总览格式**：
+### 数据总览
 
 ```
 ## 📊 数据总览
@@ -195,41 +182,25 @@
 - 🎯 **竞品**：N 个
 ```
 
-**差评分析格式**：
+### 差评分析
 
 ```
 ## 🔍 差评分析
 
-### 1. 🐟 Product Name（42条差评）
+### 1. Product Name（42 条差评）
 
 **核心问题：**
 
 - **精度不足**：多条差评反映读数偏差大
 - **电源故障**：按钮无法开机，需反复拔插电池
-- **电池续航差**：新电池数小时内耗尽
 
 **改良建议：**
 
 - [x] 提升传感器精度并增加校准功能
 - [x] 改用弹簧扣式电池盖
-- [ ] 使用防水防锈材料
-
----
-
-### 2. 🎣 Another Product（17条差评）
-
-**核心问题：**
-
-- **充气泵不耐用**：大量用户反映使用1-2次后即失效
-- **防水性能差**：雨水或水溅入后泵立即损坏
-
-**改良建议：**
-
-- [x] 对充气泵进行防水密封处理
-- [x] 提供单独销售的替换泵
 ```
 
-**竞品对比格式**：
+### 竞品对比
 
 ```
 ## 🏪 Bass Pro Shops vs 🥩 Meat Your Maker
@@ -239,50 +210,19 @@
 - **平均价格**：$67.50
 - **平均评分**：4.3/5 ⭐
 - **评论总数**：2,841
-- **有货率**：92.3%
 
 ### Meat Your Maker
 - **产品数**：65
 - **平均价格**：$142.80
 - **平均评分**：3.8/5 ⭐
 - **评论总数**：1,001
-- **有货率**：87.7%
 
 ---
 
 **结论**：Bass Pro 产品更多、均价更低、评分更高。Meat Your Maker 定位高端但评分偏低，建议关注差评原因。
 ```
 
-## URL 验证规则
-
-支持站点域名：
-- `www.basspro.com` → basspro（Bass Pro Shops）
-- `www.meatyourmaker.com` → meatyourmaker（Meat Your Maker）
-
-验证流程：
-1. 提取 URL 域名部分
-2. 匹配上述列表 → 通过，可写入 CSV 或提交任务
-3. 不匹配 → 告知用户"该站点不在支持范围内，无法加入定时任务"
-4. 非支持站点可用浏览器/搜索技能临时获取内容，但不走 MCP 任务流
-
-## CSV 管理规范
-
-两个 CSV 文件位于 `~/.openclaw/workspace/data/`：
-
-- `sku-list-source.csv` — 分类页 URL（用于 `start_collect`）
-- `sku-product-details.csv` — 产品详情页 URL（用于 `start_scrape`）
-
-格式：两列 `url,ownership`，一行一条，有表头，ownership 值为 `own` 或 `competitor`。
-
-写入规则：
-1. URL 必须通过域名验证
-2. ownership 必须明确指定，未指定时向用户追问
-3. 用户无法回答 ownership 时，不写入 CSV
-4. 累积式管理，无需清理（服务端 UPSERT 去重）
-
-## 定时任务汇报格式
-
-### 任务启动通知
+### 定时任务启动通知
 
 ```
 🚀 每日爬虫任务已启动
@@ -295,7 +235,7 @@
 将自动监控任务进度，完成后汇报。
 ```
 
-### 任务完成通知
+### 定时任务完成通知
 
 ```
 ✅ 每日爬虫任务已完成
@@ -307,10 +247,3 @@
 - **邮件发送**：✅ 已发送至 N 位收件人
 - **报告文件**：scrape-report-YYYY-MM-DD.xlsx
 ```
-
-## 参数说明
-
-- `list_products` / `query_reviews` 中 `-1` 表示不限制
-- `start_collect` 的 `max_pages=0` 表示采集全部页
-- `has_images` 参数传 `"true"` 或 `"false"`（字符串）
-- 任务取消后当前 URL 会完成，不是立即停止
