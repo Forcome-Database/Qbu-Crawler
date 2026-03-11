@@ -394,17 +394,51 @@ def generate_report(
     if send_email:
         recipients = config.EMAIL_RECIPIENTS
         since_str = since.strftime("%Y-%m-%d")
-        subject = f"Qbu 每日抓取报告 {since_str}"
+
+        # ── 统计维度 ──
+        site_names = {"basspro": "Bass Pro Shops", "meatyourmaker": "Meat Your Maker"}
+        sites_in_report = set()
+        own_count = 0
+        competitor_count = 0
+        for p in products:
+            sites_in_report.add(p.get("site", ""))
+            if p.get("ownership") == "own":
+                own_count += 1
+            else:
+                competitor_count += 1
+
+        negative_reviews = [r for r in reviews if (r.get("rating") or 5) <= 2]
+        site_display = "、".join(
+            site_names.get(s, s) for s in sorted(sites_in_report) if s
+        ) or "多站点"
+
+        subject = f"【网评监控】{site_display} 产品评论报告 {since_str}"
         body = (
-            f"您好，\n\n"
-            f"以下是 {since_str} 的 Qbu 产品抓取报告汇总：\n"
-            f"  - 产品数：{len(products)}\n"
-            f"  - 评论数：{len(reviews)}\n"
-            f"  - 已翻译评论：{translated_count}\n"
+            f"各位好，\n\n"
+            f"附件是 {since_str} 从 {site_display} 抓取的最新产品网评报告，请查阅。\n\n"
+            f"【数据概览】\n"
+            f"  - 涉及产品：{len(products)} 个"
+        )
+        if own_count or competitor_count:
+            body += f"（自有 {own_count}，竞品 {competitor_count}）"
+        body += (
+            f"\n"
+            f"  - 新增评论：{len(reviews)} 条（已翻译 {translated_count} 条）\n"
         )
         if untranslated_count > 0:
             body += f"  - 注：{untranslated_count} 条评论翻译进行中，中文列暂时为空\n"
-        body += f"\n详细数据请查阅附件 Excel 文件。\n"
+
+        if negative_reviews:
+            body += (
+                f"\n"
+                f"【差评预警】共 {len(negative_reviews)} 条差评（≤2星），请重点关注并更新改进措施。\n"
+            )
+
+        body += (
+            f"\n"
+            f"详细数据见附件 Excel（产品 + 评论两个 Sheet）。\n"
+            f"如有疑问请随时沟通，谢谢！\n"
+        )
         email_result = _send_email_impl(
             recipients=recipients,
             subject=subject,
