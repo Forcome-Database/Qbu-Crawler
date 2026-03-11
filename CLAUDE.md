@@ -36,6 +36,7 @@ Qbu-Crawler/
 │   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
 │   ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
 │   ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
+│   ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── auth.py         # API Key 认证中间件
@@ -151,6 +152,13 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `LLM_MODEL` | `gpt-4o-mini` | 翻译模型 |
 | `LLM_TRANSLATE_BATCH_SIZE` | `20` | 每批翻译评论数 |
 
+### 翻译 Worker 配置（.env）
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `TRANSLATE_INTERVAL` | `60` | 翻译轮询间隔（秒） |
+| `TRANSLATE_MAX_RETRIES` | `3` | 单条评论最大重试次数，超过标记 skipped |
+
 ### 邮件 SMTP 配置（.env）
 
 | 配置 | 默认值 | 说明 |
@@ -198,7 +206,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **TaskManager** 单例，HTTP 和 MCP 共享，管理爬虫任务生命周期
 - 爬虫在 `ThreadPoolExecutor` 中同步执行，支持 URL 粒度取消
 - MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL + 报告生成（generate_report）
-- `generate_report` Tool：查询新增数据 → LLM 翻译评论 → openpyxl 生成 Excel → smtplib 发送邮件，全部服务端程序化执行
+- `generate_report` Tool：查询新增数据（含已翻译的中文）→ openpyxl 生成 Excel → smtplib 发送邮件，翻译由后台线程自动完成
+- `TranslationWorker` 守护线程：DB-as-Queue 模式，轮询未翻译评论 → LLM 批量翻译 → 持久化到 reviews 表，与爬虫并行执行
 - MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
 
 ### OpenClaw 定时工作流
