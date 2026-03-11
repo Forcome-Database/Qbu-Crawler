@@ -293,3 +293,169 @@ class TestTranslationDB:
         assert stats["total"] == 1
         assert stats["pending"] == 1
         assert stats["done"] == 0
+
+
+from server.translator import TranslationWorker
+
+
+# ---------------------------------------------------------------------------
+# TranslationWorker tests
+# ---------------------------------------------------------------------------
+
+class TestTranslationWorker:
+    def test_skip_empty_content(self, test_db, monkeypatch):
+        """Reviews with empty headline+body should be marked done without LLM call."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+        monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
+        monkeypatch.setattr(config, "TRANSLATE_INTERVAL", 1)
+        monkeypatch.setattr(config, "TRANSLATE_MAX_RETRIES", 3)
+
+        pid = _insert_product(test_db)
+        conn = test_db()
+        conn.execute(
+            "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, translate_status) VALUES (?, 'A', '', '', 'hempty', 5, NULL)",
+            (pid,),
+        )
+        conn.commit()
+        conn.close()
+
+        worker = TranslationWorker(interval=1, batch_size=20)
+        worker._process_batch()
+
+        conn = test_db()
+        row = conn.execute("SELECT translate_status, headline_cn, body_cn FROM reviews WHERE body_hash = 'hempty'").fetchone()
+        conn.close()
+        assert row["translate_status"] == "done"
+        assert row["headline_cn"] == ""
+        assert row["body_cn"] == ""
+
+    def test_successful_translation(self, test_db, monkeypatch):
+        """Successful LLM response should update headline_cn/body_cn and mark done."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+        monkeypatch.setattr(config, "LLM_API_BASE", "")
+        monkeypatch.setattr(config, "LLM_MODEL", "test")
+        monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
+        monkeypatch.setattr(config, "TRANSLATE_INTERVAL", 1)
+        monkeypatch.setattr(config, "TRANSLATE_MAX_RETRIES", 3)
+
+        pid = _insert_product(test_db)
+        rid = _insert_review(test_db, pid, headline="Great", body="Loved it", translate_status=None)
+
+        def mock_call_llm(client, messages):
+            return json.dumps([{"index": 0, "headline_cn": "很棒", "body_cn": "喜欢"}])
+
+        worker = TranslationWorker(interval=1, batch_size=20)
+        monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
+        worker._process_batch()
+
+        conn = test_db()
+        row = conn.execute("SELECT headline_cn, body_cn, translate_status FROM reviews WHERE id = ?", (rid,)).fetchone()
+        conn.close()
+        assert row["headline_cn"] == "很棒"
+        assert row["body_cn"] == "喜欢"
+        assert row["translate_status"] == "done"
+
+    def test_partial_batch_success(self, test_db, monkeypatch):
+        """LLM returns only 1 of 2 — translated one is done, other stays NULL."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+        monkeypatch.setattr(config, "LLM_API_BASE", "")
+        monkeypatch.setattr(config, "LLM_MODEL", "test")
+        monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
+        monkeypatch.setattr(config, "TRANSLATE_INTERVAL", 1)
+        monkeypatch.setattr(config, "TRANSLATE_MAX_RETRIES", 3)
+
+        pid = _insert_product(test_db)
+        rid1 = _insert_review(test_db, pid, headline="Good", body="Nice", translate_status=None)
+        conn = test_db()
+        conn.execute(
+            "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, translate_status) VALUES (?, 'B', 'Bad', 'Hate it', 'hpartial', 1, NULL)",
+            (pid,),
+        )
+        conn.commit()
+        rid2 = conn.execute("SELECT id FROM reviews WHERE body_hash = 'hpartial'").fetchone()["id"]
+        conn.close()
+
+        def mock_call_llm(client, messages):
+            return json.dumps([{"index": 0, "headline_cn": "好", "body_cn": "不错"}])
+
+        worker = TranslationWorker(interval=1, batch_size=20)
+        monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
+        worker._process_batch()
+
+        conn = test_db()
+        r1 = conn.execute("SELECT translate_status FROM reviews WHERE id = ?", (rid1,)).fetchone()
+        r2 = conn.execute("SELECT translate_status FROM reviews WHERE id = ?", (rid2,)).fetchone()
+        conn.close()
+        assert r1["translate_status"] == "done"
+        assert r2["translate_status"] is None
+
+    def test_batch_failure_increments_retries(self, test_db, monkeypatch):
+        """Full batch LLM error should increment retries for all reviews."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+        monkeypatch.setattr(config, "LLM_API_BASE", "")
+        monkeypatch.setattr(config, "LLM_MODEL", "test")
+        monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
+        monkeypatch.setattr(config, "TRANSLATE_INTERVAL", 1)
+        monkeypatch.setattr(config, "TRANSLATE_MAX_RETRIES", 3)
+
+        pid = _insert_product(test_db)
+        rid = _insert_review(test_db, pid, headline="Good", body="Nice", translate_status=None, retries=0)
+
+        def mock_call_llm(client, messages):
+            raise RuntimeError("API down")
+
+        worker = TranslationWorker(interval=1, batch_size=20)
+        monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
+        worker._process_batch()
+
+        conn = test_db()
+        row = conn.execute("SELECT translate_status, translate_retries FROM reviews WHERE id = ?", (rid,)).fetchone()
+        conn.close()
+        assert row["translate_retries"] == 1
+        assert row["translate_status"] == "failed"
+
+    def test_trigger_wakes_worker(self, test_db, monkeypatch):
+        """trigger() should set the wake event."""
+        worker = TranslationWorker(interval=60, batch_size=20)
+        assert not worker._wake_event.is_set()
+        worker.trigger()
+        assert worker._wake_event.is_set()
+
+    def test_no_start_without_api_key(self, test_db, monkeypatch):
+        """Worker should not start thread if LLM_API_KEY is empty."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "")
+        worker = TranslationWorker(interval=1, batch_size=20)
+        worker.start()
+        assert not worker._thread.is_alive()
+
+    def test_run_loop_processes_and_idles(self, test_db, monkeypatch):
+        """Integration test: start() → insert review → trigger() → verify translated → stop()."""
+        monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
+        monkeypatch.setattr(config, "LLM_API_BASE", "")
+        monkeypatch.setattr(config, "LLM_MODEL", "test")
+        monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
+        monkeypatch.setattr(config, "TRANSLATE_INTERVAL", 1)
+        monkeypatch.setattr(config, "TRANSLATE_MAX_RETRIES", 3)
+
+        pid = _insert_product(test_db)
+        _insert_review(test_db, pid, headline="Hello", body="World", translate_status=None)
+
+        def mock_call_llm(client, messages):
+            return json.dumps([{"index": 0, "headline_cn": "你好", "body_cn": "世界"}])
+
+        worker = TranslationWorker(interval=1, batch_size=20)
+        monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
+        worker._client = MagicMock()
+        worker._thread = Thread(target=worker._run, daemon=True, name="test-worker")
+        worker._thread.start()
+        worker.trigger()
+
+        time.sleep(0.5)
+        worker.stop()
+        worker._thread.join(timeout=2)
+
+        conn = test_db()
+        row = conn.execute("SELECT headline_cn, translate_status FROM reviews WHERE headline = 'Hello'").fetchone()
+        conn.close()
+        assert row["headline_cn"] == "你好"
+        assert row["translate_status"] == "done"
