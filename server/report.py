@@ -1,4 +1,4 @@
-"""Report generation module — query, translate, Excel, email."""
+"""Report generation module — query, Excel, email."""
 
 import json
 import logging
@@ -11,7 +11,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from openai import OpenAI
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
-    """Query products and reviews added since the given UTC timestamp.
+    """Query products and reviews added since the given timestamp (Asia/Shanghai).
 
     Returns (products, reviews) — both as lists of dicts.
     """
@@ -48,7 +47,8 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
             """
             SELECT p.name AS product_name,
                    r.author, r.headline, r.body, r.rating,
-                   r.date_published, r.images, p.ownership
+                   r.date_published, r.images, p.ownership,
+                   r.headline_cn, r.body_cn, r.translate_status
             FROM reviews r
             JOIN products p ON r.product_id = p.id
             WHERE r.scraped_at >= ?
@@ -78,91 +78,6 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
     return products, reviews
 
 
-# ── LLM Translation ─────────────────────────────────────────────────────────
-
-
-def _call_llm(messages: list[dict]) -> str:
-    """Call the configured OpenAI-compatible API and return the raw text."""
-    client = OpenAI(
-        api_key=config.LLM_API_KEY,
-        base_url=config.LLM_API_BASE or None,
-    )
-    response = client.chat.completions.create(
-        model=config.LLM_MODEL,
-        messages=messages,
-    )
-    return response.choices[0].message.content or ""
-
-
-def _strip_markdown_json(text: str) -> str:
-    """Remove ```json ... ``` wrappers if present."""
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        # Drop first line (``` or ```json) and last line (```)
-        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        text = "\n".join(inner).strip()
-    return text
-
-
-def translate_reviews(reviews: list[dict]) -> list[dict]:
-    """Translate review headlines and bodies to Chinese.
-
-    Each review gets ``headline_cn`` and ``body_cn`` fields added in-place.
-    Never raises — on any failure the Chinese fields are set to empty strings.
-    Returns the same list (mutated).
-    """
-    if not reviews:
-        return reviews
-
-    batch_size = config.LLM_TRANSLATE_BATCH_SIZE
-    for start in range(0, len(reviews), batch_size):
-        batch = reviews[start : start + batch_size]
-        # Initialise defaults in case of error
-        for r in batch:
-            r.setdefault("headline_cn", "")
-            r.setdefault("body_cn", "")
-
-        try:
-            items_payload = [
-                {"index": i, "headline": r.get("headline") or "", "body": r.get("body") or ""}
-                for i, r in enumerate(batch)
-            ]
-            prompt = (
-                "请将以下英文产品评论的 headline 和 body 翻译为中文，"
-                "保持原意，语言自然流畅。\n"
-                "以 JSON 数组形式返回，每个元素包含 index、headline_cn、body_cn 三个字段。\n"
-                "不要返回其他内容。\n\n"
-                f"输入：\n{json.dumps(items_payload, ensure_ascii=False)}"
-            )
-            raw = _call_llm([{"role": "user", "content": prompt}])
-            cleaned = _strip_markdown_json(raw)
-            results = json.loads(cleaned)
-
-            for item in results:
-                idx = item.get("index")
-                if idx is None or idx >= len(batch):
-                    continue
-                batch[idx]["headline_cn"] = item.get("headline_cn", "")
-                batch[idx]["body_cn"] = item.get("body_cn", "")
-
-            logger.info(
-                "translate_reviews: batch [%d:%d] translated %d items",
-                start,
-                start + len(batch),
-                len(results),
-            )
-        except Exception as exc:
-            logger.warning(
-                "translate_reviews: batch [%d:%d] failed — %s",
-                start,
-                start + len(batch),
-                exc,
-            )
-            # Defaults already set above; just continue
-
-    return reviews
-
 
 # ── Excel Generation ─────────────────────────────────────────────────────────
 
@@ -185,7 +100,7 @@ def generate_excel(
     Empty data still produces a valid file with headers.
     """
     if report_date is None:
-        report_date = datetime.now(timezone.utc)
+        report_date = config.now_shanghai()
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     filename = f"scrape-report-{report_date.strftime('%Y-%m-%d')}.xlsx"
@@ -344,43 +259,25 @@ _send_email_impl = send_email
 def generate_report(
     since: datetime,
     send_email: bool = True,
-    recipients_file: str | None = None,
 ) -> dict:
-    """Full report pipeline: query → translate → Excel → email.
+    """Report pipeline: query (with pre-translated data) → Excel → email.
 
-    Parameters
-    ----------
-    since:
-        Only include data scraped on or after this UTC timestamp.
-    send_email:
-        Whether to send the Excel report by email.
-    recipients_file:
-        Path to the recipients file.  Defaults to
-        ``~/.openclaw/workspace/config/email-recipients.txt``.
-
-    Returns a summary dict with keys:
-    - products_count
-    - reviews_count
-    - translated_count
-    - excel_path
-    - email (result dict from send_email, or None if skipped)
+    Translation is handled by the background TranslationWorker.
+    Reviews that haven't been translated yet will have empty Chinese fields.
     """
-    # 1. Query
+    # 1. Query (includes headline_cn/body_cn from DB)
     products, reviews = query_report_data(since)
 
-    # 2. Translate (only when LLM is configured)
-    translated_count = 0
-    llm_configured = bool(config.LLM_API_KEY)
-    if llm_configured and reviews:
-        translate_reviews(reviews)
-        translated_count = sum(
-            1 for r in reviews if r.get("headline_cn") or r.get("body_cn")
-        )
-    else:
-        # Ensure Chinese fields exist even when not translated
-        for r in reviews:
-            r.setdefault("headline_cn", "")
-            r.setdefault("body_cn", "")
+    # 2. Count translation status
+    translated_count = sum(
+        1 for r in reviews if r.get("translate_status") == "done"
+    )
+    untranslated_count = len(reviews) - translated_count
+
+    # Ensure Chinese fields exist for Excel generation
+    for r in reviews:
+        r.setdefault("headline_cn", "")
+        r.setdefault("body_cn", "")
 
     # 3. Excel
     excel_path = generate_excel(products, reviews, report_date=since)
@@ -388,11 +285,7 @@ def generate_report(
     # 4. Email
     email_result = None
     if send_email:
-        if recipients_file is None:
-            recipients_file = str(
-                Path.home() / ".openclaw" / "workspace" / "config" / "email-recipients.txt"
-            )
-        recipients = load_email_recipients(recipients_file)
+        recipients = config.EMAIL_RECIPIENTS
         since_str = since.strftime("%Y-%m-%d")
         subject = f"Qbu 每日抓取报告 {since_str}"
         body = (
@@ -400,9 +293,11 @@ def generate_report(
             f"以下是 {since_str} 的 Qbu 产品抓取报告汇总：\n"
             f"  - 产品数：{len(products)}\n"
             f"  - 评论数：{len(reviews)}\n"
-            f"  - 已翻译评论：{translated_count}\n\n"
-            f"详细数据请查阅附件 Excel 文件。\n"
+            f"  - 已翻译评论：{translated_count}\n"
         )
+        if untranslated_count > 0:
+            body += f"  - 注：{untranslated_count} 条评论翻译进行中，中文列暂时为空\n"
+        body += f"\n详细数据请查阅附件 Excel 文件。\n"
         email_result = _send_email_impl(
             recipients=recipients,
             subject=subject,
@@ -414,6 +309,7 @@ def generate_report(
         "products_count": len(products),
         "reviews_count": len(reviews),
         "translated_count": translated_count,
+        "untranslated_count": untranslated_count,
         "excel_path": excel_path,
         "email": email_result,
     }

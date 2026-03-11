@@ -127,86 +127,6 @@ def test_query_report_data_future_cutoff(patch_db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# translate_reviews
-# ---------------------------------------------------------------------------
-
-def test_translate_reviews_success(monkeypatch):
-    from server import report as report_module
-
-    def mock_call_llm(messages):
-        # Parse the payload from the prompt and return translated JSON
-        content = messages[0]["content"]
-        # extract the JSON array from the prompt
-        idx = content.index("[")
-        payload = json.loads(content[idx:])
-        result = [
-            {"index": item["index"], "headline_cn": "翻译标题", "body_cn": "翻译内容"}
-            for item in payload
-        ]
-        return json.dumps(result)
-
-    monkeypatch.setattr(report_module, "_call_llm", mock_call_llm)
-    monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
-
-    reviews = [
-        {"headline": "Great product", "body": "Really loved it"},
-        {"headline": "Good value", "body": "Worth the price"},
-    ]
-    result = report_module.translate_reviews(reviews)
-
-    assert result is reviews  # mutated in-place, same object
-    assert result[0]["headline_cn"] == "翻译标题"
-    assert result[0]["body_cn"] == "翻译内容"
-    assert result[1]["headline_cn"] == "翻译标题"
-    assert result[1]["body_cn"] == "翻译内容"
-
-
-def test_translate_reviews_empty():
-    from server.report import translate_reviews
-
-    result = translate_reviews([])
-    assert result == []
-
-
-def test_translate_reviews_partial_failure(monkeypatch):
-    from server import report as report_module
-
-    call_count = {"n": 0}
-
-    def mock_call_llm(messages):
-        call_count["n"] += 1
-        raise RuntimeError("API error")
-
-    monkeypatch.setattr(report_module, "_call_llm", mock_call_llm)
-    monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
-
-    reviews = [
-        {"headline": "Great product", "body": "Really loved it"},
-    ]
-    result = report_module.translate_reviews(reviews)
-
-    # Should not raise; Chinese fields should be empty strings
-    assert result[0]["headline_cn"] == ""
-    assert result[0]["body_cn"] == ""
-
-
-def test_translate_reviews_markdown_json(monkeypatch):
-    """LLM returns response wrapped in markdown code block."""
-    from server import report as report_module
-
-    def mock_call_llm(messages):
-        return '```json\n[{"index": 0, "headline_cn": "好产品", "body_cn": "非常棒"}]\n```'
-
-    monkeypatch.setattr(report_module, "_call_llm", mock_call_llm)
-    monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
-
-    reviews = [{"headline": "Great", "body": "Awesome"}]
-    result = report_module.translate_reviews(reviews)
-    assert result[0]["headline_cn"] == "好产品"
-    assert result[0]["body_cn"] == "非常棒"
-
-
-# ---------------------------------------------------------------------------
 # generate_excel
 # ---------------------------------------------------------------------------
 
@@ -438,10 +358,9 @@ def test_load_email_recipients_missing_file():
 # ---------------------------------------------------------------------------
 
 def test_generate_report_full(patch_db, tmp_path, monkeypatch):
-    """Full pipeline with LLM and email both disabled."""
+    """Full pipeline — translation comes from DB, not inline."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
-    monkeypatch.setattr(config, "LLM_API_KEY", "")  # disable translation
 
     from server.report import generate_report
 
@@ -451,53 +370,45 @@ def test_generate_report_full(patch_db, tmp_path, monkeypatch):
     assert result["products_count"] == 1
     assert result["reviews_count"] == 1
     assert result["translated_count"] == 0
+    assert result["untranslated_count"] == 1
     assert os.path.isfile(result["excel_path"])
     assert result["email"] is None
 
 
-def test_generate_report_with_translation(patch_db, tmp_path, monkeypatch):
-    """Pipeline with LLM translation enabled (mocked)."""
+def test_generate_report_with_pretranslated_reviews(patch_db, tmp_path, monkeypatch):
+    """Pipeline reads pre-translated data from DB."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
-    monkeypatch.setattr(config, "LLM_API_KEY", "test-key")
-    monkeypatch.setattr(config, "LLM_TRANSLATE_BATCH_SIZE", 20)
 
-    from server import report as report_module
+    import sqlite3
+    conn = sqlite3.connect(patch_db)
+    conn.execute(
+        "UPDATE reviews SET headline_cn = '好产品', body_cn = '非常喜欢', translate_status = 'done'"
+    )
+    conn.commit()
+    conn.close()
 
-    def mock_call_llm(messages):
-        content = messages[0]["content"]
-        idx = content.index("[")
-        payload = json.loads(content[idx:])
-        result = [
-            {"index": item["index"], "headline_cn": "中文标题", "body_cn": "中文内容"}
-            for item in payload
-        ]
-        return json.dumps(result)
-
-    monkeypatch.setattr(report_module, "_call_llm", mock_call_llm)
+    from server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
-    result = report_module.generate_report(since, send_email=False)
+    result = generate_report(since, send_email=False)
 
     assert result["reviews_count"] == 1
     assert result["translated_count"] == 1
+    assert result["untranslated_count"] == 0
 
 
 def test_generate_report_with_email(patch_db, tmp_path, monkeypatch):
     """Email fails gracefully when SMTP not configured."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
-    monkeypatch.setattr(config, "LLM_API_KEY", "")
     monkeypatch.setattr(config, "SMTP_HOST", "")  # no SMTP
-
-    # Create a recipients file
-    recipients_file = tmp_path / "recipients.txt"
-    recipients_file.write_text("test@example.com\n")
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["test@example.com"])
 
     from server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
-    result = generate_report(since, send_email=True, recipients_file=str(recipients_file))
+    result = generate_report(since, send_email=True)
 
     # Should not raise
     assert result["products_count"] == 1
@@ -506,28 +417,23 @@ def test_generate_report_with_email(patch_db, tmp_path, monkeypatch):
     assert "SMTP_HOST" in result["email"]["error"]
 
 
-def test_generate_report_email_no_recipients_file(patch_db, tmp_path, monkeypatch):
-    """Email is skipped gracefully when recipients file doesn't exist."""
+def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
+    """Email is skipped gracefully when no recipients configured."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
-    monkeypatch.setattr(config, "LLM_API_KEY", "")
     monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
     monkeypatch.setattr(config, "SMTP_PORT", 587)
     monkeypatch.setattr(config, "SMTP_USER", "")
     monkeypatch.setattr(config, "SMTP_PASSWORD", "")
     monkeypatch.setattr(config, "SMTP_FROM", "")
     monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", [])
 
     from server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
-    # Pass a non-existent file
-    result = generate_report(
-        since,
-        send_email=True,
-        recipients_file="/nonexistent/recipients.txt",
-    )
+    result = generate_report(since, send_email=True)
 
-    # No recipients loaded → send_email returns error, but generate_report doesn't raise
+    # No recipients → send_email returns error, but generate_report doesn't raise
     assert result["email"] is not None
     assert result["email"]["success"] is False
