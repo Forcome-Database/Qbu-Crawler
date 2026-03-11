@@ -3,6 +3,10 @@ import json as _json
 import sqlite3
 from config import DB_PATH
 
+# SQLite CURRENT_TIMESTAMP is always UTC.
+# Use this expression for Asia/Shanghai (UTC+8) timestamps.
+_NOW_SHANGHAI = "datetime('now', '+8 hours')"
+
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -73,6 +77,9 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE products ADD COLUMN site TEXT NOT NULL DEFAULT 'basspro'",
         "ALTER TABLE products ADD COLUMN ownership TEXT NOT NULL DEFAULT 'competitor'",
+        "ALTER TABLE reviews ADD COLUMN headline_cn TEXT",
+        "ALTER TABLE reviews ADD COLUMN body_cn TEXT",
+        "ALTER TABLE reviews ADD COLUMN translate_retries INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -107,6 +114,23 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_dedup
         ON reviews (product_id, author, headline, body_hash)
     """)
+
+    # ── Translation status column + one-time backfill ──
+    _needs_translate_backfill = False
+    try:
+        conn.execute("ALTER TABLE reviews ADD COLUMN translate_status TEXT")
+        _needs_translate_backfill = True
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    if _needs_translate_backfill:
+        conn.execute("UPDATE reviews SET translate_status = 'skipped' WHERE translate_status IS NULL")
+        conn.commit()
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_reviews_translate_status
+        ON reviews (translate_status)
+    """)
     conn.close()
 
 
@@ -119,9 +143,10 @@ def _body_hash(body: str | None) -> str:
 
 def save_product(data: dict) -> int:
     conn = get_conn()
-    cursor = conn.execute("""
+    now = _NOW_SHANGHAI
+    cursor = conn.execute(f"""
         INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, ownership, scraped_at)
-        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, CURRENT_TIMESTAMP)
+        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, {now})
         ON CONFLICT(url) DO UPDATE SET
             site = excluded.site,
             name = excluded.name,
@@ -131,7 +156,7 @@ def save_product(data: dict) -> int:
             review_count = excluded.review_count,
             rating = excluded.rating,
             ownership = excluded.ownership,
-            scraped_at = CURRENT_TIMESTAMP
+            scraped_at = {now}
     """, data)
     product_id = cursor.lastrowid
     if product_id == 0:
@@ -145,9 +170,9 @@ def save_product(data: dict) -> int:
 def save_snapshot(product_id: int, data: dict):
     """保存产品快照（价格/库存/评分/评论数变化历史）"""
     conn = get_conn()
-    conn.execute("""
-        INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating)
-        VALUES (?, ?, ?, ?, ?)
+    conn.execute(f"""
+        INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, scraped_at)
+        VALUES (?, ?, ?, ?, ?, {_NOW_SHANGHAI})
     """, (product_id, data.get("price"), data.get("stock_status"),
           data.get("review_count"), data.get("rating")))
     conn.commit()
@@ -166,9 +191,9 @@ def save_reviews(product_id: int, reviews: list) -> int:
         bh = _body_hash(body)
         images = r.get("images")
         try:
-            conn.execute("""
-                INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, images)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            conn.execute(f"""
+                INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, images, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
             """, (product_id, r.get("author"), r.get("headline"), body, bh,
                   r.get("rating"), r.get("date_published"), images))
             new_count += 1
@@ -481,6 +506,109 @@ def execute_readonly_sql(sql: str, timeout: int = 5, max_rows: int = 500) -> dic
             "rows": [list(r) for r in rows],
             "row_count": len(rows),
             "truncated": truncated,
+        }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Translation queue functions
+# ---------------------------------------------------------------------------
+
+def get_pending_translations(limit: int = 20) -> list[dict]:
+    """Fetch reviews needing translation, newest first."""
+    import config as _cfg
+    max_retries = _cfg.TRANSLATE_MAX_RETRIES
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, headline, body FROM reviews
+               WHERE translate_status IS NULL
+                  OR (translate_status = 'failed' AND translate_retries < ?)
+               ORDER BY scraped_at DESC
+               LIMIT ?""",
+            (max_retries, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_translation(review_id: int, headline_cn: str, body_cn: str, status: str) -> None:
+    """Mark a review as translated."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE reviews SET headline_cn = ?, body_cn = ?, translate_status = ? WHERE id = ?",
+            (headline_cn, body_cn, status, review_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def increment_translate_retries(review_id: int, max_retries: int = 3) -> None:
+    """Increment retry counter; mark 'skipped' if max reached."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE reviews SET translate_retries = translate_retries + 1 WHERE id = ?",
+            (review_id,),
+        )
+        conn.execute(
+            "UPDATE reviews SET translate_status = 'skipped' WHERE id = ? AND translate_retries >= ?",
+            (review_id, max_retries),
+        )
+        conn.execute(
+            "UPDATE reviews SET translate_status = 'failed' WHERE id = ? AND translate_retries < ?",
+            (review_id, max_retries),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_skipped_translations() -> int:
+    """Reset all skipped reviews back to pending (NULL). Returns count."""
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            "UPDATE reviews SET translate_status = NULL, translate_retries = 0 WHERE translate_status = 'skipped'"
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_translate_stats(since: str | None = None) -> dict:
+    """Return translation status counts. Optional since filter (YYYY-MM-DD or full timestamp)."""
+    conn = get_conn()
+    try:
+        where = ""
+        params: list = []
+        if since:
+            where = "WHERE scraped_at >= ?"
+            params = [since]
+
+        total = conn.execute(f"SELECT COUNT(*) FROM reviews {where}", params).fetchone()[0]
+
+        def _count(status_val, is_null=False):
+            if is_null:
+                cond = "translate_status IS NULL"
+                p = list(params)
+            else:
+                cond = "translate_status = ?"
+                p = list(params) + [status_val]
+            w = f"WHERE {cond}" if not where else f"{where} AND {cond}"
+            return conn.execute(f"SELECT COUNT(*) FROM reviews {w}", p).fetchone()[0]
+
+        return {
+            "total": total,
+            "done": _count("done"),
+            "pending": _count(None, is_null=True),
+            "failed": _count("failed"),
+            "skipped": _count("skipped"),
         }
     finally:
         conn.close()
