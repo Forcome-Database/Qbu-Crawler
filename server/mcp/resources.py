@@ -22,6 +22,7 @@ tasks (爬虫任务记录)
 - products 表使用 UPSERT，始终是最新状态
 - product_snapshots 每次采集 INSERT，记录变化趋势
 - reviews 增量写入，用 (product_id, author, headline, body_hash) 去重
+- reviews.translate_status 管理翻译队列（后台线程自动翻译评论为中文）
 - products.ownership 区分自有产品(own)和竞品(competitor)
 - tasks 记录任务历史，params/progress/result 为 JSON 字段
 """
@@ -96,6 +97,10 @@ SCHEMA_REVIEWS = """
 | date_published | TEXT | | 发布日期 |
 | images | TEXT | | JSON 数组，MinIO 图片 URL 列表 |
 | scraped_at | TIMESTAMP | | 采集时间 |
+| headline_cn | TEXT | | 评论标题中文翻译 |
+| body_cn | TEXT | | 评论正文中文翻译 |
+| translate_status | TEXT | | 翻译状态：NULL=待翻译, done=完成, failed=重试中, skipped=跳过 |
+| translate_retries | INTEGER | DEFAULT 0 | 翻译失败重试次数 |
 
 ### 常用查询示例
 ```sql
