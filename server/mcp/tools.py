@@ -5,11 +5,14 @@ compatibility with OpenAI-based function calling schema validation.
 """
 
 import json as _json
+import logging
 
 from fastmcp import FastMCP
 
 import models
 import config
+
+logger = logging.getLogger(__name__)
 
 
 def _get_tm():
@@ -241,8 +244,9 @@ def register_tools(mcp: FastMCP):
 
     @mcp.tool
     def generate_report(since: str, send_email: str = "true") -> str:
-        """生成爬虫数据报告：查询新增数据 → 翻译评论为中文 → 生成 Excel → 发送邮件。
-        - since: UTC 时间戳（YYYY-MM-DDTHH:MM:SS），查询该时间之后的新增数据
+        """生成爬虫数据报告：查询新增数据（含已翻译的中文）→ 生成 Excel → 发送邮件。
+        翻译由后台线程自动执行，无需等待。如需确认翻译完成度，先调用 get_translate_status。
+        - since: 上海时间戳（YYYY-MM-DDTHH:MM:SS），查询该时间之后的新增数据
         - send_email: 是否发送邮件，"true" 或 "false"
         返回报告摘要：新增产品数、评论数、翻译数、Excel 路径、邮件发送结果。"""
         from datetime import datetime
@@ -258,3 +262,29 @@ def register_tools(mcp: FastMCP):
             return _json.dumps({"error": f"Invalid 'since' format: {e}. Use YYYY-MM-DDTHH:MM:SS"})
         except Exception as e:
             return _json.dumps({"error": f"Report generation failed: {e}"})
+
+    @mcp.tool
+    def trigger_translate(reset_skipped: str = "false") -> str:
+        """手动触发翻译，立即唤醒后台翻译线程处理未翻译的评论。
+        reset_skipped: "true" 时先将所有 skipped 评论重置为待翻译（用于补翻历史数据），
+        "false"（默认）只触发现有待翻译队列。
+        返回当前待翻译数量。"""
+        from server.app import translator
+        if reset_skipped.lower() == "true":
+            count = models.reset_skipped_translations()
+            logger.info("trigger_translate: reset %d skipped reviews", count)
+        translator.trigger()
+        stats = models.get_translate_stats()
+        return _json.dumps({
+            "message": "翻译线程已唤醒",
+            "pending": stats["pending"],
+            "failed": stats["failed"],
+        })
+
+    @mcp.tool
+    def get_translate_status(since: str = "") -> str:
+        """查询翻译进度：总评论数、已翻译、待翻译、失败数、跳过数。
+        since: 可选，上海时间戳（YYYY-MM-DDTHH:MM:SS），只统计该时间之后的评论。
+        留空则返回全量统计。"""
+        stats = models.get_translate_stats(since=since if since else None)
+        return _json.dumps(stats)
