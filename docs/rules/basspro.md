@@ -58,7 +58,7 @@
 | 评分 | `[data-bv-v="contentHeader"] [role="img"][aria-label*="out of 5"]`（ARIA） | `span[class*="bm6gry"]` | — |
 | 日期 | `[data-bv-v="contentHeader"] span[class*="g3jej5"]` | span 文本匹配 `/\d+ (days\|months\|years) ago/` | — |
 | 正文 | `[data-bv-v="contentSummary"].children[0]` | `querySelector('p')` | — |
-| 图片 | `.photos-tile img`（src 含 `photos-us.bazaarvoice.com`） | — | — |
+| 图片 | `[data-bv-v="contentSummary"] img[src*="photos-us.bazaarvoice.com"]` | `.photos-tile img` | `img[src*="photos-us.bazaarvoice.com"]`（兜底） |
 | Load More | `button[aria-label*="Load More"]`（ARIA，稳定） | — | — |
 
 ### Reviews Accordion 选择器（主 DOM）

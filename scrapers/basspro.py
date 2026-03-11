@@ -457,9 +457,16 @@ class BassProScraper(BaseScraper):
                     }}
 
                     const imgs = [];
-                    s.querySelectorAll('.photos-tile img').forEach(img => {{
+                    // 多级降级选择器提取评论图片：
+                    // S1: BV data 属性 + URL 域名（最稳定）
+                    // S2: 旧版 class 选择器（向后兼容）
+                    // S3: URL 域名兜底（最宽泛）
+                    let photoEls = s.querySelectorAll('[data-bv-v="contentSummary"] img[src*="photos-us.bazaarvoice.com"]');
+                    if (!photoEls.length) photoEls = s.querySelectorAll('.photos-tile img');
+                    if (!photoEls.length) photoEls = s.querySelectorAll('img[src*="photos-us.bazaarvoice.com"]');
+                    photoEls.forEach(img => {{
                         const src = img.getAttribute('src');
-                        if (src && src.includes('photos-us.bazaarvoice.com')) {{
+                        if (src && src.includes('bazaarvoice.com') && !src.includes('apps.bazaarvoice.com')) {{
                             imgs.push(src);
                         }}
                     }});
