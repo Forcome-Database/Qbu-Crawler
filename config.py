@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 
@@ -55,6 +56,10 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_TRANSLATE_BATCH_SIZE = int(os.getenv("LLM_TRANSLATE_BATCH_SIZE", "20"))
 
+# ── Translation Worker ────────────────────────
+TRANSLATE_INTERVAL = int(os.getenv("TRANSLATE_INTERVAL", "60"))
+TRANSLATE_MAX_RETRIES = int(os.getenv("TRANSLATE_MAX_RETRIES", "3"))
+
 # ── Email SMTP ────────────────────────────────────
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -66,6 +71,20 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 # ── Report ────────────────────────────────────────
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(BASE_DIR, "data", "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
+EMAIL_RECIPIENTS = [
+    addr.strip()
+    for addr in os.getenv("EMAIL_RECIPIENTS", "").split(",")
+    if addr.strip()
+]
+
+# ── Timezone ──────────────────────────────────────────
+SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def now_shanghai() -> datetime:
+    """Return current time in Asia/Shanghai timezone."""
+    return datetime.now(SHANGHAI_TZ)
+
 
 # ── SQL Query Limits ────────────────────────────────
 SQL_QUERY_TIMEOUT = 5
