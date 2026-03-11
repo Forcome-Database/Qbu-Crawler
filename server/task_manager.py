@@ -6,12 +6,13 @@ supports cancellation, and persists task history to SQLite.
 
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from typing import Any
 
+import config
 import models
 from scrapers import get_scraper, get_site_key
 
@@ -32,7 +33,7 @@ class Task:
         self.type = type
         self.status = TaskStatus.pending
         self.params = params
-        self.created_at = datetime.now(timezone.utc).isoformat()
+        self.created_at = config.now_shanghai().isoformat()
         self.started_at: str | None = None
         self.finished_at: str | None = None
         self.progress: dict = {}
@@ -55,10 +56,11 @@ class Task:
 
 
 class TaskManager:
-    def __init__(self, max_workers: int = 3):
+    def __init__(self, max_workers: int = 3, translator=None):
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._tasks: dict[str, Task] = {}
         self._cancel_flags: dict[str, Event] = {}
+        self._translator = translator
 
     def submit_scrape(self, urls: list[str], ownership: str = "competitor") -> Task:
         task = Task(type="scrape", params={"urls": urls, "ownership": ownership})
@@ -103,7 +105,7 @@ class TaskManager:
         task = self._tasks[task_id]
         flag = self._cancel_flags[task_id]
         task.status = TaskStatus.running
-        task.started_at = datetime.now(timezone.utc).isoformat()
+        task.started_at = config.now_shanghai().isoformat()
         self._persist(task)
 
         urls = task.params["urls"]
@@ -134,6 +136,8 @@ class TaskManager:
                     pid = models.save_product(product)
                     models.save_snapshot(pid, product)
                     rc = models.save_reviews(pid, reviews)
+                    if rc > 0 and self._translator:
+                        self._translator.trigger()
 
                     products_saved += 1
                     reviews_saved += rc
@@ -159,7 +163,7 @@ class TaskManager:
         finally:
             if scraper:
                 scraper.close()
-            task.finished_at = datetime.now(timezone.utc).isoformat()
+            task.finished_at = config.now_shanghai().isoformat()
             task.progress["current_url"] = None
             self._persist(task)
             self._tasks.pop(task_id, None)
@@ -169,7 +173,7 @@ class TaskManager:
         task = self._tasks[task_id]
         flag = self._cancel_flags[task_id]
         task.status = TaskStatus.running
-        task.started_at = datetime.now(timezone.utc).isoformat()
+        task.started_at = config.now_shanghai().isoformat()
         self._persist(task)
 
         category_url = task.params["category_url"]
@@ -213,6 +217,8 @@ class TaskManager:
                     pid = models.save_product(product)
                     models.save_snapshot(pid, product)
                     rc = models.save_reviews(pid, reviews)
+                    if rc > 0 and self._translator:
+                        self._translator.trigger()
 
                     products_saved += 1
                     reviews_saved += rc
@@ -238,7 +244,7 @@ class TaskManager:
         finally:
             if scraper:
                 scraper.close()
-            task.finished_at = datetime.now(timezone.utc).isoformat()
+            task.finished_at = config.now_shanghai().isoformat()
             task.progress["current_url"] = None
             self._persist(task)
             self._tasks.pop(task_id, None)
