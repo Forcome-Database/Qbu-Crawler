@@ -30,7 +30,9 @@ IMPORTANT: ownership 必须明确为 `own` 或 `competitor`，不可省略。
 
 判断方式：分类页通常包含 `/c/`、`/l/`、`/shop/en/` 等路径但无具体产品名。
 
-追加一行：`{url},{ownership}`。如文件不存在先创建并写表头 `url,ownership`。
+先检查该 URL 是否已存在于目标 CSV 中。已存在 → 告知用户"该 URL 已在定时任务中"，**流程结束**。
+
+不存在 → 追加一行：`{url},{ownership}`。如文件不存在先创建并写表头 `url,ownership`。
 
 写入后告知："已将 {url} 加入定时任务（归属：{ownership}）"
 

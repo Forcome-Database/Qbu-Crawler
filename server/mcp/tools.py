@@ -26,15 +26,15 @@ def register_tools(mcp: FastMCP):
     # ── Task Operations ──────────────────────────────
 
     @mcp.tool
-    def start_scrape(urls: list[str], ownership: str) -> str:
+    def start_scrape(urls: list[str], ownership: str, reply_to: str = "") -> str:
         """提交一个或多个产品页 URL 开始爬取，返回任务 ID 用于后续查询进度。
         支持 Bass Pro Shops (www.basspro.com) 和 Meat Your Maker (www.meatyourmaker.com) 站点。
-        URL 会自动识别所属站点。可同时提交不同站点的 URL。
-        ownership: 产品归属，own 表示自有产品，competitor 表示竞品。"""
+        ownership: 产品归属，own 表示自有产品，competitor 表示竞品。
+        reply_to: 可选，任务完成后的通知目标（如钉钉群/用户 ID），由心跳自动检测并投递。"""
         if ownership not in ("own", "competitor"):
             return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
         tm = _get_tm()
-        task = tm.submit_scrape(urls, ownership=ownership)
+        task = tm.submit_scrape(urls, ownership=ownership, reply_to=reply_to)
         return _json.dumps({
             "message": f"任务启动成功，共 {len(urls)} 个产品待抓取。使用 get_task_status 查询进度。",
             "task_id": task.id,
@@ -43,16 +43,15 @@ def register_tools(mcp: FastMCP):
         })
 
     @mcp.tool
-    def start_collect(category_url: str, ownership: str, max_pages: int = 0) -> str:
+    def start_collect(category_url: str, ownership: str, max_pages: int = 0, reply_to: str = "") -> str:
         """从分类/列表页自动采集所有产品 URL 并逐一爬取详情。
-        先翻页收集产品链接，再逐个抓取产品数据和评论。
         max_pages 限制最多翻几页，0 表示采集所有页。
         ownership 必填：own（自有产品）或 competitor（竞品）。
-        返回任务 ID，可用 get_task_status 查询采集进度。"""
+        reply_to: 可选，任务完成后的通知目标。"""
         if ownership not in ("own", "competitor"):
             return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
         tm = _get_tm()
-        task = tm.submit_collect(category_url, max_pages, ownership=ownership)
+        task = tm.submit_collect(category_url, max_pages, ownership=ownership, reply_to=reply_to)
         pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
         return _json.dumps({
             "message": f"采集任务启动成功，将从分类页采集产品（{pages_info}）并逐一抓取。使用 get_task_status 查询进度。",
@@ -288,3 +287,19 @@ def register_tools(mcp: FastMCP):
         留空则返回全量统计。"""
         stats = models.get_translate_stats(since=since if since else None)
         return _json.dumps(stats)
+
+    # ── Task Completion Tracking ─────────────────────────
+
+    @mcp.tool
+    def check_pending_completions() -> str:
+        """检查已完成但尚未通知的任务。返回所有终态（completed/failed/cancelled）且设置了
+        reply_to 但未标记 notified_at 的任务。心跳调用此工具可一次性获取所有待通知任务。"""
+        tasks = models.get_pending_completions()
+        return _json.dumps({"tasks": tasks, "count": len(tasks)}, default=str)
+
+    @mcp.tool
+    def mark_notified(task_ids: list[str]) -> str:
+        """将任务标记为已通知。在心跳成功投递完成通知后调用。
+        标记后这些任务不会再出现在 check_pending_completions 结果中。"""
+        count = models.mark_task_notified(task_ids)
+        return _json.dumps({"marked": count})

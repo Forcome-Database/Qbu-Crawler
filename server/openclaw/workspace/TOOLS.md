@@ -2,8 +2,8 @@
 
 ## 支持站点
 
-- 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com` — 户外运动装备
-- 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com` — 肉类加工设备
+- 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com`
+- 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com`
 
 ## 工具参数速查
 
@@ -11,11 +11,13 @@
 
 | 工具 | 必填参数 | 可选参数 |
 |------|---------|---------|
-| `start_scrape` | urls, ownership | — |
-| `start_collect` | category_url, ownership | max_pages（0=全部） |
+| `start_scrape` | urls, ownership | reply_to |
+| `start_collect` | category_url, ownership | max_pages（0=全部）, reply_to |
 | `get_task_status` | task_id | — |
 | `list_tasks` | — | status, limit |
 | `cancel_task` | task_id | — |
+| `check_pending_completions` | — | — |
+| `mark_notified` | task_ids | — |
 
 ### 数据查询
 
@@ -29,16 +31,30 @@
 | `execute_sql` | sql | — |
 | `generate_report` | since | send_email（默认 true） |
 | `trigger_translate` | — | reset_skipped（默认 false） |
-| `get_translate_status` | — | since（上海时间戳，可选） |
+| `get_translate_status` | — | since（可选） |
 
 ### 参数说明
 
 - `ownership`：`own`（自有）或 `competitor`（竞品），start_scrape/start_collect 中**必填**
+- `reply_to`：任务完成后通知目标。格式 `user:{id}` 或 `chat:{id}`。传入后服务端自动追踪，心跳自动通知
 - `min_price`/`max_price`/`min_rating`/`max_rating`：`-1` 表示不限制
 - `max_pages`：`0` 表示采集全部页
 - `has_images`：字符串 `"true"` 或 `"false"`
 - `execute_sql`：仅 SELECT，500 行上限，5 秒超时
-- `generate_report`：`since` 为上海时间戳（`YYYY-MM-DDTHH:MM:SS`），`send_email` 字符串 `"true"`/`"false"`
+- `generate_report`：`since` 为上海时间戳（`YYYY-MM-DDTHH:MM:SS`）
+- `check_pending_completions`：无参数，返回已完成但未通知的任务列表
+- `mark_notified`：`task_ids` 为字符串数组，标记后任务不再出现在 pending completions 中
+- 所有时间戳统一使用**上海时间**（Asia/Shanghai），格式 `YYYY-MM-DDTHH:MM:SS`，无时区后缀
+
+## 服务端能力概览
+
+服务端（FastAPI + FastMCP）提供以下自动化能力，agent 应充分利用：
+
+1. **任务自动追踪**：`start_scrape`/`start_collect` 传入 `reply_to` 后，任务完成状态自动持久化到 SQLite tasks 表。不需要 agent 写状态文件。
+2. **待通知任务发现**：`check_pending_completions` 一次调用返回所有"已完成但未通知"的任务，无需逐个轮询 task_id。
+3. **通知标记**：`mark_notified` 防止重复通知。
+4. **后台翻译**：TranslationWorker 守护线程自动翻译新评论，`get_translate_status` 查进度。
+5. **报告生成**：`generate_report` 在服务端完成查询+翻译+Excel+邮件，agent 只需传 since 时间。
 
 ## CSV 文件
 
@@ -48,17 +64,19 @@
 
 ## 邮件收件人
 
-`~/.openclaw/workspace/config/email-recipients.txt`（一行一个邮箱，`#` 为注释）
+邮件收件人在服务端环境变量 `EMAIL_RECIPIENTS` 中配置（逗号分隔多个邮箱），agent 无法修改。如需变更收件人，告知用户联系管理员更新服务端 `.env` 配置。
 
-## 任务状态文件
+## 状态文件
 
-`~/.openclaw/workspace/state/active-tasks.json`
+- `~/.openclaw/workspace/state/active-tasks.json` — 定时任务状态（仅定时工作流使用）
+
+注：临时任务不再使用状态文件，通过服务端 `reply_to` + `check_pending_completions` 追踪。
 
 ---
 
 ## 输出格式规范
 
-IMPORTANT: 以下格式规范必须严格遵守，特别是钉钉渠道的限制。
+向钉钉输出结构化内容时必须遵守以下规范。
 
 ### 基本原则
 
@@ -66,21 +84,13 @@ IMPORTANT: 以下格式规范必须严格遵守，特别是钉钉渠道的限制
 - 价格：**$XX.XX** | 评分：**X.X/5** ⭐ | 库存：✅ 有货 / ❌ 缺货
 - 任务状态：⏳ 进行中 / ✔️ 完成 / ❌ 失败 / 🚫 已取消
 - 给完结果后**主动建议下一步**
-- **标题、加粗、列表**用得恰到好处，格式工整
 
-### 钉钉渠道排版（必须遵守）
+### 钉钉排版
 
-IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
+**支持**：标题（# ## ###）、加粗、列表（- 和 1.）、嵌套列表、引用（>）、链接、分隔线、代码块
+**不支持**：❌ 表格 | ❌ 删除线
 
-**钉钉支持**：标题（# ## ###）、加粗（**粗体**）、列表（- 和 1.）、嵌套列表、引用（>）、链接、分隔线（---）、代码块
-
-**钉钉不支持**：❌ 表格 | ❌ 删除线
-
-**排版规则**：
-1. **禁止表格** — 用列表代替
-2. **标题分隔板块** — 每个维度用 ### + emoji
-3. **加粗关键数据** — 每个要点一行
-4. **一段文字不超过 3 行** — 超过就拆成列表
+**规则**：禁止表格用列表代替、标题分隔板块、加粗关键数据、一段不超 3 行
 
 ### 产品列表
 
@@ -94,18 +104,6 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 - **站点**：Bass Pro Shops
 ```
 
-### 评分分布
-
-```
-## 📊 评分分布（共 573 条）
-
-- ⭐⭐⭐⭐⭐ **5星**：334 条（58.3%）████████████
-- ⭐⭐⭐⭐ **4星**：87 条（15.2%）█████
-- ⭐⭐⭐ **3星**：36 条（6.3%）██
-- ⭐⭐ **2星**：37 条（6.5%）██
-- ⭐ **1星**：79 条（13.8%）████
-```
-
 ### 任务状态
 
 ```
@@ -115,7 +113,7 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 - **类型**：产品抓取（3 个产品）
 - **状态**：⏳ 等待执行
 
-稍后可以问我"任务进度"查看采集状态。
+完成后会自动通知。
 ```
 
 ### 任务进度
@@ -128,6 +126,33 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 - **当前**：正在采集 Product Name...
 - **耗时**：2 分 30 秒
 - **进度**：▓▓▓▓▓▓░░░░ 40%
+```
+
+### 定时任务启动通知
+
+```
+🚀 每日爬虫任务已启动
+
+- **提交时间**：YYYY-MM-DD HH:MM
+- **分类采集**：N 个任务
+- **产品抓取**：N 个任务（N 个产品）
+- **任务 ID**：xxx, yyy
+
+将自动监控任务进度，完成后汇报。
+```
+
+### 定时任务完成通知
+
+```
+✅ 每日爬虫任务已完成
+
+- **完成时间**：YYYY-MM-DD HH:MM
+- **产品抓取**：成功 N，失败 N
+- **新增评论**：N 条
+- **翻译进度**：N/M 已完成
+- **自有产品**：N 个 | **竞品**：N 个
+- **邮件发送**：✅ 已发送至 N 位收件人
+- **报告文件**：scrape-report-YYYY-MM-DD.xlsx
 ```
 
 ### 产品详情
@@ -169,19 +194,28 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 - 💬 **评论总数**：3,842
 - 💰 **平均价格**：$87.50
 - ⭐ **平均评分**：4.1/5
-- 🕐 **最后采集**：2026-01-15
 
 ---
 
 ### 站点分布
-
 - 🏪 **Bass Pro Shops**：180 个产品
 - 🥩 **Meat Your Maker**：65 个产品
 
 ### 产品归属
-
 - 🏠 **自有产品**：N 个
 - 🎯 **竞品**：N 个
+```
+
+### 评分分布
+
+```
+## 📊 评分分布（共 573 条）
+
+- ⭐⭐⭐⭐⭐ **5星**：334 条（58.3%）████████████
+- ⭐⭐⭐⭐ **4星**：87 条（15.2%）█████
+- ⭐⭐⭐ **3星**：36 条（6.3%）██
+- ⭐⭐ **2星**：37 条（6.5%）██
+- ⭐ **1星**：79 条（13.8%）████
 ```
 
 ### 差评分析
@@ -222,31 +256,4 @@ IMPORTANT: 钉钉不支持 Markdown 表格，会显示为乱码。
 ---
 
 **结论**：Bass Pro 产品更多、均价更低、评分更高。Meat Your Maker 定位高端但评分偏低，建议关注差评原因。
-```
-
-### 定时任务启动通知
-
-```
-🚀 每日爬虫任务已启动
-
-- **提交时间**：YYYY-MM-DD HH:MM
-- **分类采集**：N 个任务
-- **产品抓取**：N 个任务（N 个产品）
-- **任务 ID**：xxx, yyy
-
-将自动监控任务进度，完成后汇报。
-```
-
-### 定时任务完成通知
-
-```
-✅ 每日爬虫任务已完成
-
-- **完成时间**：YYYY-MM-DD HH:MM
-- **产品抓取**：成功 N，失败 N
-- **新增评论**：N 条
-- **翻译进度**：N/M 已完成
-- **自有产品**：N 个 | **竞品**：N 个
-- **邮件发送**：✅ 已发送至 N 位收件人
-- **报告文件**：scrape-report-YYYY-MM-DD.xlsx
 ```

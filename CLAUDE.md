@@ -61,10 +61,10 @@ Qbu-Crawler/
 │           ├── reports/            # Excel 报告输出
 │           ├── data/               # CSV（分类页+产品页 URL）
 │           └── skills/
-│               ├── qbu-product-data/
-│               ├── daily-scrape-submit/
-│               ├── daily-scrape-report/
-│               └── csv-management/
+│               ├── qbu-product-data/    # 深度数据分析 SQL 模板
+│               ├── daily-scrape-submit/ # 定时任务提交
+│               ├── daily-scrape-report/ # 任务完成汇报
+│               └── csv-management/      # URL/SKU 管理
 ├── scrapers/
 │   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
 │   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
@@ -158,6 +158,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 |------|--------|------|
 | `TRANSLATE_INTERVAL` | `60` | 翻译轮询间隔（秒） |
 | `TRANSLATE_MAX_RETRIES` | `3` | 单条评论最大重试次数，超过标记 skipped |
+| `TRANSLATE_WORKERS` | `3` | 翻译并发线程数，每轮取 batch_size × workers 条评论并行翻译 |
 
 ### 邮件 SMTP 配置（.env）
 
@@ -213,15 +214,17 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 ### OpenClaw 定时工作流
 
 三阶段架构：
-1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect → 存 task_id 到 state/active-tasks.json → DingTalk 通知
-2. **Heartbeat（每 5 分钟，main session，lightContext）**：检查 active-tasks.json → 轮询 get_task_status → 全部完成则触发阶段 3
+1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect（带 reply_to）→ 存 task_id 到 active-tasks.json → DingTalk 通知
+2. **Heartbeat（每 5 分钟，main session，lightContext）**：调用 `check_pending_completions` 处理临时任务通知 → 检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3
 3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
 
-Workspace 文件体系（按 OpenClaw 最佳实践重构）：
-- `AGENTS.md` — 操作规范 SOP（URL 路由规则、ownership 规则、安全边界），每次 session 启动加载
+临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。心跳通过 `check_pending_completions` 发现已完成任务并投递通知，通知后调用 `mark_notified` 标记。不再依赖 adhoc-tasks.json 文件。
+
+Workspace 文件体系：
+- `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）
 - `SOUL.md` — 纯身份定义（豆沙），不含操作规则
-- `TOOLS.md` — 工具参数参考 + 输出格式模板（钉钉 Markdown 规范）
-- `HEARTBEAT.md` — 极简心跳检查清单，用 IMPORTANT 标记关键步骤
+- `TOOLS.md` — 工具参数参考 + 服务端能力概览 + 输出格式模板（钉钉 Markdown 规范）
+- `HEARTBEAT.md` — 心跳检查清单（check_pending_completions → 定时任务监控）
 - `USER.md` / `IDENTITY.md` — 用户和 agent 身份信息
 
 CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。
@@ -253,6 +256,8 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **大量评论会导致浏览器崩溃**：1000+ 条评论全部加载到 Shadow DOM 后，DOM 节点爆炸导致 `querySelectorAll` 变慢、JS 执行超时（30 秒限制），最终浏览器进程内存耗尽崩溃，后续所有产品都失败。必须用 `MAX_REVIEWS` 限制加载数量
 - **Shadow DOM 大量节点提取必须分批**：在 Shadow DOM 中一次性遍历 1000+ section 提取数据（每个做多次 querySelector + 正则匹配）会超过 DrissionPage 的 30 秒 JS 超时。改用每批 50 个 section 分批执行，Python 端做跨批次去重
 - **`eager` 加载模式可能阻止第三方脚本初始化**：某些站点（如 SFCC/Demandware 平台）的 BV 脚本在 `eager` 模式下无法初始化，需改用 `normal` 模式。各站点子类可通过覆盖 `_build_options()` 定制
+- **批量滚动可能跳过中间元素的懒加载**：`scrollIntoView` 批量滚动（如每 20 个跳一次）在元素总数少于批大小时，会一步跳到末尾，中间元素一闪而过无法触发懒加载。需要额外做一轮定向滚动，逐个滚动到含懒加载内容但未加载的元素
+- **`Chromium()` 默认共享浏览器进程**：DrissionPage 的 `Chromium()` 默认连接到同一端口（9222）的浏览器进程。多线程并行创建多个 scraper 实例时，所有实例共享同一个浏览器和标签页，导致 `tab.get()` 竞争、数据错位。**必须在 `ChromiumOptions` 中调用 `auto_port()`** 让每个实例使用独立端口和独立浏览器进程
 
 ## 工作流程规范
 

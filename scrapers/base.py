@@ -1,10 +1,14 @@
 import json
+import logging
+from urllib.parse import urlparse
 
 from DrissionPage import Chromium, ChromiumOptions
 from config import (
     HEADLESS, PAGE_LOAD_TIMEOUT, LOAD_MODE, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL, REQUEST_DELAY, RESTART_EVERY,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BaseScraper:
@@ -16,6 +20,7 @@ class BaseScraper:
     @staticmethod
     def _build_options() -> ChromiumOptions:
         options = ChromiumOptions()
+        options.auto_port()  # 每个实例使用独立端口，防止并行任务共享浏览器
         if HEADLESS:
             options.headless()
         if NO_IMAGES:
@@ -23,6 +28,8 @@ class BaseScraper:
         options.set_load_mode(LOAD_MODE)
         options.set_retry(times=RETRY_TIMES, interval=RETRY_INTERVAL)
         options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
+        # 自动拒绝所有浏览器权限弹窗（位置、通知等），防止原生弹窗遮挡 DOM 交互
+        options.set_argument('--deny-permission-prompts')
         return options
 
     def _maybe_restart_browser(self):
@@ -34,6 +41,21 @@ class BaseScraper:
             except Exception:
                 pass
             self.browser = Chromium(self._options)
+
+    @staticmethod
+    def _check_url_match(tab, expected_url: str):
+        """检查导航后的实际 URL 是否匹配预期，防止重定向或并行任务导致数据错位"""
+        actual_url = tab.url
+        expected_path = urlparse(expected_url).path.rstrip("/")
+        actual_path = urlparse(actual_url).path.rstrip("/")
+        if expected_path != actual_path:
+            logger.warning(
+                f"URL 不匹配！预期: {expected_url} → 实际: {actual_url}"
+            )
+            raise RuntimeError(
+                f"页面 URL 不匹配（可能被重定向或并行任务干扰）: "
+                f"预期 {expected_url}, 实际 {actual_url}"
+            )
 
     def _increment_and_delay(self, tab):
         """递增抓取计数并执行随机延迟"""

@@ -80,6 +80,8 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN headline_cn TEXT",
         "ALTER TABLE reviews ADD COLUMN body_cn TEXT",
         "ALTER TABLE reviews ADD COLUMN translate_retries INTEGER DEFAULT 0",
+        "ALTER TABLE tasks ADD COLUMN reply_to TEXT",
+        "ALTER TABLE tasks ADD COLUMN notified_at TIMESTAMP",
     ]
     for sql in migrations:
         try:
@@ -220,13 +222,14 @@ def save_task(task_dict: dict) -> None:
     try:
         conn.execute(
             """INSERT INTO tasks (id, type, status, params, progress, result, error,
-                                  created_at, started_at, finished_at)
+                                  created_at, started_at, finished_at, reply_to, notified_at)
                VALUES (:id, :type, :status, :params, :progress, :result, :error,
-                       :created_at, :started_at, :finished_at)
+                       :created_at, :started_at, :finished_at, :reply_to, :notified_at)
                ON CONFLICT(id) DO UPDATE SET
                    status=excluded.status, progress=excluded.progress,
                    result=excluded.result, error=excluded.error,
-                   started_at=excluded.started_at, finished_at=excluded.finished_at
+                   started_at=excluded.started_at, finished_at=excluded.finished_at,
+                   notified_at=excluded.notified_at
             """,
             {
                 "id": task_dict["id"],
@@ -239,6 +242,8 @@ def save_task(task_dict: dict) -> None:
                 "created_at": task_dict.get("created_at"),
                 "started_at": task_dict.get("started_at"),
                 "finished_at": task_dict.get("finished_at"),
+                "reply_to": task_dict.get("reply_to"),
+                "notified_at": task_dict.get("notified_at"),
             },
         )
         conn.commit()
@@ -610,5 +615,53 @@ def get_translate_stats(since: str | None = None) -> dict:
             "failed": _count("failed"),
             "skipped": _count("skipped"),
         }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Task completion tracking
+# ---------------------------------------------------------------------------
+
+def get_pending_completions() -> list[dict]:
+    """Return terminal tasks that haven't been notified yet.
+    Includes tasks with empty reply_to (agent forgot to pass it) —
+    heartbeat will use a default notification target for those."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, type, status, params, result, error,
+                      created_at, finished_at, reply_to
+               FROM tasks
+               WHERE status IN ('completed', 'failed', 'cancelled')
+                 AND notified_at IS NULL
+                 AND finished_at >= datetime('now', '-24 hours')
+               ORDER BY finished_at ASC""",
+        ).fetchall()
+        tasks = []
+        for row in rows:
+            d = dict(row)
+            for k in ("params", "result"):
+                if d.get(k):
+                    d[k] = _json.loads(d[k])
+            tasks.append(d)
+        return tasks
+    finally:
+        conn.close()
+
+
+def mark_task_notified(task_ids: list[str]) -> int:
+    """Mark tasks as notified. Returns count of updated rows."""
+    if not task_ids:
+        return 0
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" for _ in task_ids)
+        cursor = conn.execute(
+            f"UPDATE tasks SET notified_at = {_NOW_SHANGHAI} WHERE id IN ({placeholders})",
+            task_ids,
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()

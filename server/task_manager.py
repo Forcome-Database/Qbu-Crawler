@@ -28,11 +28,12 @@ class TaskStatus(str, Enum):
 
 
 class Task:
-    def __init__(self, type: str, params: dict):
+    def __init__(self, type: str, params: dict, reply_to: str = ""):
         self.id = uuid.uuid4().hex
         self.type = type
         self.status = TaskStatus.pending
         self.params = params
+        self.reply_to = reply_to
         self.created_at = config.now_shanghai().isoformat()
         self.started_at: str | None = None
         self.finished_at: str | None = None
@@ -46,12 +47,14 @@ class Task:
             "type": self.type,
             "status": self.status.value,
             "params": self.params,
+            "reply_to": self.reply_to,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "progress": self.progress,
             "result": self.result,
             "error": self.error,
+            "notified_at": None,
         }
 
 
@@ -62,8 +65,8 @@ class TaskManager:
         self._cancel_flags: dict[str, Event] = {}
         self._translator = translator
 
-    def submit_scrape(self, urls: list[str], ownership: str = "competitor") -> Task:
-        task = Task(type="scrape", params={"urls": urls, "ownership": ownership})
+    def submit_scrape(self, urls: list[str], ownership: str = "competitor", reply_to: str = "") -> Task:
+        task = Task(type="scrape", params={"urls": urls, "ownership": ownership}, reply_to=reply_to)
         task.progress = {"total": len(urls), "completed": 0, "failed": 0, "current_url": None}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()
@@ -71,8 +74,8 @@ class TaskManager:
         self._executor.submit(self._run_scrape, task.id)
         return task
 
-    def submit_collect(self, category_url: str, max_pages: int = 0, ownership: str = "competitor") -> Task:
-        task = Task(type="collect", params={"category_url": category_url, "max_pages": max_pages, "ownership": ownership})
+    def submit_collect(self, category_url: str, max_pages: int = 0, ownership: str = "competitor", reply_to: str = "") -> Task:
+        task = Task(type="collect", params={"category_url": category_url, "max_pages": max_pages, "ownership": ownership}, reply_to=reply_to)
         task.progress = {"phase": "collecting", "urls_found": 0, "completed": 0, "failed": 0}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()

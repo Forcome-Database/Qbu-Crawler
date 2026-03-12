@@ -211,9 +211,10 @@ var TOOLS = [
       type: "object",
       properties: {
         urls: { type: "array", items: { type: "string" }, description: "Product page URLs to scrape" },
-        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor' (required)" }
+        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor'" },
+        reply_to: { type: "string", description: "Notification target when task completes. Pass the OriginatingTo value from the current message (format: user:{id} or chat:{id}). Fallback: chat:cidoOQUuAEydsdghncIE5INqg==" }
       },
-      required: ["urls", "ownership"]
+      required: ["urls", "ownership", "reply_to"]
     }
   },
   {
@@ -223,10 +224,11 @@ var TOOLS = [
       type: "object",
       properties: {
         category_url: { type: "string", description: "Category page URL" },
-        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor' (required)" },
-        max_pages: { type: "integer", description: "Max pages to collect, 0 for all" }
+        ownership: { type: "string", description: "Product ownership: 'own' or 'competitor'" },
+        max_pages: { type: "integer", description: "Max pages to collect, 0 for all" },
+        reply_to: { type: "string", description: "Notification target when task completes. Pass the OriginatingTo value from the current message (format: user:{id} or chat:{id}). Fallback: chat:cidoOQUuAEydsdghncIE5INqg==" }
       },
-      required: ["category_url", "ownership"]
+      required: ["category_url", "ownership", "reply_to"]
     }
   },
   {
@@ -283,14 +285,15 @@ var TOOLS = [
   },
   {
     name: "get_product_detail",
-    description: "Get full product info with recent reviews and price snapshots. Provide one of: product_id, url, or sku.",
+    description: "Get full product info with recent reviews and price snapshots. Accepts ONLY these parameters: product_id, url, or sku (provide one). No site filter — SKU lookup is cross-site.",
     parameters: {
       type: "object",
       properties: {
         product_id: { type: "integer", description: "Product ID, -1 to skip" },
         url: { type: "string", description: "Product page URL" },
         sku: { type: "string", description: "Product SKU" }
-      }
+      },
+      additionalProperties: false
     }
   },
   {
@@ -352,10 +355,49 @@ var TOOLS = [
     parameters: {
       type: "object",
       properties: {
-        since: { type: "string", description: "UTC timestamp (YYYY-MM-DDTHH:MM:SS), query data after this time" },
+        since: { type: "string", description: "Shanghai timestamp (YYYY-MM-DDTHH:MM:SS), query data after this time" },
         send_email: { type: "string", description: "Send email with report: 'true' or 'false', default 'true'" }
       },
       required: ["since"]
+    }
+  },
+  {
+    name: "trigger_translate",
+    description: "Manually trigger translation worker to process untranslated reviews. reset_skipped='true' resets all skipped reviews back to pending (for re-translating historical data).",
+    parameters: {
+      type: "object",
+      properties: {
+        reset_skipped: { type: "string", description: "Reset skipped reviews to pending: 'true' or 'false', default 'false'" }
+      }
+    }
+  },
+  {
+    name: "get_translate_status",
+    description: "Query translation progress: total reviews, translated, pending, failed, skipped counts. Optionally filter by time range.",
+    parameters: {
+      type: "object",
+      properties: {
+        since: { type: "string", description: "Shanghai timestamp (YYYY-MM-DDTHH:MM:SS), only count reviews after this time. Empty for all." }
+      }
+    }
+  },
+  {
+    name: "check_pending_completions",
+    description: "Check for completed tasks that haven't been notified yet. Returns tasks with terminal status (completed/failed/cancelled) that have reply_to set but not yet marked as notified. Call this in heartbeat to discover tasks needing notification.",
+    parameters: {
+      type: "object",
+      properties: {}
+    }
+  },
+  {
+    name: "mark_notified",
+    description: "Mark tasks as notified after successfully delivering completion notification. Prevents duplicate notifications. Params: task_ids (array of task ID strings).",
+    parameters: {
+      type: "object",
+      properties: {
+        task_ids: { type: "array", items: { type: "string" }, description: "Task IDs to mark as notified" }
+      },
+      required: ["task_ids"]
     }
   }
 ];
