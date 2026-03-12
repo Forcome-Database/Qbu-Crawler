@@ -51,7 +51,7 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
 
         review_rows = conn.execute(
             """
-            SELECT p.name AS product_name,
+            SELECT p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.images, p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status
@@ -194,7 +194,7 @@ def generate_excel(
     # ── 评论 sheet ────────────────────────────────────
     ws_reviews = wb.create_sheet("评论")
     review_headers = [
-        "产品名称", "评论人", "标题（原文）", "内容（原文）",
+        "产品名称", "SKU", "评论人", "标题（原文）", "内容（原文）",
         "标题（中文）", "内容（中文）", "打分", "评论时间", "照片",
     ]
     # Write header
@@ -211,13 +211,14 @@ def generate_excel(
     # Write review rows with embedded images
     for row_idx, r in enumerate(reviews, start=2):
         ws_reviews.cell(row=row_idx, column=1, value=_cell_value(r.get("product_name")))
-        ws_reviews.cell(row=row_idx, column=2, value=_cell_value(r.get("author")))
-        ws_reviews.cell(row=row_idx, column=3, value=_cell_value(r.get("headline")))
-        ws_reviews.cell(row=row_idx, column=4, value=_cell_value(r.get("body")))
-        ws_reviews.cell(row=row_idx, column=5, value=_cell_value(r.get("headline_cn")))
-        ws_reviews.cell(row=row_idx, column=6, value=_cell_value(r.get("body_cn")))
-        ws_reviews.cell(row=row_idx, column=7, value=_cell_value(r.get("rating")))
-        ws_reviews.cell(row=row_idx, column=8, value=_cell_value(r.get("date_published")))
+        ws_reviews.cell(row=row_idx, column=2, value=_cell_value(r.get("product_sku")))
+        ws_reviews.cell(row=row_idx, column=3, value=_cell_value(r.get("author")))
+        ws_reviews.cell(row=row_idx, column=4, value=_cell_value(r.get("headline")))
+        ws_reviews.cell(row=row_idx, column=5, value=_cell_value(r.get("body")))
+        ws_reviews.cell(row=row_idx, column=6, value=_cell_value(r.get("headline_cn")))
+        ws_reviews.cell(row=row_idx, column=7, value=_cell_value(r.get("body_cn")))
+        ws_reviews.cell(row=row_idx, column=8, value=_cell_value(r.get("rating")))
+        ws_reviews.cell(row=row_idx, column=9, value=_cell_value(r.get("date_published")))
 
         # Embed images as thumbnails
         image_urls = r.get("images") or []

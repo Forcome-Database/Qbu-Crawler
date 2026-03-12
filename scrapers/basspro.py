@@ -59,6 +59,7 @@ class BassProScraper(BaseScraper):
         self._dismiss_age_gate(tab)
         # 等待页面主要内容加载
         tab.wait.ele_displayed('tag:h1', timeout=15)
+        self._check_url_match(tab, url)
         # 等待 BV 组件加载（容器一定会出现，但 JSON-LD 数据只有有评论时才有）
         bv_container = tab.ele('css:.bv_main_container', timeout=10)
         # 滚动到 BV 组件位置，触发懒加载（BV 不在视口内不会注入 reviews-data）
@@ -325,6 +326,7 @@ class BassProScraper(BaseScraper):
     def _scroll_all_reviews(self, tab):
         """批量滚动评论区，触发图片懒加载。
         每 BATCH_SIZE 个 section 滚动一次到最后一个，减少 JS 调用次数。
+        滚完后额外对含 .photos-tile 的 section 逐个定向滚动，确保评论照片触发加载。
         """
         BATCH_SIZE = 20
         total = tab.run_js("""
@@ -355,6 +357,33 @@ class BassProScraper(BaseScraper):
             """)
             time.sleep(0.3)
         time.sleep(1)
+
+        # 定向滚动：对含 .photos-tile 但图片未加载的 section 逐个滚动，触发懒加载
+        photo_indices = tab.run_js("""
+            const c = document.querySelector('[data-bv-show="reviews"]');
+            if (!c || !c.shadowRoot) return '[]';
+            const indices = [];
+            c.shadowRoot.querySelectorAll('section').forEach((s, i) => {
+                const tile = s.querySelector('.photos-tile');
+                if (tile && !tile.querySelector('img[src*="photos-us.bazaarvoice.com"]')) {
+                    indices.push(i);
+                }
+            });
+            return JSON.stringify(indices);
+        """)
+        unloaded = json.loads(photo_indices) if isinstance(photo_indices, str) else (photo_indices or [])
+        if unloaded:
+            logger.debug(f"  {len(unloaded)} 个评论照片未加载，定向滚动触发懒加载")
+            for idx in unloaded:
+                tab.run_js(f"""
+                    const c = document.querySelector('[data-bv-show="reviews"]');
+                    if (c && c.shadowRoot) {{
+                        const s = c.shadowRoot.querySelectorAll('section')[{idx}];
+                        if (s) s.scrollIntoView({{block: 'center'}});
+                    }}
+                """)
+                time.sleep(0.5)
+            time.sleep(1)
 
     def _extract_reviews_from_dom(self, tab) -> list:
         """从 BV Shadow DOM 提取所有评论数据（分批提取，避免 JS 超时）"""

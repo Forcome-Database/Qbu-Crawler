@@ -78,3 +78,5 @@
 - **评论图片必须逐个 section 慢滚动**：BV 图片使用 `loading="lazy"`，`forEach + scrollIntoView` 同步执行太快无效（图片 img 标签不渲染），必须 Python 循环逐个 section `scrollIntoView` + `time.sleep(0.3)`，每页提取前执行
 - **评论图片回填**：`save_reviews` 增量去重时，如果旧记录无图片而新数据有图片，会自动 UPDATE 回填 images 字段，无需手动清理
 - **评论翻页等待时间**：当前每页翻页后 `time.sleep(2)`，评论多的产品（396 条）实测可获取约 209 条，可能需要增加等待或检测页面内容变化来提高覆盖率
+- **并行任务必须使用独立浏览器**：`auto_port()` 确保每个 scraper 实例启动独立浏览器进程，否则并行任务共享 `latest_tab` 导致数据错位
+- **导航后校验 URL**：`_check_url_match()` 检测实际 URL 是否匹配预期，及时发现重定向或并行干扰

@@ -15,6 +15,7 @@ from server.api.products import router as products_router
 from server.mcp.tools import register_tools
 from server.mcp.resources import register_resources
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 # Suppress noisy Pydantic validation errors when MCP clients send
@@ -26,6 +27,7 @@ logging.getLogger("mcp.shared.session").setLevel(logging.ERROR)
 translator = TranslationWorker(
     interval=config.TRANSLATE_INTERVAL,
     batch_size=config.LLM_TRANSLATE_BATCH_SIZE,
+    concurrency=config.TRANSLATE_WORKERS,
 )
 task_manager = TaskManager(max_workers=config.MAX_WORKERS, translator=translator)
 

@@ -13,7 +13,7 @@ DB_PATH = os.path.join(DATA_DIR, "products.db")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # DrissionPage 浏览器配置
-HEADLESS = False  # 设为 True 可无头运行
+HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"  # 环境变量控制无头模式
 PAGE_LOAD_TIMEOUT = 30  # 页面加载超时（秒）
 LOAD_MODE = "eager"  # eager: DOM就绪即停(推荐) | normal: 等所有资源 | none: 连接即停
 NO_IMAGES = True  # 禁止加载图片，减少带宽和加载时间
@@ -59,6 +59,7 @@ LLM_TRANSLATE_BATCH_SIZE = int(os.getenv("LLM_TRANSLATE_BATCH_SIZE", "20"))
 # ── Translation Worker ────────────────────────
 TRANSLATE_INTERVAL = int(os.getenv("TRANSLATE_INTERVAL", "60"))
 TRANSLATE_MAX_RETRIES = int(os.getenv("TRANSLATE_MAX_RETRIES", "3"))
+TRANSLATE_WORKERS = int(os.getenv("TRANSLATE_WORKERS", "3"))
 
 # ── Email SMTP ────────────────────────────────────
 SMTP_HOST = os.getenv("SMTP_HOST", "")

@@ -15,6 +15,7 @@ class MeatYourMakerScraper(BaseScraper):
     def _build_options() -> ChromiumOptions:
         """覆盖基类：使用 normal 模式，meatyourmaker 的 BV 在 eager 模式下无法初始化"""
         options = ChromiumOptions()
+        options.auto_port()  # 每个实例使用独立端口，防止并行任务共享浏览器
         if HEADLESS:
             options.headless()
         if NO_IMAGES:
@@ -29,6 +30,7 @@ class MeatYourMakerScraper(BaseScraper):
         tab = self.browser.latest_tab
         tab.get(url)
         tab.wait.ele_displayed('tag:h1', timeout=15)
+        self._check_url_match(tab, url)
 
         # meatyourmaker 的 BV 需要先展开 Reviews 区域才会加载
         # 先点击 Reviews toggler，再等待 BV 数据

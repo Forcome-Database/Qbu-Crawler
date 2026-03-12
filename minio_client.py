@@ -40,7 +40,8 @@ def upload_image(image_url: str) -> str | None:
     elif "webp" in content_type:
         ext = "webp"
 
-    month = datetime.now().strftime("%Y-%m")
+    from config import now_shanghai
+    month = now_shanghai().strftime("%Y-%m")
     object_name = f"images/{month}/{url_hash}.{ext}"
 
     client = _get_client()

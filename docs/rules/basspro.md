@@ -42,7 +42,7 @@
 
 1. `_click_reviews_tab(tab)` — 点击 Reviews Accordion 展开（`.styles_AccordionWrapper__JYyM_` 中文本含 "Reviews" 的标题）
 2. `_load_all_reviews(tab)` — 循环点击 Shadow DOM 内 `button[aria-label*="Load More"]` 直到消失（安全上限 200 次），每次点击后等待评论数量增加
-3. `_scroll_all_reviews(tab)` — 逐个 section 滚动到视口，触发图片懒加载
+3. `_scroll_all_reviews(tab)` — 批量滚动 + 定向滚动触发图片懒加载（见下文）
 4. `_extract_reviews_from_dom(tab)` — 从 Shadow DOM 的叶子级 `section` 元素提取评论数据
 5. `_process_review_images(reviews)` — 下载评论图片到 MinIO，替换为公开 URL
 
@@ -90,7 +90,9 @@
 - **BV Shadow DOM 选择器基于 hash class**：如 `16dr7i1-6`、`bm6gry`、`g3jej5` 等，BV 版本升级可能变化，需注意维护
 - **BV 评论去重**：Shadow DOM 中同一评论可能重复渲染（如 featured + normal），用 `author|headline` 组合键去重
 - **LOAD MORE 点击后等评论数量变化**：不能用固定 sleep，应检测 section 数量增加，最多等 5 秒
-- **评论图片需滚动触发懒加载**：BV 对图片做了懒加载，提取前必须逐个 section 滚动到视口，否则 img 标签不会渲染
+- **评论图片需滚动触发懒加载**：BV 评论图片有两种渲染位置——`[data-bv-v="contentSummary"]` 内和 `.photos-tile` 容器。`.photos-tile` 内的 `<IMG>` 标签需要该 section 在视口内停留才会触发懒加载。批量滚动（BATCH_SIZE=20）在评论数较少时会直接跳到末尾，导致中间 section 的图片来不及加载。解决方案：批量滚动后，额外查找含 `.photos-tile` 但图片未加载的 section，逐个定向滚动（`scrollIntoView({block: 'center'})`）并等待 0.5 秒
 - **排除外层 section 容器**：选取评论 section 时必须排除包含子 section 的外层容器（如顶部 "Customer Images and Videos" 轮播所在的 section），否则会把轮播图片误归到第一条评论
+- **并行任务必须使用独立浏览器**：`auto_port()` 确保每个 scraper 实例启动独立浏览器进程，否则并行任务共享 `latest_tab` 导致数据错位
+- **导航后校验 URL**：`_check_url_match()` 检测实际 URL 是否匹配预期，及时发现重定向或并行干扰
 - **SKU 文本用中文冒号**：正则需兼容 `SKU：` 和 `SKU:`，且 SKU 可能含字母（正则 `[\w-]+`）
 - **产品 URL 两种格式**：`/shop/en/xxx` 和 `/p/xxx`（后者是规范化后的路径）
