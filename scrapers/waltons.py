@@ -212,6 +212,11 @@ class WaltonsScraper(BaseScraper):
             const blocks = document.querySelectorAll('.trustspot-widget-review-block');
             const reviews = [];
             blocks.forEach(block => {
+                // 跳过 Q&A 条目：TrustSpot 的 .trustspot-widget-review-block 同时
+                // 包含评论和问答，Q&A 有 .ts-qa-wrapper 或 h4 问题标题，无 .comment-box
+                if (!block.querySelector('.comment-box')) return;
+                if (block.querySelector('.ts-qa-wrapper')) return;
+
                 // Author
                 const userEl = block.querySelector('.result-box-header .user-name');
                 const author = userEl ? userEl.textContent.trim() : '';
