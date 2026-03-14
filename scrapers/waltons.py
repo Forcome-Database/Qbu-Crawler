@@ -4,13 +4,46 @@ import logging
 import time
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
-from scrapers.base import BaseScraper
-from config import BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, MAX_REVIEWS, PAGE_LOAD_TIMEOUT
+from DrissionPage import ChromiumOptions
+from scrapers.base import BaseScraper, _has_display
+from config import (
+    HEADLESS, PAGE_LOAD_TIMEOUT, LOAD_MODE, NO_IMAGES,
+    RETRY_TIMES, RETRY_INTERVAL,
+    BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, MAX_REVIEWS,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class WaltonsScraper(BaseScraper):
+
+    @staticmethod
+    def _build_options() -> ChromiumOptions:
+        """覆盖基类：添加反自动化检测参数，绕过 Cloudflare bot 检测"""
+        options = ChromiumOptions()
+        options.auto_port()
+        if HEADLESS:
+            if _has_display():
+                options.headless()
+            options.set_argument('--window-size=1920,1080')
+        else:
+            options.set_argument('--start-maximized')
+        if NO_IMAGES:
+            options.no_imgs(True)
+        # waltons.com 的 TrustSpot 脚本在 eager 模式下无法初始化，
+        # 评分/评论的 JSON-LD 由 TrustSpot 动态注入，必须用 normal 模式
+        options.set_load_mode("normal")
+        options.set_retry(times=RETRY_TIMES, interval=RETRY_INTERVAL)
+        options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
+        options.set_argument('--deny-permission-prompts')
+        # waltons.com 使用 Cloudflare，需要禁用自动化检测特征
+        options.set_argument('--disable-blink-features=AutomationControlled')
+        options.set_user_agent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/131.0.0.0 Safari/537.36'
+        )
+        return options
 
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
