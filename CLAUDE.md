@@ -7,6 +7,7 @@
 当前支持站点：
 - **Bass Pro Shops** — 规则文档：`docs/rules/basspro.md`
 - **Meat Your Maker** — 规则文档：`docs/rules/meatyourmaker.md`
+- **Walton's** — 规则文档：`docs/rules/waltons.md`
 
 ## 技术栈
 
@@ -69,7 +70,8 @@ Qbu-Crawler/
 │   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
 │   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
 │   ├── basspro.py     # BassProScraper — Bass Pro Shops
-│   └── meatyourmaker.py  # MeatYourMakerScraper — Meat Your Maker
+│   ├── meatyourmaker.py  # MeatYourMakerScraper — Meat Your Maker
+│   └── waltons.py     # WaltonsScraper — Walton's
 ├── data/
 │   └── products.db
 └── docs/
@@ -258,6 +260,7 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **`eager` 加载模式可能阻止第三方脚本初始化**：某些站点（如 SFCC/Demandware 平台）的 BV 脚本在 `eager` 模式下无法初始化，需改用 `normal` 模式。各站点子类可通过覆盖 `_build_options()` 定制
 - **批量滚动可能跳过中间元素的懒加载**：`scrollIntoView` 批量滚动（如每 20 个跳一次）在元素总数少于批大小时，会一步跳到末尾，中间元素一闪而过无法触发懒加载。需要额外做一轮定向滚动，逐个滚动到含懒加载内容但未加载的元素
 - **`Chromium()` 默认共享浏览器进程**：DrissionPage 的 `Chromium()` 默认连接到同一端口（9222）的浏览器进程。多线程并行创建多个 scraper 实例时，所有实例共享同一个浏览器和标签页，导致 `tab.get()` 竞争、数据错位。**必须在 `ChromiumOptions` 中调用 `auto_port()`** 让每个实例使用独立端口和独立浏览器进程
+- **Cloudflare bot 检测需要额外配置**：使用 Cloudflare 的站点（如 waltons.com）会检测 `navigator.webdriver` 属性。必须添加 `--disable-blink-features=AutomationControlled` 并设置真实 User-Agent 才能绕过。同时需要 `normal` 加载模式让 Cloudflare JS challenge 有机会执行
 
 ## 工作流程规范
 
