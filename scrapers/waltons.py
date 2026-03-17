@@ -326,17 +326,31 @@ class WaltonsScraper(BaseScraper):
 
         for page_num in range(max_pages):
             page_reviews = self._extract_page_reviews(tab)
+            new_count = 0
             for r in page_reviews:
                 body_hash = hashlib.md5(r.get("body", "").encode()).hexdigest()[:16]
                 key = (r.get("author", ""), body_hash)
                 if key not in seen:
                     seen.add(key)
                     all_reviews.append(r)
+                    new_count += 1
+
+            logger.info(
+                f"  [TrustSpot] 第 {page_num + 1} 页: "
+                f"提取 {len(page_reviews)} 条, 新增 {new_count} 条, "
+                f"累计 {len(all_reviews)} 条"
+            )
+
+            # TrustSpot 的 next-page 按钮永远存在，翻过最后一页后会循环显示重复评论。
+            # 因此不能依赖按钮是否存在来终止，必须用"本页无新增评论"来判断已翻完。
+            if new_count == 0:
+                logger.info("  [TrustSpot] 本页无新增评论，已翻完所有页")
+                break
 
             # Check MAX_REVIEWS limit
             if MAX_REVIEWS > 0 and len(all_reviews) >= MAX_REVIEWS:
                 logger.info(
-                    f"Reached MAX_REVIEWS limit ({MAX_REVIEWS}), stopping review extraction"
+                    f"  [TrustSpot] 已达评论上限 {MAX_REVIEWS}，停止翻页"
                 )
                 all_reviews = all_reviews[:MAX_REVIEWS]
                 break
