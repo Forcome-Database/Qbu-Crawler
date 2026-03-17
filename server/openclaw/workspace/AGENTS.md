@@ -37,6 +37,7 @@ IMPORTANT: 以下两条规则优先级最高，任何情况下不可违反。
 提取 URL 域名，匹配支持站点：
 - `www.basspro.com` → basspro
 - `www.meatyourmaker.com` → meatyourmaker
+- `www.waltons.com` / `waltons.com` → waltons
 
 不匹配 → 告知不支持，**流程结束**。
 

@@ -10,10 +10,10 @@ IMPORTANT: 此技能仅处理"加入定时任务"的写入操作。URL 路由判
 ## 步骤 1：判断输入类型并验证
 
 - `http://` 或 `https://` 开头 → URL，提取域名匹配支持站点
-- 其他 → SKU，用 brave 搜索 `site:basspro.com {SKU}` 和 `site:meatyourmaker.com {SKU}` 找产品页 URL
+- 其他 → SKU，用 brave 搜索 `site:basspro.com {SKU}`、`site:meatyourmaker.com {SKU}` 和 `site:waltons.com {SKU}` 找产品页 URL
 - SKU 搜索找不到 → 告知用户"无法找到该 SKU 对应的产品页"，**流程结束**
 
-支持站点：`www.basspro.com`、`www.meatyourmaker.com`
+支持站点：`www.basspro.com`、`www.meatyourmaker.com`、`www.waltons.com` / `waltons.com`
 
 ## 步骤 2：确认 ownership
 

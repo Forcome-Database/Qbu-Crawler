@@ -28,7 +28,7 @@ def register_tools(mcp: FastMCP):
     @mcp.tool
     def start_scrape(urls: list[str], ownership: str, reply_to: str = "") -> str:
         """提交一个或多个产品页 URL 开始爬取，返回任务 ID 用于后续查询进度。
-        支持 Bass Pro Shops (www.basspro.com) 和 Meat Your Maker (www.meatyourmaker.com) 站点。
+        支持 Bass Pro Shops (www.basspro.com)、Meat Your Maker (www.meatyourmaker.com) 和 Walton's (waltons.com) 站点。
         ownership: 产品归属，own 表示自有产品，competitor 表示竞品。
         reply_to: 可选，任务完成后的通知目标（如钉钉群/用户 ID），由心跳自动检测并投递。"""
         if ownership not in ("own", "competitor"):
@@ -110,7 +110,7 @@ def register_tools(mcp: FastMCP):
         offset: int = 0,
     ) -> str:
         """搜索和筛选已采集的产品数据。
-        - site: 按站点筛选，可选 basspro 或 meatyourmaker，留空不筛选
+        - site: 按站点筛选，可选 basspro、meatyourmaker 或 waltons，留空不筛选
         - search: 按产品名称关键词模糊搜索
         - min_price/max_price: 价格区间过滤（美元），-1 表示不限制
         - stock_status: 库存状态，可选 in_stock/out_of_stock/unknown，留空不筛选
@@ -175,7 +175,7 @@ def register_tools(mcp: FastMCP):
         """查询产品评论，支持多维度筛选。
         - product_id: 指定产品的评论，-1 表示不限
         - sku: 按产品 SKU 精确匹配，留空不限
-        - site: 按站点筛选（basspro 或 meatyourmaker），留空不限
+        - site: 按站点筛选（basspro、meatyourmaker 或 waltons），留空不限
         - ownership: 按产品归属筛选，可选 own（自有）或 competitor（竞品），留空不限
         - min_rating/max_rating: 评分区间（0-5），-1 表示不限
         - author: 作者名模糊匹配

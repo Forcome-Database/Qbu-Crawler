@@ -17,6 +17,7 @@ tasks (爬虫任务记录)
 ## 支持的站点
 - basspro (Bass Pro Shops)
 - meatyourmaker (Meat Your Maker)
+- waltons (Walton's)
 
 ## 数据特性
 - products 表使用 UPSERT，始终是最新状态
@@ -36,7 +37,7 @@ SCHEMA_PRODUCTS = """
 |------|------|------|------|
 | id | INTEGER | PK, AUTO | 产品 ID |
 | url | TEXT | UNIQUE, NOT NULL | 产品页 URL |
-| site | TEXT | NOT NULL | 站点标识：basspro, meatyourmaker |
+| site | TEXT | NOT NULL | 站点标识：basspro, meatyourmaker, waltons |
 | name | TEXT | | 产品名称 |
 | sku | TEXT | | SKU 编号 |
 | price | REAL | | 当前价格 (USD) |

@@ -4,6 +4,7 @@
 
 - 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com`
 - 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com`
+- 🔧 **Walton's**（waltons）— `www.waltons.com` / `waltons.com`
 
 ## 工具参数速查
 

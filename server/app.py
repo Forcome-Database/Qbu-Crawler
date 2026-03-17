@@ -37,7 +37,7 @@ mcp = FastMCP(
     instructions=(
         "多站点产品数据爬虫服务。可以启动爬虫任务采集产品信息和评论，"
         "查询已采集的产品、评论、价格历史等数据，"
-        "支持 Bass Pro Shops 和 Meat Your Maker 两个站点。"
+        "支持 Bass Pro Shops、Meat Your Maker 和 Walton's 三个站点。"
         "如需执行复杂查询，请先通过 Resources 了解表结构，再使用 execute_sql。"
     ),
 )
