@@ -131,8 +131,9 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `RETRY_TIMES` | `3` | 页面加载失败重试次数 |
 | `RETRY_INTERVAL` | `2` | 重试间隔（秒） |
 | `REQUEST_DELAY` | `(1, 3)` | 请求间随机延迟范围（秒），`None` 禁用 |
-| `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用 |
+| `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用（用户数据模式下自动禁用） |
 | `MAX_REVIEWS` | `200` | 单产品最多加载评论数，`0` 不限（大量评论会导致浏览器崩溃） |
+| `CHROME_USER_DATA_PATH` | — | Chrome 用户数据目录路径，留空用独立浏览器。启用后复用已有 cookie/session 绕过 Akamai 等严格反爬。固定调试端口 19222，采集期间不可手动打开 Chrome |
 
 ### 服务器配置（.env）
 
@@ -265,6 +266,10 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **批量滚动可能跳过中间元素的懒加载**：`scrollIntoView` 批量滚动（如每 20 个跳一次）在元素总数少于批大小时，会一步跳到末尾，中间元素一闪而过无法触发懒加载。需要额外做一轮定向滚动，逐个滚动到含懒加载内容但未加载的元素
 - **`Chromium()` 默认共享浏览器进程**：DrissionPage 的 `Chromium()` 默认连接到同一端口（9222）的浏览器进程。多线程并行创建多个 scraper 实例时，所有实例共享同一个浏览器和标签页，导致 `tab.get()` 竞争、数据错位。**必须在 `ChromiumOptions` 中调用 `auto_port()`** 让每个实例使用独立端口和独立浏览器进程
 - **Cloudflare bot 检测需要额外配置**：使用 Cloudflare 的站点（如 waltons.com）会检测 `navigator.webdriver` 属性。必须添加 `--disable-blink-features=AutomationControlled` 并设置真实 User-Agent 才能绕过。同时需要 `normal` 加载模式让 Cloudflare JS challenge 有机会执行
+- **Akamai 反爬比 Cloudflare 更严格**：Akamai（如 basspro.com）除了 JS 检测外还做 TLS 指纹（JA3/JA4）和 CDP 协议检测，`--disable-blink-features` 不够。解决方案：设置 `CHROME_USER_DATA_PATH` 复用正常 Chrome 的 cookie/session。注意 `auto_port()` 会覆盖用户数据目录，必须用 `set_local_port()` + subprocess 预启动
+- **DrissionPage `set_user_data_path()` 在大目录下启动超时**：Chrome 用户数据目录可能数 GB，DrissionPage 的内部连接超时（几秒）不够。解决方案：用 `subprocess.Popen` 预启动 Chrome，轮询等待调试端口就绪（最多 20 秒），再用 `Chromium(port)` 接管
+- **TrustSpot 的翻页按钮永远存在**：TrustSpot 的 `a.next-page` 在最后一页后不会消失，而是循环回第一页。不能用按钮是否存在判断终止，必须用「本页无新增评论（全部去重命中）」来检测已翻完
+- **TrustSpot 的 `.trustspot-widget-review-block` 同时包含评论和 Q&A**：必须过滤掉无 `.comment-box` 或含 `.ts-qa-wrapper` 的 block，否则会采集到空正文的问答条目
 
 ## 工作流程规范
 

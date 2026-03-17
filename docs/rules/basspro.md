@@ -6,6 +6,32 @@
 - **产品 URL 格式**：`/shop/en/xxx` 或 `/p/xxx`（后者是规范化路径）
 - **分类 URL 格式**：`/l/category-slug`
 
+## 反爬机制
+
+basspro.com 使用 **Akamai** 反爬保护，检测手段包括：
+- TLS 指纹（JA3/JA4）—— 检测自动化浏览器的 TLS 握手特征
+- CDP 协议检测 —— 检测 Chrome DevTools Protocol 调试端口
+- JS Sensor Cookie（`_abck`）—— Akamai Bot Manager 种下的 cookie
+
+**`--disable-blink-features=AutomationControlled` 不够绕过 Akamai**（仅对 Cloudflare 有效）。
+
+### 解决方案：Chrome 用户数据模式
+
+设置 `CHROME_USER_DATA_PATH` 环境变量指向正常 Chrome 的用户数据目录，复用已有的 Akamai sensor cookie：
+
+```bash
+# Windows
+CHROME_USER_DATA_PATH=C:\Users\你的用户名\AppData\Local\Google\Chrome\User Data
+
+# Linux
+CHROME_USER_DATA_PATH=/home/你的用户名/.config/google-chrome
+```
+
+**注意事项**：
+- 启用后采集期间不可手动打开 Chrome（同一用户数据不能被两个进程使用）
+- 需要先用正常 Chrome 手动访问一次 basspro.com（让 Akamai 种下有效 cookie）
+- 用户数据模式下不会自动重启浏览器（保留 cookie/session）
+
 ## 站点专属配置
 
 | 配置 | 默认值 | 说明 |

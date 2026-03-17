@@ -62,7 +62,7 @@ waltons.com 使用 **Cloudflare** 保护，需要：
 
 | 数据 | 选择器 |
 |------|--------|
-| 评论容器 | `.trustspot-widget-review-block` |
+| 评论容器 | `.trustspot-widget-review-block`（⚠️ 同时包含评论和 Q&A，必须过滤） |
 | 作者 | `.result-box-header .user-name` |
 | 日期 | `.result-box-header .date span`（格式 `MM/DD/YYYY`） |
 | 评分 | `.ts-widget-review-star.filled` 计数（降级：`.stars .ts-stars-1[title]`） |
@@ -70,16 +70,34 @@ waltons.com 使用 **Cloudflare** 保护，需要：
 | 标题 | **无**（TrustSpot 不支持评论标题，headline 为空字符串） |
 | 图片 | `.description-block img`（排除 social/star/icon/avatar 图标） |
 
+### Q&A 过滤（重要）
+
+`.trustspot-widget-review-block` 同时包含产品评论和 Q&A 问答条目，必须过滤：
+- **评论**：有 `.comment-box`，无 `.ts-qa-wrapper`
+- **Q&A**：无 `.comment-box`，有 `.ts-qa-wrapper` 和 `<h4>` 问题标题，作者通常为 "Walton's Inc."
+
+过滤逻辑：
+```javascript
+if (!block.querySelector('.comment-box')) return;  // 无评论内容区 → Q&A
+if (block.querySelector('.ts-qa-wrapper')) return;  // 有问答容器 → Q&A
+```
+
+不过滤会导致大量空正文的记录入库（该产品 143 条评论 + 24 条 Q&A 问答）。
+
 ### 翻页机制
 
 - 翻页按钮：`a.next-page`（JS 点击，页面内替换评论内容）
-- 每页约 54 条评论
+- 每页约 15 条评论（过滤 Q&A 后）
 - 翻页后等待 2 秒供 TrustSpot 重新渲染
 - 受 `MAX_REVIEWS`（默认 200）限制
 
-### 评论去重
+**⚠️ `a.next-page` 按钮永远存在**：翻过最后一页后不会消失，而是循环回第一页显示重复评论。不能依赖按钮是否存在来终止翻页。
 
-- 使用 `(author, body_hash)` 组合去重
+### 翻页终止策略
+
+使用「本页无新增评论」检测已翻完：
+- 每页提取后按 `(author, body_hash)` 去重统计 `new_count`
+- `new_count == 0` → 本页全是已见过的重复评论 → 停止翻页
 - `body_hash = MD5(body)[:16]`
 - TrustSpot 无 headline，所有评论 headline 为空字符串
 
