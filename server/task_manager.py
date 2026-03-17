@@ -4,7 +4,8 @@ Manages scrape/collect tasks in a thread pool, tracks progress,
 supports cancellation, and persists task history to SQLite.
 """
 
-import subprocess
+import json as _json
+import urllib.request
 import uuid
 import logging
 from datetime import datetime
@@ -266,19 +267,27 @@ class TaskManager:
 
     @staticmethod
     def _notify_heartbeat(task_id: str):
-        """任务完成后立即触发 OpenClaw 心跳，让 Agent 尽快发送通知。
-        使用 openclaw system event --mode now 即时唤醒，不等下次轮询。
-        失败时静默（不影响主流程，最坏情况回退到定时心跳轮询）。"""
+        """任务完成后通过 HTTP webhook 立即触发 OpenClaw 心跳。
+        POST /hooks/wake with mode=now，即时唤醒 Agent 处理待通知任务。
+        失败时静默（不影响主流程，回退到定时心跳轮询）。"""
+        hook_url = config.OPENCLAW_HOOK_URL
+        hook_token = config.OPENCLAW_HOOK_TOKEN
+        if not hook_url:
+            return
         try:
-            subprocess.Popen(
-                ["openclaw", "system", "event",
-                 "--text", f"任务 {task_id[:8]} 已完成，请检查待通知任务",
-                 "--mode", "now"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            data = _json.dumps({
+                "text": f"任务 {task_id[:8]} 已完成，请检查待通知任务",
+                "mode": "now",
+            }).encode()
+            req = urllib.request.Request(
+                hook_url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **({"Authorization": f"Bearer {hook_token}"} if hook_token else {}),
+                },
             )
-            logger.info(f"[Task {task_id}] Triggered immediate heartbeat")
-        except FileNotFoundError:
-            logger.debug("openclaw CLI not found, skipping immediate heartbeat")
+            urllib.request.urlopen(req, timeout=5)
+            logger.info(f"[Task {task_id}] Triggered immediate heartbeat via webhook")
         except Exception as e:
-            logger.debug(f"Failed to trigger heartbeat: {e}")
+            logger.debug(f"Failed to trigger heartbeat webhook: {e}")

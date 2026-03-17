@@ -142,6 +142,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `SERVER_PORT` | `8000` | 服务监听端口 |
 | `API_KEY` | （必填） | HTTP API 认证密钥 |
 | `MAX_WORKERS` | `3` | 爬虫任务线程池大小 |
+| `OPENCLAW_HOOK_URL` | — | OpenClaw webhook 地址（如 `http://127.0.0.1:18789/hooks/wake`），留空禁用即时通知 |
+| `OPENCLAW_HOOK_TOKEN` | — | OpenClaw hooks.token，与 openclaw.json 中配置一致 |
 | `SQL_QUERY_TIMEOUT` | `5` | execute_sql 超时（秒） |
 | `SQL_QUERY_MAX_ROWS` | `500` | execute_sql 最大返回行数 |
 

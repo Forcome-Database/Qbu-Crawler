@@ -50,6 +50,10 @@ API_KEY = os.getenv("API_KEY", "")
 # ── Task Manager ────────────────────────────────────
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3"))
 
+# ── OpenClaw Webhook（任务完成即时通知）────────────
+OPENCLAW_HOOK_URL = os.getenv("OPENCLAW_HOOK_URL", "")    # e.g. http://127.0.0.1:18789/hooks/wake
+OPENCLAW_HOOK_TOKEN = os.getenv("OPENCLAW_HOOK_TOKEN", "")  # hooks.token in openclaw.json
+
 # ── LLM Translation (OpenAI-compatible) ───────────
 LLM_API_BASE = os.getenv("LLM_API_BASE", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
