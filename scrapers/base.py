@@ -1,13 +1,16 @@
 import json
 import logging
 import os
+import subprocess
 import sys
+import time
 from urllib.parse import urlparse
 
 from DrissionPage import Chromium, ChromiumOptions
 from config import (
     HEADLESS, PAGE_LOAD_TIMEOUT, LOAD_MODE, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL, REQUEST_DELAY, RESTART_EVERY,
+    CHROME_USER_DATA_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,12 +41,38 @@ def _ensure_virtual_display():
         )
 
 
+def _find_chrome() -> str:
+    """查找 Chrome 可执行文件路径"""
+    if sys.platform == 'win32':
+        for path in [
+            os.path.expandvars(r'%ProgramFiles%\Google\Chrome\Application\chrome.exe'),
+            os.path.expandvars(r'%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe'),
+            os.path.expandvars(r'%LocalAppData%\Google\Chrome\Application\chrome.exe'),
+        ]:
+            if os.path.isfile(path):
+                return path
+    else:
+        for name in ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']:
+            import shutil
+            path = shutil.which(name)
+            if path:
+                return path
+    raise FileNotFoundError("Chrome executable not found")
+
+
 class BaseScraper:
+    # 用户数据模式下 Chrome 使用的固定调试端口
+    _USER_DATA_PORT = 19222
+
     def __init__(self):
         if HEADLESS and not _has_display():
             _ensure_virtual_display()
-        self._options = self._build_options()
-        self.browser = Chromium(self._options)
+        self._use_user_data = bool(CHROME_USER_DATA_PATH)
+        if self._use_user_data:
+            self.browser = self._launch_with_user_data()
+        else:
+            self._options = self._build_options()
+            self.browser = Chromium(self._options)
         self._scrape_count = 0
 
     @staticmethod
@@ -52,10 +81,7 @@ class BaseScraper:
         options.auto_port()  # 每个实例使用独立端口，防止并行任务共享浏览器
         if HEADLESS:
             if _has_display():
-                # Windows / Linux 桌面：正常无头模式
                 options.headless()
-            # else: Linux 服务器无显示 → 已通过 _ensure_virtual_display() 启动 Xvfb，
-            #        使用有头模式运行在虚拟显示上，完全绕过反无头检测
             options.set_argument('--window-size=1920,1080')
         else:
             options.set_argument('--start-maximized')
@@ -64,14 +90,53 @@ class BaseScraper:
         options.set_load_mode(LOAD_MODE)
         options.set_retry(times=RETRY_TIMES, interval=RETRY_INTERVAL)
         options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
-        # 自动拒绝所有浏览器权限弹窗（位置、通知等），防止原生弹窗遮挡 DOM 交互
         options.set_argument('--deny-permission-prompts')
-        # 禁用自动化检测特征，绕过 Akamai/Cloudflare 等反爬 bot 检测
         options.set_argument('--disable-blink-features=AutomationControlled')
         return options
 
+    @classmethod
+    def _launch_with_user_data(cls) -> Chromium:
+        """使用 Chrome 用户数据启动浏览器（绕过 Akamai 等严格反爬）。
+        DrissionPage 的 set_user_data_path 在大用户数据目录下启动超时，
+        改用 subprocess 预启动 Chrome，等待就绪后用 Chromium(port) 接管。"""
+        port = cls._USER_DATA_PORT
+        # 如果该端口已有 Chrome 运行，直接接管
+        try:
+            return Chromium(port)
+        except Exception:
+            pass
+        # 构造启动参数
+        chrome_path = _find_chrome()
+        args = [
+            chrome_path,
+            f'--remote-debugging-port={port}',
+            f'--user-data-dir={CHROME_USER_DATA_PATH}',
+            '--profile-directory=Default',
+            '--disable-blink-features=AutomationControlled',
+            '--deny-permission-prompts',
+            '--no-first-run',
+            '--no-default-browser-check',
+            'about:blank',
+        ]
+        if HEADLESS and _has_display():
+            args.append('--headless=new')
+        # 不恢复上次会话，避免打开大量旧标签页
+        args.append('--disable-session-crashed-bubble')
+        args.append('--restore-last-session=false')
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 等待 Chrome 调试端口就绪
+        for _ in range(20):
+            time.sleep(1)
+            try:
+                return Chromium(port)
+            except Exception:
+                continue
+        raise RuntimeError(f"Chrome with user data failed to start on port {port}")
+
     def _maybe_restart_browser(self):
         """定期重启浏览器，防止长时间运行内存泄漏"""
+        if self._use_user_data:
+            return  # 用户数据模式不重启，保留 cookie/session
         if RESTART_EVERY and self._scrape_count > 0 and self._scrape_count % RESTART_EVERY == 0:
             print(f"  [优化] 已抓取 {self._scrape_count} 个产品，重启浏览器释放内存")
             try:

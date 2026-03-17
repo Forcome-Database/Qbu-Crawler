@@ -26,6 +26,9 @@ RETRY_INTERVAL = 2  # 重试间隔（秒）
 BV_WAIT_TIMEOUT = 10  # Bazaarvoice 数据等待超时（秒）
 BV_POLL_INTERVAL = 0.5  # BV 数据轮询间隔（秒）
 
+# Chrome 用户数据（绕过 Akamai 等严格反爬，复用已有 cookie/session）
+CHROME_USER_DATA_PATH = os.getenv("CHROME_USER_DATA_PATH", "")  # 留空则用独立浏览器
+
 # 反爬配置
 REQUEST_DELAY = (1, 3)  # 请求间随机延迟范围（秒），设为 None 禁用
 
