@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import sys
 from urllib.parse import urlparse
 
 from DrissionPage import Chromium, ChromiumOptions
@@ -11,8 +13,35 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def _has_display() -> bool:
+    """检测当前环境是否有可用的显示服务（X11/Wayland/Windows）"""
+    if sys.platform == 'win32':
+        return True
+    return bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+
+
+def _ensure_virtual_display():
+    """Linux 无显示环境时，自动启动 Xvfb 虚拟显示。
+    需要安装：apt install xvfb + pip install PyVirtualDisplay
+    """
+    if sys.platform == 'win32' or _has_display():
+        return
+    try:
+        from pyvirtualdisplay import Display
+        display = Display(visible=0, size=(1920, 1080))
+        display.start()
+        logger.info(f"已启动虚拟显示 (DISPLAY={os.environ.get('DISPLAY')})")
+    except ImportError:
+        logger.warning(
+            "Linux 无显示环境且未安装 PyVirtualDisplay，"
+            "请运行: pip install PyVirtualDisplay && apt install xvfb"
+        )
+
+
 class BaseScraper:
     def __init__(self):
+        if HEADLESS and not _has_display():
+            _ensure_virtual_display()
         self._options = self._build_options()
         self.browser = Chromium(self._options)
         self._scrape_count = 0
@@ -22,7 +51,14 @@ class BaseScraper:
         options = ChromiumOptions()
         options.auto_port()  # 每个实例使用独立端口，防止并行任务共享浏览器
         if HEADLESS:
-            options.headless()
+            if _has_display():
+                # Windows / Linux 桌面：正常无头模式
+                options.headless()
+            # else: Linux 服务器无显示 → 已通过 _ensure_virtual_display() 启动 Xvfb，
+            #        使用有头模式运行在虚拟显示上，完全绕过反无头检测
+            options.set_argument('--window-size=1920,1080')
+        else:
+            options.set_argument('--start-maximized')
         if NO_IMAGES:
             options.no_imgs(True)
         options.set_load_mode(LOAD_MODE)
@@ -30,6 +66,8 @@ class BaseScraper:
         options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
         # 自动拒绝所有浏览器权限弹窗（位置、通知等），防止原生弹窗遮挡 DOM 交互
         options.set_argument('--deny-permission-prompts')
+        # 禁用自动化检测特征，绕过 Akamai/Cloudflare 等反爬 bot 检测
+        options.set_argument('--disable-blink-features=AutomationControlled')
         return options
 
     def _maybe_restart_browser(self):
