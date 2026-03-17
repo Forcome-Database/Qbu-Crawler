@@ -217,10 +217,12 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 三阶段架构：
 1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect（带 reply_to）→ 存 task_id 到 active-tasks.json → DingTalk 通知
-2. **Heartbeat（每 5 分钟，main session，lightContext）**：调用 `check_pending_completions` 处理临时任务通知 → 检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3
+2. **Heartbeat（main session，lightContext）**：调用 `check_pending_completions` 处理临时任务通知（直接发送，不再套 cron） → 检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3
 3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
 
-临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。心跳通过 `check_pending_completions` 发现已完成任务并投递通知，通知后调用 `mark_notified` 标记。不再依赖 adhoc-tasks.json 文件。
+临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。心跳通过 `check_pending_completions` 发现已完成任务并直接发送通知，通知后调用 `mark_notified` 标记。不再依赖 adhoc-tasks.json 文件。
+
+即时通知机制：`TaskManager` 在任务完成后自动调用 `openclaw system event --mode now` 即时触发心跳，无需等待下次轮询周期。回退策略：如 openclaw CLI 不可用，仍通过定期心跳轮询兜底。
 
 Workspace 文件体系：
 - `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）

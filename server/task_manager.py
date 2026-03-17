@@ -4,6 +4,7 @@ Manages scrape/collect tasks in a thread pool, tracks progress,
 supports cancellation, and persists task history to SQLite.
 """
 
+import subprocess
 import uuid
 import logging
 from datetime import datetime
@@ -169,6 +170,8 @@ class TaskManager:
             task.finished_at = config.now_shanghai().isoformat()
             task.progress["current_url"] = None
             self._persist(task)
+            if task.reply_to:
+                self._notify_heartbeat(task_id)
             self._tasks.pop(task_id, None)
             self._cancel_flags.pop(task_id, None)
 
@@ -250,6 +253,8 @@ class TaskManager:
             task.finished_at = config.now_shanghai().isoformat()
             task.progress["current_url"] = None
             self._persist(task)
+            if task.reply_to:
+                self._notify_heartbeat(task_id)
             self._tasks.pop(task_id, None)
             self._cancel_flags.pop(task_id, None)
 
@@ -258,3 +263,22 @@ class TaskManager:
             models.save_task(task.to_dict())
         except Exception as e:
             logger.error(f"Failed to persist task {task.id}: {e}")
+
+    @staticmethod
+    def _notify_heartbeat(task_id: str):
+        """任务完成后立即触发 OpenClaw 心跳，让 Agent 尽快发送通知。
+        使用 openclaw system event --mode now 即时唤醒，不等下次轮询。
+        失败时静默（不影响主流程，最坏情况回退到定时心跳轮询）。"""
+        try:
+            subprocess.Popen(
+                ["openclaw", "system", "event",
+                 "--text", f"任务 {task_id[:8]} 已完成，请检查待通知任务",
+                 "--mode", "now"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"[Task {task_id}] Triggered immediate heartbeat")
+        except FileNotFoundError:
+            logger.debug("openclaw CLI not found, skipping immediate heartbeat")
+        except Exception as e:
+            logger.debug(f"Failed to trigger heartbeat: {e}")

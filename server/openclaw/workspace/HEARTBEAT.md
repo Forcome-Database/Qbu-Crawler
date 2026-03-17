@@ -14,30 +14,28 @@
 
 **2a.** 读取 `reply_to`（空则用 `chat:cidoOQUuAEydsdghncIE5INqg==`）、`type`、`status`、`result`。
 
-**2b.** 用以下命令投递通知（逐字替换 `__X__` 占位符，不要改动其他文字）：
+**2b.** 直接向 reply_to 发送通知（使用 `--announce --to`），内容如下：
 
-```bash
-openclaw cron add --name "task-done-__TASK_ID_8__" --at 1m --session isolated --announce --to "__REPLY_TO__" --delete-after-run --message "✅ 爬虫任务已完成
+```
+✅ 爬虫任务已完成
 
 - **任务类型**：__TYPE_CN__
 - **状态**：__STATUS_CN__
 - **产品数**：__PRODUCTS__ 个
 - **评论数**：__REVIEWS__ 条
 
-如需生成报告并发送邮件，请回复「发邮件」。"
+如需生成报告并发送邮件，请回复「发邮件」。
 ```
 
 占位符替换规则（仅替换，不增删行）：
-- `__TASK_ID_8__` → task_id 前 8 位
-- `__REPLY_TO__` → reply_to 值
 - `__TYPE_CN__` → scrape 写 `产品抓取`，collect 写 `分类采集`
 - `__STATUS_CN__` → completed 写 `✔️ 成功`，failed 写 `❌ 失败`，cancelled 写 `🚫 已取消`
 - `__PRODUCTS__` → result.products_saved（无则写 0）
 - `__REVIEWS__` → result.reviews_saved（无则写 0）
 
-**2c.** 投递后调用 `mark_notified(task_ids=[任务ID])`。
+**2c.** 通知发送后调用 `mark_notified(task_ids=[任务ID])`。
 
-IMPORTANT: 先 cron add，再 mark_notified。cron add 失败则不 mark_notified。
+IMPORTANT: 先发送通知，再 mark_notified。发送失败则不 mark_notified。
 
 ## 第三步：检查定时任务
 
