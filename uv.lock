@@ -141,6 +141,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "pyvirtualdisplay", marker = "sys_platform == 'linux'" },
     { name = "requests" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -155,6 +156,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pillow", specifier = ">=12.1.1" },
     { name = "python-dotenv" },
+    { name = "pyvirtualdisplay", marker = "sys_platform == 'linux'" },
     { name = "requests" },
     { name = "uvicorn", extras = ["standard"] },
 ]
@@ -1657,6 +1659,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/01/979e98d542a70714b0cb2b6728ed0b7c46792b695e3eaec3e20711271ca3/python_multipart-0.0.22.tar.gz", hash = "sha256:7340bef99a7e0032613f56dc36027b959fd3b30a787ed62d310e951f7c3a3a58", size = 37612, upload-time = "2026-01-25T10:15:56.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/d0/397f9626e711ff749a95d96b7af99b9c566a9bb5129b8e4c10fc4d100304/python_multipart-0.0.22-py3-none-any.whl", hash = "sha256:2b2cd894c83d21bf49d702499531c7bafd057d730c201782048f7945d82de155", size = 24579, upload-time = "2026-01-25T10:15:54.811Z" },
+]
+
+[[package]]
+name = "pyvirtualdisplay"
+version = "3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/9f/23e5a82987c26d225139948a224a93318d7a7c8b166d4dbe4de7426dc4e4/PyVirtualDisplay-3.0.tar.gz", hash = "sha256:09755bc3ceb6eb725fb07eca5425f43f2358d3bf08e00d2a9b792a1aedd16159", size = 18560, upload-time = "2022-02-13T07:57:05.783Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/eb/c3b8deb661cb3846db63288c99bbb39f217b7807fc8acb2fd058db41e2e6/PyVirtualDisplay-3.0-py3-none-any.whl", hash = "sha256:40d4b8dfe4b8de8552e28eb367647f311f88a130bf837fe910e7f180d5477f0e", size = 15258, upload-time = "2022-02-13T07:57:04.051Z" },
 ]
 
 [[package]]

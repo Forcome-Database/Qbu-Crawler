@@ -38,8 +38,14 @@ class BassProScraper(BaseScraper):
                 or tab.ele('css:div[class*="DiscolusreButtonsWrapper"] button:first-child', timeout=1)
             )
             if not btn:
-                # 兜底：通过 JS 找文本为 Yes 的 button
-                btn = tab.ele('tag:button@@text()=Yes', timeout=1)
+                # 兜底：通过 JS 找文本为 Yes/YES 的 button（不区分大小写）
+                btn = tab.run_js("""
+                    const buttons = document.querySelectorAll('button');
+                    for (const b of buttons) {
+                        if (b.textContent.trim().toLowerCase() === 'yes') return b;
+                    }
+                    return null;
+                """)
 
             if btn:
                 btn.click()

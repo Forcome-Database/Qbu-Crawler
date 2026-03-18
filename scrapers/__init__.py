@@ -3,6 +3,8 @@ from urllib.parse import urlparse
 SITE_MAP = {
     "www.basspro.com": ("basspro", "scrapers.basspro", "BassProScraper"),
     "www.meatyourmaker.com": ("meatyourmaker", "scrapers.meatyourmaker", "MeatYourMakerScraper"),
+    "www.waltons.com": ("waltons", "scrapers.waltons", "WaltonsScraper"),
+    "waltons.com": ("waltons", "scrapers.waltons", "WaltonsScraper"),
 }
 
 
