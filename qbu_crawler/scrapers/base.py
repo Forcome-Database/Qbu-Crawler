@@ -192,18 +192,30 @@ class BaseScraper:
 
     @staticmethod
     def _check_url_match(tab, expected_url: str):
-        """检查导航后的实际 URL 是否匹配预期，防止重定向或并行任务导致数据错位"""
+        """检查导航后的实际 URL 是否匹配预期，防止并行任务导致数据错位。
+        允许站点内分类路径重定向（如 /process/product → /nwtf/product），
+        只要域名和最终产品标识（路径末段）一致即可。"""
         actual_url = tab.url
-        expected_path = urlparse(expected_url).path.rstrip("/")
-        actual_path = urlparse(actual_url).path.rstrip("/")
-        if expected_path != actual_path:
-            logger.warning(
-                f"URL 不匹配！预期: {expected_url} → 实际: {actual_url}"
-            )
+        expected_parsed = urlparse(expected_url)
+        actual_parsed = urlparse(actual_url)
+        # 域名必须一致
+        if expected_parsed.netloc != actual_parsed.netloc:
+            logger.warning(f"URL 域名不匹配！预期: {expected_url} → 实际: {actual_url}")
             raise RuntimeError(
-                f"页面 URL 不匹配（可能被重定向或并行任务干扰）: "
+                f"页面域名不匹配（可能被重定向到其他站点）: "
                 f"预期 {expected_url}, 实际 {actual_url}"
             )
+        # 最终路径段（产品标识）必须一致，允许中间分类路径变化
+        expected_slug = expected_parsed.path.rstrip("/").rsplit("/", 1)[-1]
+        actual_slug = actual_parsed.path.rstrip("/").rsplit("/", 1)[-1]
+        if expected_slug != actual_slug:
+            logger.warning(f"URL 产品标识不匹配！预期: {expected_url} → 实际: {actual_url}")
+            raise RuntimeError(
+                f"页面产品标识不匹配（可能被重定向或并行任务干扰）: "
+                f"预期 {expected_url}, 实际 {actual_url}"
+            )
+        if expected_parsed.path != actual_parsed.path:
+            logger.info(f"URL 路径重定向: {expected_parsed.path} → {actual_parsed.path}（产品标识一致，继续）")
 
     @staticmethod
     def _is_cloudflare(tab) -> bool:
