@@ -72,10 +72,12 @@ class BaseScraper:
     def __init__(self):
         if HEADLESS and not _has_display():
             _ensure_virtual_display()
-        self._use_user_data = bool(CHROME_USER_DATA_PATH)
+        self._use_user_data = bool(CHROME_USER_DATA_PATH) and self.SITE_NEEDS_USER_DATA
         self._proxy = None  # 当前使用的代理 (ip:port)
+        self._warmed_up = False
         if self._use_user_data:
-            self.browser = self._launch_with_user_data()
+            self._proxy = self._get_initial_proxy()
+            self.browser = self._launch_with_user_data(proxy=self._proxy)
         else:
             self.browser = self._create_browser()
         self._scrape_count = 0
@@ -106,17 +108,31 @@ class BaseScraper:
         return options
 
     @classmethod
-    def _launch_with_user_data(cls) -> Chromium:
-        """使用 Chrome 用户数据启动浏览器（绕过 Akamai 等严格反爬）。
-        DrissionPage 的 set_user_data_path 在大用户数据目录下启动超时，
-        改用 subprocess 预启动 Chrome，等待就绪后用 Chromium(port) 接管。"""
-        port = cls._USER_DATA_PORT
-        # 如果该端口已有 Chrome 运行，直接接管
+    def _kill_user_data_chrome(cls, port: int):
+        """关闭占用指定调试端口的 Chrome 进程"""
         try:
-            return Chromium(port)
+            browser = Chromium(port)
+            browser.quit()
         except Exception:
             pass
-        # 构造启动参数
+
+    @classmethod
+    def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
+        """使用 Chrome 用户数据启动浏览器，可选代理。
+        Chrome 支持 --user-data-dir + --proxy-server 同时使用，
+        代理通过 HTTP CONNECT 隧道，JA3 指纹不变。"""
+        port = cls._USER_DATA_PORT
+
+        if proxy:
+            # 代理是启动参数，切换代理必须重启 Chrome
+            cls._kill_user_data_chrome(port)
+        else:
+            # 无代理时尝试连接已运行的 Chrome
+            try:
+                return Chromium(port)
+            except Exception:
+                pass
+
         chrome_path = _find_chrome()
         args = [
             chrome_path,
@@ -129,13 +145,13 @@ class BaseScraper:
             '--no-default-browser-check',
             'about:blank',
         ]
+        if proxy:
+            args.append(f'--proxy-server=http://{proxy}')
         if HEADLESS and _has_display():
             args.append('--headless=new')
-        # 不恢复上次会话，避免打开大量旧标签页
         args.append('--disable-session-crashed-bubble')
         args.append('--restore-last-session=false')
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # 等待 Chrome 调试端口就绪
         for _ in range(20):
             time.sleep(1)
             try:
@@ -143,6 +159,22 @@ class BaseScraper:
             except Exception:
                 continue
         raise RuntimeError(f"Chrome with user data failed to start on port {port}")
+
+    def _warm_up(self):
+        """访问站点首页完成反爬 challenge（如 Akamai _abck cookie）。
+        子类可覆盖提供站点特定的预热逻辑。默认不做任何事。"""
+        pass
+
+    def _get_initial_proxy(self) -> str | None:
+        """初始化时获取代理 IP（如果站点需要代理）"""
+        from qbu_crawler.proxy import get_proxy_pool
+        pool = get_proxy_pool()
+        if pool:
+            proxy = pool.get()
+            if proxy:
+                logger.info(f"[初始化] 用户数据模式 + 代理: {proxy}")
+                return proxy
+        return None
 
     def _maybe_restart_browser(self):
         """定期重启浏览器，防止长时间运行内存泄漏"""
