@@ -15,6 +15,17 @@ class BassProScraper(BaseScraper):
     SITE_NEEDS_USER_DATA = True     # 需要用户数据绕过 Akamai
     SITE_RESTART_SAFE = False       # 重启会丢 _abck cookie
 
+    def _warm_up(self):
+        """访问 basspro 首页完成 Akamai challenge，建立有效 _abck cookie"""
+        tab = self.browser.latest_tab
+        logger.info("[预热] 访问 basspro.com 首页完成 Akamai challenge...")
+        tab.get("https://www.basspro.com/")
+        tab.wait(3, 5)
+        if self._is_blocked(tab):
+            logger.warning("[预热] 首页访问被封锁，_abck cookie 可能无效")
+        else:
+            logger.info("[预热] Akamai challenge 完成")
+
     def _dismiss_age_gate(self, tab):
         """检测并关闭年龄验证弹窗（部分产品页会触发，如枪械/弹药相关）
 

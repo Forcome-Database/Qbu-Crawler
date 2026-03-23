@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -68,6 +69,7 @@ class BaseScraper:
     SITE_LOAD_MODE: str = "eager"       # 页面加载模式
     SITE_NEEDS_USER_DATA: bool = False  # 是否需要 Chrome 用户数据模式
     SITE_RESTART_SAFE: bool = True      # 浏览器重启是否安全（不丢关键 cookie）
+    _user_data_lock = threading.Lock()
 
     def __init__(self):
         if HEADLESS and not _has_display():
@@ -241,21 +243,82 @@ class BaseScraper:
             return False
 
     def _get_page(self, url: str):
-        """导航到 URL，遇到封锁自动切换代理重试。
+        """导航到 URL，根据站点属性选择反爬策略。
 
-        代理调度逻辑：
-        0. PROXY_SITES 中的站点 → 跳过直连，直接用代理
-        1. 白名单优先 → 复用曾经成功的代理 IP
-        2. 无可用白名单 → 从 API 获取新 IP（自动跳过黑名单）
-        3. 被封 → 当前 IP 加入黑名单 → rotate 获取下一个
-        4. 成功 → 当前 IP 加入白名单
-
-        返回已加载页面的 tab 对象。调用者应使用返回的 tab 替代之前的引用。
+        三层策略：
+        1. 用户数据 + 代理（SITE_NEEDS_USER_DATA 站点）：Lock 串行，保留 cookie
+        2. PROXY_SITES 直接代理（无用户数据时）
+        3. 直连 → 被封降级代理（默认）
         """
+        if self._use_user_data and self.SITE_NEEDS_USER_DATA:
+            with self._user_data_lock:
+                return self._get_page_user_data(url)
+        return self._get_page_default(url)
+
+    def _get_page_user_data(self, url: str):
+        """用户数据模式：保留 cookie，代理轮换时重启 Chrome 但保留用户数据"""
         from qbu_crawler.proxy import get_proxy_pool
         from qbu_crawler.config import PROXY_MAX_RETRIES
 
-        # ── PROXY_SITES: 指定站点首次直接走代理 ──
+        if not self._warmed_up:
+            self._warm_up()
+            self._warmed_up = True
+
+        tab = self.browser.latest_tab
+        tab.get(url)
+
+        if not self._is_blocked(tab):
+            if self._proxy:
+                pool = get_proxy_pool()
+                if pool:
+                    pool.mark_good(self._proxy)
+            return tab
+
+        # 被封 → 轮换代理，重启用户数据 Chrome（保留 cookie + 新 IP）
+        pool = get_proxy_pool()
+        if not pool:
+            raise RuntimeError(
+                f"用户数据模式下仍被封锁: {url}。"
+                "请手动用 Chrome 访问目标站点刷新 cookie，"
+                "或配置 PROXY_API_URL 启用代理池。"
+            )
+
+        for attempt in range(PROXY_MAX_RETRIES):
+            new_proxy = pool.rotate(current_proxy=self._proxy)
+            if not new_proxy:
+                logger.error(f"[反爬] 无法获取代理 IP (attempt {attempt + 1})")
+                continue
+            if new_proxy == self._proxy:
+                logger.warning(f"[反爬] 代理未变化 {new_proxy}，跳过")
+                continue
+
+            self._proxy = new_proxy
+            logger.warning(
+                f"[反爬] 被封 → 用户数据 + 代理 {new_proxy} "
+                f"(attempt {attempt + 1}/{PROXY_MAX_RETRIES})"
+            )
+            self.browser = self._launch_with_user_data(proxy=new_proxy)
+            self._warmed_up = False
+            self._warm_up()
+            self._warmed_up = True
+
+            tab = self.browser.latest_tab
+            tab.get(url)
+
+            if not self._is_blocked(tab):
+                pool.mark_good(new_proxy)
+                return tab
+
+        raise RuntimeError(
+            f"用户数据模式下已尝试 {PROXY_MAX_RETRIES} 个代理均失败: {url}"
+        )
+
+    def _get_page_default(self, url: str):
+        """默认策略：直连或 PROXY_SITES 代理，被封后轮换"""
+        from qbu_crawler.proxy import get_proxy_pool
+        from qbu_crawler.config import PROXY_MAX_RETRIES
+
+        # PROXY_SITES: 首次直接走代理
         if not self._proxy and self._site_needs_proxy(url):
             pool = get_proxy_pool()
             if pool:
@@ -273,50 +336,47 @@ class BaseScraper:
         tab.get(url)
 
         if not self._is_blocked(tab):
-            # 直连成功，或当前代理仍有效 → 标记白名单
             if self._proxy:
                 pool = get_proxy_pool()
                 if pool:
                     pool.mark_good(self._proxy)
             return tab
 
-        # ── 触发代理重试 ──
+        # 代理重试
         pool = get_proxy_pool()
         if not pool:
-            logger.error("[反爬] Access Denied 且未配置代理池 (PROXY_API_URL)")
             raise RuntimeError(
                 f"页面被反爬系统封锁: {url}。"
                 "请配置 PROXY_API_URL 环境变量启用代理池。"
             )
 
         for attempt in range(PROXY_MAX_RETRIES):
-            # 首次: get()（白名单优先）; 后续: rotate()（拉黑当前 + 换新）
-            proxy = pool.get() if (attempt == 0 and not self._proxy) else pool.rotate()
-            if not proxy:
+            new_proxy = (
+                pool.get() if (attempt == 0 and not self._proxy)
+                else pool.rotate(current_proxy=self._proxy)
+            )
+            if not new_proxy:
                 logger.error(f"[反爬] 无法获取代理 IP (attempt {attempt + 1})")
                 continue
-
-            # 跳过与当前完全相同的代理（避免无意义的浏览器重启）
-            if proxy == self._proxy and attempt > 0:
-                logger.warning(f"[反爬] 代理未变化 {proxy}，跳过 (attempt {attempt + 1})")
+            if new_proxy == self._proxy and attempt > 0:
+                logger.warning(f"[反爬] 代理未变化 {new_proxy}，跳过")
                 continue
 
-            self._proxy = proxy
+            self._proxy = new_proxy
             logger.warning(
-                f"[反爬] Access Denied → 代理 {proxy} (attempt {attempt + 1}/{PROXY_MAX_RETRIES})"
+                f"[反爬] Access Denied → 代理 {new_proxy} "
+                f"(attempt {attempt + 1}/{PROXY_MAX_RETRIES})"
             )
-
             try:
                 self.browser.quit()
             except Exception:
                 pass
-            self.browser = self._create_browser(proxy=proxy)
+            self.browser = self._create_browser(proxy=new_proxy)
             tab = self.browser.latest_tab
             tab.get(url)
 
             if not self._is_blocked(tab):
-                logger.info(f"[反爬] 代理 {proxy} 成功 → 加入白名单")
-                pool.mark_good(proxy)
+                pool.mark_good(new_proxy)
                 return tab
 
         raise RuntimeError(
