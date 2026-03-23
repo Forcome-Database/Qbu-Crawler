@@ -223,8 +223,11 @@ class BaseScraper:
                 return True
             if "errors.edgesuite.net" in url:
                 return True
-            # Cloudflare challenge 页面
-            if "Just a moment" in title and "cloudflare" in html_head:
+            # Cloudflare challenge 页面（标题可能是英文或中文）
+            if ("Just a moment" in title or "请稍候" in title) and "cloudflare" in html_head:
+                return True
+            # Cloudflare Turnstile 独立验证页面（含 cb-title 等特征）
+            if "cb-lb" in html_head and "cloudflare" in html_head:
                 return True
             return False
         except Exception:
