@@ -7,7 +7,7 @@
   4. 代理被封 → 加入黑名单，从白名单移除
   5. 代理成功 → 加入白名单
 
-黑名单按 IP 地址去重（同 IP 不同端口视为同一代理）。
+黑名单按 ip:port 精确匹配（同 IP 不同端口视为不同代理通道）。
 白名单按 ip:port 存储（Chrome --proxy-server 需要完整地址），带 TTL 过期。
 """
 
@@ -33,7 +33,7 @@ class ProxyPool:
         self._api_url = api_url
         self._lock = threading.Lock()
         self._session_seconds = self._parse_session_time(api_url) * 60
-        # 黑名单：被封的 IP（仅 IP，不含端口）
+        # 黑名单：被封的代理 ip:port（精确匹配，同 IP 不同端口可独立使用）
         self._blacklist: set[str] = set()
         # 白名单：成功过的代理 ip:port -> 获取时间戳
         self._whitelist: dict[str, float] = {}
@@ -78,8 +78,7 @@ class ProxyPool:
     def mark_good(self, ip_port: str):
         """标记代理成功 → 加入白名单"""
         with self._lock:
-            ip = self._ip_of(ip_port)
-            if ip in self._blacklist:
+            if ip_port in self._blacklist:
                 return  # 已被拉黑的不加白名单
             if ip_port not in self._whitelist:
                 self._whitelist[ip_port] = time.time()
@@ -89,15 +88,11 @@ class ProxyPool:
                 )
 
     def _add_to_blacklist(self, ip_port: str):
-        """拉黑 IP（按 IP 去重），同时从白名单移除同 IP 的所有条目"""
-        ip = self._ip_of(ip_port)
-        self._blacklist.add(ip)
-        # 移除白名单中同 IP 的所有条目
-        removed = [k for k in self._whitelist if self._ip_of(k) == ip]
-        for k in removed:
-            del self._whitelist[k]
+        """拉黑代理（按 ip:port 精确匹配），同时从白名单移除"""
+        self._blacklist.add(ip_port)
+        self._whitelist.pop(ip_port, None)
         logger.info(
-            f"[代理] 黑名单 +{ip} "
+            f"[代理] 黑名单 +{ip_port} "
             f"(白名单 {len(self._whitelist)}, 黑名单 {len(self._blacklist)})"
         )
 
@@ -111,8 +106,7 @@ class ProxyPool:
             if now - obtained_at > self._session_seconds - 30:
                 expired.append(ip_port)
                 continue
-            ip = self._ip_of(ip_port)
-            if ip in self._blacklist:
+            if ip_port in self._blacklist:
                 expired.append(ip_port)
                 continue
             if result is None:
@@ -125,14 +119,13 @@ class ProxyPool:
         return result
 
     def _fetch_new(self) -> str | None:
-        """从 API 获取新代理，跳过黑名单 IP"""
+        """从 API 获取新代理，跳过黑名单"""
         for attempt in range(self._MAX_FETCH_RETRIES):
             url = self._append_sid(self._api_url)
             ip_port = self._call_api(url)
             if not ip_port:
                 return None
-            ip = self._ip_of(ip_port)
-            if ip not in self._blacklist:
+            if ip_port not in self._blacklist:
                 return ip_port
             logger.warning(
                 f"[代理] API 返回黑名单 IP {ip_port}，重新获取 ({attempt + 1}/{self._MAX_FETCH_RETRIES})"

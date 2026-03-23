@@ -51,7 +51,7 @@ class TestProxyPool:
         with patch("qbu_crawler.proxy.requests.get") as mock_get:
             mock_get.return_value = _mock_resp("2.2.2.2:9090\n")
             proxy = pool.rotate(current_proxy="1.1.1.1:8080")
-            assert "1.1.1.1" in pool._blacklist
+            assert "1.1.1.1:8080" in pool._blacklist
             assert proxy == "2.2.2.2:9090"
 
     def test_rotate_removes_from_whitelist(self):
@@ -62,32 +62,32 @@ class TestProxyPool:
             mock_get.return_value = _mock_resp("3.3.3.3:7070\n")
             pool.rotate(current_proxy="1.1.1.1:8080")
             assert "1.1.1.1:8080" not in pool._whitelist
-            assert "1.1.1.1" in pool._blacklist
+            assert "1.1.1.1:8080" in pool._blacklist
 
-    def test_blacklist_same_ip_different_port(self):
-        """同 IP 不同端口也视为黑名单"""
+    def test_blacklist_same_ip_different_port_allowed(self):
+        """同 IP 不同端口视为不同代理通道，可以使用"""
         pool = ProxyPool(API_URL)
         with patch("qbu_crawler.proxy.requests.get") as mock_get:
-            mock_get.side_effect = [
-                _mock_resp("1.1.1.1:9090\n"),  # 同 IP 不同端口 → 黑名单
-                _mock_resp("2.2.2.2:7070\n"),  # 不同 IP → 可用
-            ]
+            mock_get.return_value = _mock_resp("1.1.1.1:9090\n")
             proxy = pool.rotate(current_proxy="1.1.1.1:8080")
-            assert proxy == "2.2.2.2:7070"
+            # 不同端口应该可以使用
+            assert proxy == "1.1.1.1:9090"
+            # 只有 :8080 在黑名单
+            assert "1.1.1.1:8080" in pool._blacklist
+            assert "1.1.1.1:9090" not in pool._blacklist
 
     def test_fetch_skips_blacklisted(self):
-        """API 返回黑名单 IP 时自动重新获取"""
+        """API 返回黑名单 ip:port 时自动重新获取"""
         pool = ProxyPool(API_URL)
-        pool._blacklist.add("1.1.1.1")
+        pool._blacklist.add("1.1.1.1:8080")
         with patch("qbu_crawler.proxy.requests.get") as mock_get:
             mock_get.side_effect = [
-                _mock_resp("1.1.1.1:8080\n"),  # 黑名单
-                _mock_resp("1.1.1.1:9090\n"),  # 黑名单（不同端口）
+                _mock_resp("1.1.1.1:8080\n"),  # 黑名单（精确匹配）
                 _mock_resp("2.2.2.2:8080\n"),  # 可用
             ]
             proxy = pool.get()
             assert proxy == "2.2.2.2:8080"
-            assert mock_get.call_count == 3
+            assert mock_get.call_count == 2  # 只需 2 次（:8080 命中黑名单，:8080 不同 IP 可用）
 
     def test_get_returns_none_on_api_error(self):
         """API 异常时返回 None"""
@@ -102,9 +102,9 @@ class TestProxyPool:
         assert "1.2.3.4:8080" in pool._whitelist
 
     def test_mark_good_skips_blacklisted(self):
-        """已拉黑的 IP 不加白名单"""
+        """已拉黑的 ip:port 不加白名单"""
         pool = ProxyPool(API_URL)
-        pool._blacklist.add("1.2.3.4")
+        pool._blacklist.add("1.2.3.4:8080")
         pool.mark_good("1.2.3.4:8080")
         assert "1.2.3.4:8080" not in pool._whitelist
 
@@ -120,7 +120,7 @@ class TestProxyPool:
             mock_get.return_value = _mock_resp("3.3.3.3:7070\n")
             proxy = pool.rotate(current_proxy="1.1.1.1:8080")
             assert proxy == "3.3.3.3:7070"
-            assert "1.1.1.1" in pool._blacklist
+            assert "1.1.1.1:8080" in pool._blacklist
             assert "1.1.1.1:8080" not in pool._whitelist
 
     def test_parse_session_time_default(self):
