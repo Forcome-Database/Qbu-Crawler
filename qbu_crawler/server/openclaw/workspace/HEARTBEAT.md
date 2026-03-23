@@ -2,42 +2,9 @@
 
 严格按以下步骤执行，不要自由发挥。
 
-## 第一步：检查待通知的临时任务
+临时任务通知由服务端自动投递，心跳不处理。
 
-调用 `check_pending_completions()`。
-
-如果返回 `count: 0` → 跳到第三步。
-
-## 第二步：处理临时任务通知
-
-对 `check_pending_completions` 返回的每个任务，执行以下操作。
-
-**2a.** 读取 `reply_to`（空则用 `chat:cidoOQUuAEydsdghncIE5INqg==`）、`type`、`status`、`result`。
-
-**2b.** 直接向 reply_to 发送通知（使用 `--announce --to`），内容如下：
-
-```
-✅ 爬虫任务已完成
-
-- **任务类型**：__TYPE_CN__
-- **状态**：__STATUS_CN__
-- **产品数**：__PRODUCTS__ 个
-- **评论数**：__REVIEWS__ 条
-
-如需生成报告并发送邮件，请回复「发邮件」。
-```
-
-占位符替换规则（仅替换，不增删行）：
-- `__TYPE_CN__` → scrape 写 `产品抓取`，collect 写 `分类采集`
-- `__STATUS_CN__` → completed 写 `✔️ 成功`，failed 写 `❌ 失败`，cancelled 写 `🚫 已取消`
-- `__PRODUCTS__` → result.products_saved（无则写 0）
-- `__REVIEWS__` → result.reviews_saved（无则写 0）
-
-**2c.** 通知发送后调用 `mark_notified(task_ids=[任务ID])`。
-
-IMPORTANT: 先发送通知，再 mark_notified。发送失败则不 mark_notified。
-
-## 第三步：检查定时任务
+## 第一步：检查定时任务
 
 读取 `~/.openclaw/workspace/state/active-tasks.json`。
 

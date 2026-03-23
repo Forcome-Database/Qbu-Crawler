@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from server.api.auth import verify_api_key
+from qbu_crawler.server.api.auth import verify_api_key
 
 router = APIRouter(prefix="/api/tasks", dependencies=[Depends(verify_api_key)])
 
@@ -17,7 +17,7 @@ class CollectRequest(BaseModel):
 
 
 def _get_tm():
-    from server.app import task_manager
+    from qbu_crawler.server.app import task_manager
     return task_manager
 
 

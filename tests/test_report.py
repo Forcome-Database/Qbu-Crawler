@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import models
-import config
+from qbu_crawler import models, config
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +91,7 @@ def _get_test_conn(db_file: str):
 def test_query_report_data(patch_db, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", patch_db)
 
-    from server.report import query_report_data
+    from qbu_crawler.server.report import query_report_data
 
     # Query from 1 hour ago — should capture the test data
     since = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -116,7 +115,7 @@ def test_query_report_data(patch_db, monkeypatch):
 def test_query_report_data_future_cutoff(patch_db, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", patch_db)
 
-    from server.report import query_report_data
+    from qbu_crawler.server.report import query_report_data
 
     # Query from 1 hour in the future — should return nothing
     since = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -133,7 +132,7 @@ def test_query_report_data_future_cutoff(patch_db, monkeypatch):
 def test_generate_excel(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
-    from server.report import generate_excel
+    from qbu_crawler.server.report import generate_excel
     from openpyxl import load_workbook
 
     products = [
@@ -197,7 +196,7 @@ def test_generate_excel(tmp_path, monkeypatch):
 def test_generate_excel_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
-    from server.report import generate_excel
+    from qbu_crawler.server.report import generate_excel
     from openpyxl import load_workbook
 
     report_date = datetime(2026, 3, 10, tzinfo=timezone.utc)
@@ -233,7 +232,7 @@ def test_send_email_success(monkeypatch):
     mock_smtp_instance = MagicMock()
 
     with patch("smtplib.SMTP", return_value=mock_smtp_instance) as mock_smtp_cls:
-        from server.report import send_email
+        from qbu_crawler.server.report import send_email
 
         result = send_email(
             recipients=["recipient@example.com"],
@@ -262,7 +261,7 @@ def test_send_email_ssl(monkeypatch):
     mock_smtp_instance = MagicMock()
 
     with patch("smtplib.SMTP_SSL", return_value=mock_smtp_instance):
-        from server.report import send_email
+        from qbu_crawler.server.report import send_email
 
         result = send_email(
             recipients=["recipient@example.com"],
@@ -278,7 +277,7 @@ def test_send_email_ssl(monkeypatch):
 def test_send_email_no_config(monkeypatch):
     monkeypatch.setattr(config, "SMTP_HOST", "")
 
-    from server.report import send_email
+    from qbu_crawler.server.report import send_email
 
     result = send_email(
         recipients=["recipient@example.com"],
@@ -294,7 +293,7 @@ def test_send_email_no_config(monkeypatch):
 def test_send_email_no_recipients(monkeypatch):
     monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
 
-    from server.report import send_email
+    from qbu_crawler.server.report import send_email
 
     result = send_email(recipients=[], subject="Test", body_text="Hello")
 
@@ -311,7 +310,7 @@ def test_send_email_smtp_error(monkeypatch):
     monkeypatch.setattr(config, "SMTP_USE_SSL", False)
 
     with patch("smtplib.SMTP", side_effect=ConnectionRefusedError("Connection refused")):
-        from server.report import send_email
+        from qbu_crawler.server.report import send_email
 
         result = send_email(
             recipients=["r@example.com"],
@@ -329,7 +328,7 @@ def test_send_email_smtp_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_load_email_recipients(tmp_path):
-    from server.report import load_email_recipients
+    from qbu_crawler.server.report import load_email_recipients
 
     recipients_file = tmp_path / "recipients.txt"
     recipients_file.write_text(
@@ -347,7 +346,7 @@ def test_load_email_recipients(tmp_path):
 
 
 def test_load_email_recipients_missing_file():
-    from server.report import load_email_recipients
+    from qbu_crawler.server.report import load_email_recipients
 
     result = load_email_recipients("/nonexistent/path/recipients.txt")
     assert result == []
@@ -362,7 +361,7 @@ def test_generate_report_full(patch_db, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", patch_db)
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
 
-    from server.report import generate_report
+    from qbu_crawler.server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     result = generate_report(since, send_email=False)
@@ -388,7 +387,7 @@ def test_generate_report_with_pretranslated_reviews(patch_db, tmp_path, monkeypa
     conn.commit()
     conn.close()
 
-    from server.report import generate_report
+    from qbu_crawler.server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     result = generate_report(since, send_email=False)
@@ -405,7 +404,7 @@ def test_generate_report_with_email(patch_db, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SMTP_HOST", "")  # no SMTP
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["test@example.com"])
 
-    from server.report import generate_report
+    from qbu_crawler.server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     result = generate_report(since, send_email=True)
@@ -429,7 +428,7 @@ def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SMTP_USE_SSL", False)
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", [])
 
-    from server.report import generate_report
+    from qbu_crawler.server.report import generate_report
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     result = generate_report(since, send_email=True)

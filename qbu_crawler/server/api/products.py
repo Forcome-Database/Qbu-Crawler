@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-import models
-from server.api.auth import verify_api_key
+from qbu_crawler import models
+from qbu_crawler.server.api.auth import verify_api_key
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
 

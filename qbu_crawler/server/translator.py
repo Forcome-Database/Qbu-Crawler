@@ -12,8 +12,7 @@ from threading import Event, Thread
 
 from openai import APIStatusError, APIConnectionError, APITimeoutError, OpenAI
 
-import config
-import models
+from qbu_crawler import config, models
 
 logger = logging.getLogger(__name__)
 

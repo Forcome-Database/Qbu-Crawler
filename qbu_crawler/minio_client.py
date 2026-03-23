@@ -4,7 +4,7 @@ from datetime import datetime
 
 import requests
 from minio import Minio
-from config import (
+from qbu_crawler.config import (
     MINIO_ENDPOINT, MINIO_PORT, MINIO_USE_SSL,
     MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
     MINIO_BUCKET, MINIO_PUBLIC_URL,
@@ -40,7 +40,7 @@ def upload_image(image_url: str) -> str | None:
     elif "webp" in content_type:
         ext = "webp"
 
-    from config import now_shanghai
+    from qbu_crawler.config import now_shanghai
     month = now_shanghai().strftime("%Y-%m")
     object_name = f"images/{month}/{url_hash}.{ext}"
 

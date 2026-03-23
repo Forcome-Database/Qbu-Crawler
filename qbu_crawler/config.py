@@ -5,8 +5,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# 数据目录：优先使用环境变量 QBU_DATA_DIR，否则使用当前工作目录下的 data/
+BASE_DIR = os.getcwd()
+DATA_DIR = os.getenv("QBU_DATA_DIR", "") or os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "products.db")
 
 # 确保 data 目录存在
@@ -28,6 +29,13 @@ BV_POLL_INTERVAL = 0.5  # BV 数据轮询间隔（秒）
 
 # Chrome 用户数据（绕过 Akamai 等严格反爬，复用已有 cookie/session）
 CHROME_USER_DATA_PATH = os.getenv("CHROME_USER_DATA_PATH", "")  # 留空则用独立浏览器
+
+# 代理池 API（遇到反爬封锁时自动获取代理 IP）
+# 示例: https://white.1024proxy.com/white/api?region=US&num=1&time=10&format=1&type=txt
+PROXY_API_URL = os.getenv("PROXY_API_URL", "")
+PROXY_MAX_RETRIES = int(os.getenv("PROXY_MAX_RETRIES", "3"))  # 单个 URL 最大代理轮换次数
+# 指定站点直接使用代理，跳过直连尝试（逗号分隔站点标识，如 basspro,waltons）
+PROXY_SITES = {s.strip() for s in os.getenv("PROXY_SITES", "").split(",") if s.strip()}
 
 # 反爬配置
 REQUEST_DELAY = (1, 3)  # 请求间随机延迟范围（秒），设为 None 禁用
@@ -54,8 +62,8 @@ API_KEY = os.getenv("API_KEY", "")
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3"))
 
 # ── OpenClaw Webhook（任务完成即时通知）────────────
-OPENCLAW_HOOK_URL = os.getenv("OPENCLAW_HOOK_URL", "")    # e.g. http://127.0.0.1:18789/hooks/wake
-OPENCLAW_HOOK_TOKEN = os.getenv("OPENCLAW_HOOK_TOKEN", "")  # hooks.token in openclaw.json
+OPENCLAW_HOOK_URL = os.getenv("OPENCLAW_HOOK_URL", "")      # e.g. http://127.0.0.1:18789
+OPENCLAW_HOOK_TOKEN = os.getenv("OPENCLAW_HOOK_TOKEN", "")   # hooks.token in openclaw.json
 
 # ── LLM Translation (OpenAI-compatible) ───────────
 LLM_API_BASE = os.getenv("LLM_API_BASE", "")
@@ -77,7 +85,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", "")
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 # ── Report ────────────────────────────────────────
-REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(BASE_DIR, "data", "reports")
+REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 EMAIL_RECIPIENTS = [
     addr.strip()

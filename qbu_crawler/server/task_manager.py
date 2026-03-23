@@ -14,9 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from typing import Any
 
-import config
-import models
-from scrapers import get_scraper, get_site_key
+from qbu_crawler import config, models
+from qbu_crawler.scrapers import get_scraper, get_site_key
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +171,7 @@ class TaskManager:
             task.progress["current_url"] = None
             self._persist(task)
             if task.reply_to:
-                self._notify_heartbeat(task_id)
+                self._notify_completion(task_id)
             self._tasks.pop(task_id, None)
             self._cancel_flags.pop(task_id, None)
 
@@ -255,7 +254,7 @@ class TaskManager:
             task.progress["current_url"] = None
             self._persist(task)
             if task.reply_to:
-                self._notify_heartbeat(task_id)
+                self._notify_completion(task_id)
             self._tasks.pop(task_id, None)
             self._cancel_flags.pop(task_id, None)
 
@@ -265,29 +264,77 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Failed to persist task {task.id}: {e}")
 
-    @staticmethod
-    def _notify_heartbeat(task_id: str):
-        """任务完成后通过 HTTP webhook 立即触发 OpenClaw 心跳。
-        POST /hooks/wake with mode=now，即时唤醒 Agent 处理待通知任务。
-        失败时静默（不影响主流程，回退到定时心跳轮询）。"""
+    def _notify_completion(self, task_id: str):
+        """任务完成后通过 /hooks/agent 直接投递通知到钉钉。
+        服务端组装通知内容 + 投递 + 标记已通知，不依赖心跳或 HEARTBEAT.md。
+        失败时静默（不影响主流程，回退到定时心跳轮询兜底）。"""
         hook_url = config.OPENCLAW_HOOK_URL
         hook_token = config.OPENCLAW_HOOK_TOKEN
         if not hook_url:
             return
+
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+
+        # 组装通知内容
+        type_cn = "产品抓取" if task.type == "scrape" else "分类采集"
+        status_map = {
+            "completed": "成功",
+            "failed": "失败",
+            "cancelled": "已取消",
+        }
+        status_cn = status_map.get(task.status.value, task.status.value)
+        result = task.result or {}
+        products = result.get("products_saved", 0)
+        reviews = result.get("reviews_saved", 0)
+
+        if task.status == TaskStatus.completed:
+            title = "✅ 爬虫任务已完成"
+        elif task.status == TaskStatus.failed:
+            title = "❌ 爬虫任务失败"
+        else:
+            title = "🚫 爬虫任务已取消"
+
+        lines = [
+            title,
+            "",
+            f"- **任务类型**：{type_cn}",
+            f"- **状态**：{status_cn}",
+            f"- **产品数**：{products} 个",
+            f"- **评论数**：{reviews} 条",
+        ]
+        if task.status == TaskStatus.failed and task.error:
+            lines.append(f"- **错误**：{task.error[:200]}")
+        lines.append("")
+        lines.append("如需生成报告并发送邮件，请回复「发邮件」。")
+        notification = "\n".join(lines)
+
+        # POST /hooks/agent 直接投递
+        base = hook_url.rstrip("/").removesuffix("/hooks/wake").removesuffix("/hooks/agent")
+        agent_url = f"{base}/hooks/agent"
+
+        payload = {
+            "message": f"IMPORTANT: 原样输出以下内容，不要修改、添加、删除或解释任何内容。\n\n{notification}",
+            "deliver": True,
+            "channel": "dingtalk",
+            "to": task.reply_to,
+            "name": f"task-done-{task_id[:8]}",
+            "thinking": "low",
+        }
+
         try:
-            data = _json.dumps({
-                "text": f"任务 {task_id[:8]} 已完成，请检查待通知任务",
-                "mode": "now",
-            }).encode()
+            data = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(
-                hook_url,
+                agent_url,
                 data=data,
                 headers={
-                    "Content-Type": "application/json",
+                    "Content-Type": "application/json; charset=utf-8",
                     **({"Authorization": f"Bearer {hook_token}"} if hook_token else {}),
                 },
             )
-            urllib.request.urlopen(req, timeout=5)
-            logger.info(f"[Task {task_id}] Triggered immediate heartbeat via webhook")
+            urllib.request.urlopen(req, timeout=10)
+            models.mark_task_notified([task_id])
+            logger.info(f"[Task {task_id}] Notification delivered via /hooks/agent")
         except Exception as e:
-            logger.debug(f"Failed to trigger heartbeat webhook: {e}")
+            logger.warning(f"[Task {task_id}] Failed to deliver notification: {e}")

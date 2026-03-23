@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-import config
+from qbu_crawler import config
 
 security = HTTPBearer()
 

@@ -206,14 +206,32 @@ class BaseScraper:
             )
 
     @staticmethod
+    def _is_cloudflare(tab) -> bool:
+        """检测当前页面是否是 Cloudflare challenge/Turnstile 页面"""
+        try:
+            title = tab.title or ""
+            html_head = (tab.html or "")[:5000].lower()
+            # 标题匹配（多语言）
+            if ("just a moment" in title.lower() or "请稍候" in title) \
+                    and "cloudflare" in html_head:
+                return True
+            # Turnstile 页面结构特征（不依赖标题）
+            if "challenges.cloudflare.com" in html_head:
+                return True
+            if "cf-turnstile" in html_head or "cf-chl-widget" in html_head:
+                return True
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_blocked(tab) -> bool:
-        """检测页面是否被反爬系统封锁（Akamai / Cloudflare）或浏览器连接失败"""
+        """检测页面是否被反爬系统封锁（Akamai / Cloudflare / Chrome 错误）"""
         try:
             title = tab.title or ""
             url = tab.url or ""
-            html_head = (tab.html or "")[:3000].lower()
+            html_head = (tab.html or "")[:5000].lower()
             # Chrome 内部错误页面（代理连接失败、DNS 失败、网络不可达等）
-            # Chrome 错误页面 URL 可能是 chrome-error:// 或保持原 URL 但 HTML 含 neterror
             if url.startswith("chrome-error://"):
                 return True
             if "id=\"main-frame-error\"" in html_head or "neterror" in html_head:
@@ -223,86 +241,99 @@ class BaseScraper:
                 return True
             if "errors.edgesuite.net" in url:
                 return True
-            # Cloudflare challenge 页面（标题可能是英文或中文）
-            if ("Just a moment" in title or "请稍候" in title) and "cloudflare" in html_head:
+            # Cloudflare（所有形态）
+            if ("just a moment" in title.lower() or "请稍候" in title):
                 return True
-            # Cloudflare Turnstile 独立验证页面（含 cb-title 等特征）
-            if "cb-lb" in html_head and "cloudflare" in html_head:
+            if "challenges.cloudflare.com" in html_head:
+                return True
+            if "cf-turnstile" in html_head or "cf-chl-widget" in html_head:
                 return True
             return False
         except Exception:
             return False
 
-    def _try_solve_cloudflare(self, tab, timeout=15) -> bool:
-        """检测 Cloudflare Turnstile 并尝试自动点击复选框。
-        Turnstile 的 checkbox 在 closed shadow root → iframe → closed shadow root 内，
-        无法通过 DOM 选择器直接访问。使用坐标定位点击。
+    def _wait_and_solve_cloudflare(self, tab, timeout=20) -> bool:
+        """Cloudflare 等待 + 自动解决。
 
-        Returns True if challenge solved, False otherwise.
+        完整流程：
+        1. 等待 Cloudflare 自动验证（"正在验证..." 阶段，最多 10 秒）
+        2. 如果自动通过 → 返回 True
+        3. 如果出现 Turnstile 复选框 → 尝试点击
+        4. 等待验证完成 → 返回结果
+
+        必须在 _is_blocked() 返回 True 后调用。
         """
-        title = tab.title or ""
-        # 仅处理 Cloudflare challenge 页面
-        if "Just a moment" not in title and "请稍候" not in title:
+        if not self._is_cloudflare(tab):
             return False
 
-        logger.info("[反爬] 检测到 Cloudflare Turnstile，尝试自动点击...")
-        tab.wait(2, 3)  # 等待 Turnstile widget 渲染
+        logger.info("[反爬] 检测到 Cloudflare challenge，等待自动验证...")
 
-        # 方法1: DrissionPage CDP 穿透 — 尝试直接找到 iframe 内的 checkbox
+        # ── 阶段1：等待自动验证（Cloudflare 先显示 "正在验证..." spinner）──
+        for i in range(10):
+            tab.wait(1)
+            if not self._is_cloudflare(tab):
+                logger.info(f"[反爬] Cloudflare 自动验证通过（{i + 1}s）")
+                return True
+
+        # ── 阶段2：自动验证未通过，尝试点击 Turnstile 复选框 ──
+        logger.info("[反爬] Cloudflare 自动验证未通过，尝试点击 Turnstile...")
+
+        clicked = False
+
+        # 方法1: DrissionPage CDP 穿透 closed shadow root
         try:
             checkbox = tab.ele('@type=checkbox', timeout=3)
             if checkbox:
                 checkbox.click()
-                logger.info("[反爬] 通过 CDP 穿透找到 checkbox 并点击")
-                if self._wait_cloudflare_pass(tab, timeout):
-                    return True
+                logger.info("[反爬] CDP 穿透找到 checkbox 并点击")
+                clicked = True
         except Exception:
             pass
 
-        # 方法2: 坐标定位 — 通过 JS 获取 Turnstile 容器位置，计算 checkbox 坐标
-        try:
-            pos = tab.run_js("""
-                // 使用稳定选择器：.main-content 下的 display:grid 容器
-                const content = document.querySelector('.main-content');
-                if (!content) return null;
-                const divs = content.querySelectorAll('div');
-                for (const d of divs) {
-                    const style = window.getComputedStyle(d);
-                    const rect = d.getBoundingClientRect();
-                    // Turnstile 容器特征：display:grid，高度 50-100px，宽度 > 200px
-                    if (style.display === 'grid' && rect.height > 50 && rect.height < 100 && rect.width > 200) {
-                        return JSON.stringify({x: rect.left, y: rect.top, w: rect.width, h: rect.height});
+        # 方法2: 坐标定位点击
+        if not clicked:
+            try:
+                pos = tab.run_js("""
+                    // Turnstile iframe 在 closed shadow root 内，
+                    // 但容器 div (display:grid) 可访问
+                    const divs = document.querySelectorAll('div');
+                    for (const d of divs) {
+                        const style = window.getComputedStyle(d);
+                        const rect = d.getBoundingClientRect();
+                        if (style.display === 'grid'
+                            && rect.height > 50 && rect.height < 100
+                            && rect.width > 200) {
+                            return JSON.stringify({
+                                x: rect.left, y: rect.top,
+                                w: rect.width, h: rect.height
+                            });
+                        }
                     }
-                }
-                return null;
-            """)
-            if pos:
-                data = json.loads(pos)
-                # checkbox 在容器左侧，约 (30, 中心) 位置
-                click_x = int(data['x']) + 30
-                click_y = int(data['y'] + data['h'] / 2)
-                tab.run_js(f"window.scrollTo(0, {int(data['y']) - 200})")
-                tab.wait(0.5)
-                # 用 DrissionPage actions 做真实鼠标点击
-                tab.actions.move(click_x, click_y, duration=0.3).click()
-                logger.info(f"[反爬] 通过坐标点击 Turnstile checkbox ({click_x}, {click_y})")
-                if self._wait_cloudflare_pass(tab, timeout):
-                    return True
-        except Exception as e:
-            logger.warning(f"[反爬] Turnstile 坐标点击失败: {e}")
+                    return null;
+                """)
+                if pos:
+                    data = json.loads(pos)
+                    click_x = int(data['x']) + 30
+                    click_y = int(data['y'] + data['h'] / 2)
+                    tab.actions.move(click_x, click_y, duration=0.3).click()
+                    logger.info(f"[反爬] 坐标点击 Turnstile ({click_x}, {click_y})")
+                    clicked = True
+            except Exception as e:
+                logger.warning(f"[反爬] Turnstile 坐标点击失败: {e}")
 
-        logger.warning("[反爬] Cloudflare Turnstile 自动点击未通过")
-        return False
+        if not clicked:
+            logger.warning("[反爬] 未能找到 Turnstile 复选框")
+            return False
 
-    @staticmethod
-    def _wait_cloudflare_pass(tab, timeout=15) -> bool:
-        """等待 Cloudflare 验证完成（页面标题变化 + 内容加载）"""
-        for _ in range(timeout):
+        # ── 阶段3：等待点击后的验证完成 ──
+        remaining = max(timeout - 10, 10)
+        for i in range(remaining):
             tab.wait(1)
-            title = tab.title or ""
-            if "Just a moment" not in title and "请稍候" not in title:
-                logger.info("[反爬] Cloudflare challenge 已通过")
+            if not self._is_cloudflare(tab):
+                logger.info(f"[反爬] Cloudflare Turnstile 验证通过（点击后 {i + 1}s）")
                 return True
+
+        logger.warning("[反爬] Cloudflare Turnstile 点击后验证未通过")
         return False
 
     @staticmethod
@@ -349,8 +380,8 @@ class BaseScraper:
                     pool.mark_good(self._proxy)
             return tab
 
-        # Cloudflare Turnstile: 尝试自动点击解决，不需要换代理
-        if self._try_solve_cloudflare(tab):
+        # Cloudflare: 等待自动验证 + 尝试点击 Turnstile，不需要换代理
+        if self._wait_and_solve_cloudflare(tab):
             if self._proxy:
                 pool = get_proxy_pool()
                 if pool:
@@ -425,8 +456,8 @@ class BaseScraper:
                     pool.mark_good(self._proxy)
             return tab
 
-        # Cloudflare Turnstile: 尝试自动点击解决，不需要换代理
-        if self._try_solve_cloudflare(tab):
+        # Cloudflare: 等待自动验证 + 尝试点击 Turnstile，不需要换代理
+        if self._wait_and_solve_cloudflare(tab):
             if self._proxy:
                 pool = get_proxy_pool()
                 if pool:
@@ -476,11 +507,28 @@ class BaseScraper:
 
     @staticmethod
     def _validate_product(result: dict, url: str):
-        """校验抓取结果的关键字段，防止空数据被当作成功保存"""
+        """校验抓取结果的关键字段，防止空数据或反爬页面数据被当作成功保存"""
         product = result.get("product", {})
-        if not product.get("name") and not product.get("sku"):
+        name = product.get("name") or ""
+        sku = product.get("sku")
+        price = product.get("price")
+
+        # name 和 sku 都为空 → 完全没提取到数据
+        if not name and not sku:
             raise RuntimeError(
                 f"抓取结果无效（name 和 sku 均为空），页面可能未正确加载: {url}"
+            )
+        # name 是反爬页面特征 → Cloudflare/Akamai 页面被当产品提取了
+        blocked_names = {"waltons.com", "basspro.com", "meatyourmaker.com",
+                         "access denied", "just a moment", "请稍候", "执行安全验证"}
+        if name.lower().strip() in blocked_names:
+            raise RuntimeError(
+                f"抓取结果无效（name 为反爬页面标识 '{name}'），Cloudflare/Akamai 未通过: {url}"
+            )
+        # 有 name 但没有 sku 和 price → 可能是不完整的页面
+        if name and not sku and price is None:
+            raise RuntimeError(
+                f"抓取结果不完整（有 name 但 sku 和 price 均为空），页面可能未正确加载: {url}"
             )
 
     def _increment_and_delay(self, tab):

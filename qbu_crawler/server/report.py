@@ -20,8 +20,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
-import config
-import models
+from qbu_crawler import config, models
 
 logger = logging.getLogger(__name__)
 

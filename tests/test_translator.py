@@ -8,8 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import config
-import models
+from qbu_crawler import config, models
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +294,7 @@ class TestTranslationDB:
         assert stats["done"] == 0
 
 
-from server.translator import TranslationWorker
+from qbu_crawler.server.translator import TranslationWorker
 
 
 # ---------------------------------------------------------------------------

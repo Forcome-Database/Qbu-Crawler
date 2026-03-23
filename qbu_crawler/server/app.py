@@ -6,14 +6,13 @@ import uvicorn
 from fastapi import FastAPI
 from fastmcp import FastMCP
 
-import config
-import models
-from server.task_manager import TaskManager
-from server.translator import TranslationWorker
-from server.api.tasks import router as tasks_router
-from server.api.products import router as products_router
-from server.mcp.tools import register_tools
-from server.mcp.resources import register_resources
+from qbu_crawler import config, models
+from qbu_crawler.server.task_manager import TaskManager
+from qbu_crawler.server.translator import TranslationWorker
+from qbu_crawler.server.api.tasks import router as tasks_router
+from qbu_crawler.server.api.products import router as products_router
+from qbu_crawler.server.mcp.tools import register_tools
+from qbu_crawler.server.mcp.resources import register_resources
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)

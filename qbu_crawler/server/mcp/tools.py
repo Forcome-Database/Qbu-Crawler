@@ -9,14 +9,13 @@ import logging
 
 from fastmcp import FastMCP
 
-import models
-import config
+from qbu_crawler import models, config
 
 logger = logging.getLogger(__name__)
 
 
 def _get_tm():
-    from server.app import task_manager
+    from qbu_crawler.server.app import task_manager
     return task_manager
 
 
@@ -249,7 +248,7 @@ def register_tools(mcp: FastMCP):
         - send_email: 是否发送邮件，"true" 或 "false"
         返回报告摘要：新增产品数、评论数、翻译数、Excel 路径、邮件发送结果。"""
         from datetime import datetime
-        from server.report import generate_report as _generate_report
+        from qbu_crawler.server.report import generate_report as _generate_report
         try:
             since_dt = datetime.fromisoformat(since)
             result = _generate_report(
@@ -268,7 +267,7 @@ def register_tools(mcp: FastMCP):
         reset_skipped: "true" 时先将所有 skipped 评论重置为待翻译（用于补翻历史数据），
         "false"（默认）只触发现有待翻译队列。
         返回当前待翻译数量。"""
-        from server.app import translator
+        from qbu_crawler.server.app import translator
         if reset_skipped.lower() == "true":
             count = models.reset_skipped_translations()
             logger.info("trigger_translate: reset %d skipped reviews", count)

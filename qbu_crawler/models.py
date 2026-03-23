@@ -1,7 +1,7 @@
 import hashlib
 import json as _json
 import sqlite3
-from config import DB_PATH
+from qbu_crawler.config import DB_PATH
 
 # SQLite CURRENT_TIMESTAMP is always UTC.
 # Use this expression for Asia/Shanghai (UTC+8) timestamps.
@@ -522,7 +522,7 @@ def execute_readonly_sql(sql: str, timeout: int = 5, max_rows: int = 500) -> dic
 
 def get_pending_translations(limit: int = 20) -> list[dict]:
     """Fetch reviews needing translation, newest first."""
-    import config as _cfg
+    from qbu_crawler import config as _cfg
     max_retries = _cfg.TRANSLATE_MAX_RETRIES
     conn = get_conn()
     try:
