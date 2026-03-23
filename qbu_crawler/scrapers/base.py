@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from DrissionPage import Chromium, ChromiumOptions
 from qbu_crawler.config import (
-    HEADLESS, PAGE_LOAD_TIMEOUT, LOAD_MODE, NO_IMAGES,
+    HEADLESS, PAGE_LOAD_TIMEOUT, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL, REQUEST_DELAY, RESTART_EVERY,
     CHROME_USER_DATA_PATH,
 )

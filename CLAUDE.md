@@ -26,52 +26,62 @@
 ```
 Qbu-Crawler/
 ├── CLAUDE.md
-├── pyproject.toml
+├── README.md
+├── pyproject.toml          # 构建配置（hatchling + PyPI 元数据 + 入口点）
+├── main.py                 # 便捷启动脚本（委托到 qbu_crawler.cli）
 ├── .env / .env.example
-├── config.py          # 配置（数据库、浏览器、MinIO、等待/重试/反爬参数）
-├── models.py          # SQLite 数据层（products + product_snapshots + reviews + tasks 表）
-├── minio_client.py    # MinIO 图片上传客户端
-├── main.py            # CLI 入口（多站点路由 + 并行采集 + serve 子命令）
-├── server/
-│   ├── __init__.py
-│   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
-│   ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
-│   ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
-│   ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── auth.py         # API Key 认证中间件
-│   │   ├── tasks.py        # 任务管理 endpoints
-│   │   └── products.py     # 数据查询 endpoints
-│   ├── mcp/
-│   │   ├── __init__.py
-│   │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL + 报告生成）
-│   │   └── resources.py    # MCP Resources（数据库元数据）
-│   └── openclaw/
-│       ├── README.md
-│       ├── plugin/                 # MCP 插件
-│       └── workspace/
-│           ├── AGENTS.md           # 操作规范（URL路由、ownership、安全边界）
-│           ├── SOUL.md             # 身份定义（豆沙）
-│           ├── TOOLS.md            # 工具参数参考 + 输出格式模板
-│           ├── HEARTBEAT.md        # 心跳检查清单
-│           ├── USER.md             # 用户信息
-│           ├── IDENTITY.md         # Agent 身份
-│           ├── state/              # 运行时状态
-│           ├── config/             # 邮件收件人等配置
-│           ├── reports/            # Excel 报告输出
-│           ├── data/               # CSV（分类页+产品页 URL）
-│           └── skills/
-│               ├── qbu-product-data/    # 深度数据分析 SQL 模板
-│               ├── daily-scrape-submit/ # 定时任务提交
-│               ├── daily-scrape-report/ # 任务完成汇报
-│               └── csv-management/      # URL/SKU 管理
-├── scrapers/
-│   ├── __init__.py    # 工厂函数 get_scraper() + SITE_MAP
-│   ├── base.py        # BaseScraper 基类（浏览器管理 + 通用工具）
-│   ├── basspro.py     # BassProScraper — Bass Pro Shops
-│   ├── meatyourmaker.py  # MeatYourMakerScraper — Meat Your Maker
-│   └── waltons.py     # WaltonsScraper — Walton's
+├── qbu_crawler/            # Python 包根目录
+│   ├── __init__.py         # 版本号 (__version__)
+│   ├── cli.py              # CLI 入口（uvx / pip install 后的命令入口）
+│   ├── config.py           # 配置（数据库、浏览器、MinIO、等待/重试/反爬参数）
+│   ├── models.py           # SQLite 数据层（products + product_snapshots + reviews + tasks 表）
+│   ├── minio_client.py     # MinIO 图片上传客户端
+│   ├── proxy.py            # 代理池管理（API 获取/缓存/轮换代理 IP）
+│   ├── scrapers/
+│   │   ├── __init__.py     # 工厂函数 get_scraper() + SITE_MAP
+│   │   ├── base.py         # BaseScraper 基类（浏览器管理 + 通用工具）
+│   │   ├── basspro.py      # BassProScraper — Bass Pro Shops
+│   │   ├── meatyourmaker.py  # MeatYourMakerScraper — Meat Your Maker
+│   │   └── waltons.py      # WaltonsScraper — Walton's
+│   └── server/
+│       ├── __init__.py
+│       ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
+│       ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
+│       ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
+│       ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
+│       ├── api/
+│       │   ├── __init__.py
+│       │   ├── auth.py         # API Key 认证中间件
+│       │   ├── tasks.py        # 任务管理 endpoints
+│       │   └── products.py     # 数据查询 endpoints
+│       ├── mcp/
+│       │   ├── __init__.py
+│       │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL + 报告生成）
+│       │   └── resources.py    # MCP Resources（数据库元数据）
+│       └── openclaw/
+│           ├── README.md
+│           ├── plugin/                 # MCP 插件
+│           └── workspace/
+│               ├── AGENTS.md           # 操作规范（URL路由、ownership、安全边界）
+│               ├── SOUL.md             # 身份定义（豆沙）
+│               ├── TOOLS.md            # 工具参数参考 + 输出格式模板
+│               ├── HEARTBEAT.md        # 心跳检查清单
+│               ├── USER.md             # 用户信息
+│               ├── IDENTITY.md         # Agent 身份
+│               ├── state/              # 运行时状态
+│               ├── config/             # 邮件收件人等配置
+│               ├── reports/            # Excel 报告输出
+│               ├── data/               # CSV（分类页+产品页 URL）
+│               └── skills/
+│                   ├── qbu-product-data/    # 深度数据分析 SQL 模板
+│                   ├── daily-scrape-submit/ # 定时任务提交
+│                   ├── daily-scrape-report/ # 任务完成汇报
+│                   └── csv-management/      # URL/SKU 管理
+├── scripts/
+│   └── publish.py          # 一键 PyPI 发布脚本
+├── .github/
+│   └── workflows/
+│       └── publish.yml     # GitHub Actions CI/CD（tag 触发自动发布）
 ├── data/
 │   └── products.db
 └── docs/
@@ -87,6 +97,7 @@ Qbu-Crawler/
 # 安装依赖
 uv sync
 
+# ── 从源码运行（开发模式）──────────────────────
 # 启动 HTTP API + MCP 服务
 uv run python main.py serve
 uv run python main.py serve --host 0.0.0.0 --port 9000
@@ -104,6 +115,21 @@ uv run python main.py -c <category-url> 3
 # 多站点分类页并行采集
 uv run python main.py -c <basspro-category> -c <meat-category>
 
+# ── pip / uvx 安装后运行 ──────────────────────
+# uvx 直接运行（无需安装）
+uvx qbu-crawler <product-url>
+uvx qbu serve
+
+# pip 安装后运行
+pip install qbu-crawler
+qbu-crawler serve
+qbu -f urls.txt     # 短别名
+
+# ── 发布 ──────────────────────────────────────
+python scripts/publish.py patch      # 0.1.0 -> 0.1.1
+python scripts/publish.py minor      # 0.1.0 -> 0.2.0
+python scripts/publish.py --dry-run patch  # 只构建不发布
+
 # 查询数据库（按站点）
 uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c.execute('SELECT site,name,sku,price,rating FROM products').fetchall())"
 ```
@@ -112,7 +138,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 采用**轻量继承 + 独立实现**模式：
 
-- `BaseScraper`（`scrapers/base.py`）：仅管理浏览器生命周期和通用工具（类型转换、随机延迟、MinIO 图片上传），不定义抽象方法
+- `BaseScraper`（`scrapers/base.py`）：管理浏览器生命周期、代理池降级（`_get_page()` 封装导航+封锁检测+代理重试）和通用工具（类型转换、随机延迟、MinIO 图片上传），不定义抽象方法
 - 各站点子类完全独立实现 `scrape()` 和 `collect_product_urls()`，互不影响
 - `scrapers/__init__.py`：工厂函数 `get_scraper(url)` 根据 URL 域名自动路由到对应子类
 - `main.py`：支持单站点直接运行和多站点 `ThreadPoolExecutor` 并行（每站点独立浏览器实例）
@@ -134,6 +160,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用（用户数据模式下自动禁用） |
 | `MAX_REVIEWS` | `200` | 单产品最多加载评论数，`0` 不限（大量评论会导致浏览器崩溃） |
 | `CHROME_USER_DATA_PATH` | — | Chrome 用户数据目录路径，留空用独立浏览器。启用后复用已有 cookie/session 绕过 Akamai 等严格反爬。固定调试端口 19222，采集期间不可手动打开 Chrome |
+| `PROXY_API_URL` | — | 代理池 API 地址（如 `https://white.1024proxy.com/white/api?region=US&num=1&time=10&format=1&type=txt`），留空不使用。遇到 Access Denied 时自动获取代理 IP 重试 |
+| `PROXY_MAX_RETRIES` | `3` | 单个 URL 最大代理轮换次数，每次轮换重启浏览器 |
 
 ### 服务器配置（.env）
 
@@ -143,7 +171,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `SERVER_PORT` | `8000` | 服务监听端口 |
 | `API_KEY` | （必填） | HTTP API 认证密钥 |
 | `MAX_WORKERS` | `3` | 爬虫任务线程池大小 |
-| `OPENCLAW_HOOK_URL` | — | OpenClaw webhook 地址（如 `http://127.0.0.1:18789/hooks/wake`），留空禁用即时通知 |
+| `OPENCLAW_HOOK_URL` | — | OpenClaw gateway 地址（如 `http://127.0.0.1:18789`），留空禁用即时通知 |
 | `OPENCLAW_HOOK_TOKEN` | — | OpenClaw hooks.token，与 openclaw.json 中配置一致 |
 | `SQL_QUERY_TIMEOUT` | `5` | execute_sql 超时（秒） |
 | `SQL_QUERY_MAX_ROWS` | `500` | execute_sql 最大返回行数 |
@@ -220,12 +248,12 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 三阶段架构：
 1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect（带 reply_to）→ 存 task_id 到 active-tasks.json → DingTalk 通知
-2. **Heartbeat（main session，lightContext）**：调用 `check_pending_completions` 处理临时任务通知（直接发送，不再套 cron） → 检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3
+2. **Heartbeat（main session，lightContext）**：仅检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3。临时任务通知由服务端通过 `/hooks/agent` 直接投递，不经过心跳
 3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
 
-临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。心跳通过 `check_pending_completions` 发现已完成任务并直接发送通知，通知后调用 `mark_notified` 标记。不再依赖 adhoc-tasks.json 文件。
+临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。任务完成后 `TaskManager` 通过 POST `/hooks/agent` 直接投递通知到 reply_to 目标，服务端调用 `mark_task_notified` 标记。全程不依赖心跳或 HEARTBEAT.md。
 
-即时通知机制：`TaskManager` 在任务完成后自动调用 `openclaw system event --mode now` 即时触发心跳，无需等待下次轮询周期。回退策略：如 openclaw CLI 不可用，仍通过定期心跳轮询兜底。
+即时通知机制：`TaskManager` 在任务完成后通过 POST `/hooks/agent` 直接投递通知到钉钉（组装通知内容 + `deliver: true` + `channel: dingtalk` + `to: reply_to`），服务端标记 `notified_at`。失败时静默，回退到定期心跳通过 `check_pending_completions` 兜底。
 
 Workspace 文件体系：
 - `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）
@@ -242,10 +270,24 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **标签页复用**：使用 `latest_tab` 复用同一标签页，避免频繁开关
 - **定期重启**：每 N 个产品重启浏览器，防止内存泄漏（`RESTART_EVERY` 配置）
 - **随机延迟**：请求间随机等待（`REQUEST_DELAY` 配置），降低反爬检测
+- **代理池降级**：`_get_page()` 先直连，遇到 Akamai/Cloudflare Access Denied 时自动从代理 API 获取住宅 IP，重启浏览器带代理重试。代理 IP 带 TTL 缓存，过期或再次被封时自动轮换。需配置 `PROXY_API_URL`
 - **智能点击**：翻页使用 `click(by_js=None)`，优先模拟，被遮挡自动改 JS
 - **评论加载上限**：`MAX_REVIEWS` 限制单产品最多加载 200 条评论，防止 DOM 膨胀导致 JS 超时和浏览器崩溃
 - **分批提取 + 分批滚动**：评论提取每批 50 个 section，滚动每批 20 个，避免单次 JS 调用超时
 - **评论异常容错**：评论加载/滚动阶段的异常不会导致整个产品抓取失败，会尝试提取已加载的评论
+
+### 站点感知反爬策略
+
+采用**站点级属性声明**模式，每个 Scraper 子类通过类属性声明自己的反爬需求：
+
+- `SITE_LOAD_MODE`：页面加载模式（`eager` / `normal`）
+- `SITE_NEEDS_USER_DATA`：是否需要 Chrome 用户数据模式（Akamai 站点）
+- `SITE_RESTART_SAFE`：浏览器重启是否安全（`False` 则跳过 `RESTART_EVERY` 定期重启）
+
+`_get_page()` 根据属性自动选择策略：
+- **用户数据 + 代理**（`SITE_NEEDS_USER_DATA=True`）：Chrome 同时使用 `--user-data-dir` 和 `--proxy-server`，预热完成 Akamai challenge 后再爬取，代理轮换时保留用户数据。`_user_data_lock` 保证并发安全
+- **PROXY_SITES 代理**：首次直接走代理，被封后轮换
+- **直连降级**：先直连，被封后降级到代理
 
 ### 图片存储
 

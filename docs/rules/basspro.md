@@ -32,6 +32,18 @@ CHROME_USER_DATA_PATH=/home/你的用户名/.config/google-chrome
 - 需要先用正常 Chrome 手动访问一次 basspro.com（让 Akamai 种下有效 cookie）
 - 用户数据模式下不会自动重启浏览器（保留 cookie/session）
 
+### 用户数据 + 代理组合模式
+
+当同时配置 `CHROME_USER_DATA_PATH` 和 `PROXY_API_URL` 时，BassProScraper 会：
+
+1. 启动 Chrome 同时带 `--user-data-dir` 和 `--proxy-server` 参数
+2. 首次访问时执行 cookie 预热（`_warm_up`），访问 basspro.com 首页完成 Akamai challenge
+3. 后续产品页请求带着有效 `_abck` cookie + 住宅代理 IP
+4. 代理被封时：轮换代理 → 重启 Chrome（保留用户数据 + 新代理）→ 重新预热
+5. `PROXY_SITES=basspro` 配置在用户数据模式下被忽略（初始化时已处理代理）
+
+代理通过 HTTP CONNECT 隧道，Chrome 到目标站点的 TLS 握手穿过代理，JA3 指纹不变。
+
 ## 站点专属配置
 
 | 配置 | 默认值 | 说明 |
