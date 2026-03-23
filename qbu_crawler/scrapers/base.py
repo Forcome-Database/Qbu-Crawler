@@ -230,6 +230,78 @@ class BaseScraper:
         except Exception:
             return False
 
+    def _try_solve_cloudflare(self, tab, timeout=15) -> bool:
+        """检测 Cloudflare Turnstile 并尝试自动点击复选框。
+        Turnstile 的 checkbox 在 closed shadow root → iframe → closed shadow root 内，
+        无法通过 DOM 选择器直接访问。使用坐标定位点击。
+
+        Returns True if challenge solved, False otherwise.
+        """
+        title = tab.title or ""
+        # 仅处理 Cloudflare challenge 页面
+        if "Just a moment" not in title and "请稍候" not in title:
+            return False
+
+        logger.info("[反爬] 检测到 Cloudflare Turnstile，尝试自动点击...")
+        tab.wait(2, 3)  # 等待 Turnstile widget 渲染
+
+        # 方法1: DrissionPage CDP 穿透 — 尝试直接找到 iframe 内的 checkbox
+        try:
+            checkbox = tab.ele('@type=checkbox', timeout=3)
+            if checkbox:
+                checkbox.click()
+                logger.info("[反爬] 通过 CDP 穿透找到 checkbox 并点击")
+                if self._wait_cloudflare_pass(tab, timeout):
+                    return True
+        except Exception:
+            pass
+
+        # 方法2: 坐标定位 — 通过 JS 获取 Turnstile 容器位置，计算 checkbox 坐标
+        try:
+            pos = tab.run_js("""
+                // 使用稳定选择器：.main-content 下的 display:grid 容器
+                const content = document.querySelector('.main-content');
+                if (!content) return null;
+                const divs = content.querySelectorAll('div');
+                for (const d of divs) {
+                    const style = window.getComputedStyle(d);
+                    const rect = d.getBoundingClientRect();
+                    // Turnstile 容器特征：display:grid，高度 50-100px，宽度 > 200px
+                    if (style.display === 'grid' && rect.height > 50 && rect.height < 100 && rect.width > 200) {
+                        return JSON.stringify({x: rect.left, y: rect.top, w: rect.width, h: rect.height});
+                    }
+                }
+                return null;
+            """)
+            if pos:
+                data = json.loads(pos)
+                # checkbox 在容器左侧，约 (30, 中心) 位置
+                click_x = int(data['x']) + 30
+                click_y = int(data['y'] + data['h'] / 2)
+                tab.run_js(f"window.scrollTo(0, {int(data['y']) - 200})")
+                tab.wait(0.5)
+                # 用 DrissionPage actions 做真实鼠标点击
+                tab.actions.move(click_x, click_y, duration=0.3).click()
+                logger.info(f"[反爬] 通过坐标点击 Turnstile checkbox ({click_x}, {click_y})")
+                if self._wait_cloudflare_pass(tab, timeout):
+                    return True
+        except Exception as e:
+            logger.warning(f"[反爬] Turnstile 坐标点击失败: {e}")
+
+        logger.warning("[反爬] Cloudflare Turnstile 自动点击未通过")
+        return False
+
+    @staticmethod
+    def _wait_cloudflare_pass(tab, timeout=15) -> bool:
+        """等待 Cloudflare 验证完成（页面标题变化 + 内容加载）"""
+        for _ in range(timeout):
+            tab.wait(1)
+            title = tab.title or ""
+            if "Just a moment" not in title and "请稍候" not in title:
+                logger.info("[反爬] Cloudflare challenge 已通过")
+                return True
+        return False
+
     @staticmethod
     def _site_needs_proxy(url: str) -> bool:
         """检查 URL 对应的站点是否配置为直接使用代理"""
@@ -268,6 +340,14 @@ class BaseScraper:
         tab.get(url)
 
         if not self._is_blocked(tab):
+            if self._proxy:
+                pool = get_proxy_pool()
+                if pool:
+                    pool.mark_good(self._proxy)
+            return tab
+
+        # Cloudflare Turnstile: 尝试自动点击解决，不需要换代理
+        if self._try_solve_cloudflare(tab):
             if self._proxy:
                 pool = get_proxy_pool()
                 if pool:
@@ -336,6 +416,14 @@ class BaseScraper:
         tab.get(url)
 
         if not self._is_blocked(tab):
+            if self._proxy:
+                pool = get_proxy_pool()
+                if pool:
+                    pool.mark_good(self._proxy)
+            return tab
+
+        # Cloudflare Turnstile: 尝试自动点击解决，不需要换代理
+        if self._try_solve_cloudflare(tab):
             if self._proxy:
                 pool = get_proxy_pool()
                 if pool:
