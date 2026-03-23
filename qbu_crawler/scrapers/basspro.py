@@ -3,13 +3,17 @@ import logging
 import re
 import time
 
-from scrapers.base import BaseScraper
-from config import BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, PAGE_LOAD_TIMEOUT
+from qbu_crawler.scrapers.base import BaseScraper
+from qbu_crawler.config import BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, PAGE_LOAD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
 
 class BassProScraper(BaseScraper):
+
+    SITE_LOAD_MODE = "normal"       # Akamai challenge 需要完整加载
+    SITE_NEEDS_USER_DATA = True     # 需要用户数据绕过 Akamai
+    SITE_RESTART_SAFE = False       # 重启会丢 _abck cookie
 
     def _dismiss_age_gate(self, tab):
         """检测并关闭年龄验证弹窗（部分产品页会触发，如枪械/弹药相关）
@@ -59,8 +63,7 @@ class BassProScraper(BaseScraper):
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
 
-        tab = self.browser.latest_tab
-        tab.get(url)
+        tab = self._get_page(url)
         # eager 模式下 get() 在 DOM 就绪后自动返回
         self._dismiss_age_gate(tab)
         # 等待页面主要内容加载
@@ -157,14 +160,15 @@ class BassProScraper(BaseScraper):
 
         self._increment_and_delay(tab)
 
-        return {"product": result, "reviews": reviews}
+        data = {"product": result, "reviews": reviews}
+        self._validate_product(data, url)
+        return data
 
     def collect_product_urls(self, category_url: str, max_pages: int = 0) -> list[str]:
         """从分类/列表页采集所有产品 URL
         max_pages: 最大采集页数，0 表示全部
         """
-        tab = self.browser.latest_tab
-        tab.get(category_url)
+        tab = self._get_page(category_url)
         tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
         self._dismiss_age_gate(tab)
         tab.wait.ele_displayed('tag:h1', timeout=15)
@@ -291,7 +295,7 @@ class BassProScraper(BaseScraper):
         """循环点击 LOAD MORE 按钮加载评论。
         受 config.MAX_REVIEWS 限制，防止加载过多评论导致浏览器内存耗尽或 JS 超时。
         """
-        from config import MAX_REVIEWS
+        from qbu_crawler.config import MAX_REVIEWS
         max_clicks = 200  # 安全上限
         for i in range(max_clicks):
             result = tab.run_js("""

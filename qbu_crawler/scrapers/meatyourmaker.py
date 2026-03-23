@@ -1,8 +1,8 @@
 import json
 import time
 from DrissionPage import ChromiumOptions
-from scrapers.base import BaseScraper
-from config import (
+from qbu_crawler.scrapers.base import BaseScraper
+from qbu_crawler.config import (
     HEADLESS, PAGE_LOAD_TIMEOUT, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL,
     BV_WAIT_TIMEOUT, BV_POLL_INTERVAL,
@@ -10,6 +10,8 @@ from config import (
 
 
 class MeatYourMakerScraper(BaseScraper):
+
+    SITE_LOAD_MODE = "normal"  # BV 脚本需要 normal 模式
 
     @staticmethod
     def _build_options() -> ChromiumOptions:
@@ -27,8 +29,7 @@ class MeatYourMakerScraper(BaseScraper):
 
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
-        tab = self.browser.latest_tab
-        tab.get(url)
+        tab = self._get_page(url)
         tab.wait.ele_displayed('tag:h1', timeout=15)
         self._check_url_match(tab, url)
 
@@ -96,7 +97,9 @@ class MeatYourMakerScraper(BaseScraper):
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
-        return {"product": result, "reviews": reviews}
+        data = {"product": result, "reviews": reviews}
+        self._validate_product(data, url)
+        return data
 
     def _wait_for_bv_data(self, tab):
         """轮询等待 BV 评分摘要数据注入"""
@@ -260,8 +263,7 @@ class MeatYourMakerScraper(BaseScraper):
 
     def collect_product_urls(self, category_url: str, max_pages: int = 0) -> list[str]:
         """从分类页采集产品 URL — 无限滚动（请求 data-grid-url）"""
-        tab = self.browser.latest_tab
-        tab.get(category_url)
+        tab = self._get_page(category_url)
         tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
         tab.wait.ele_displayed('tag:h1', timeout=15)
 
@@ -299,7 +301,7 @@ class MeatYourMakerScraper(BaseScraper):
             if not next_url:
                 break
 
-            tab.get(next_url)
+            tab = self._get_page(next_url)
             tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
             page += 1
 

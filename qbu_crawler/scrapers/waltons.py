@@ -5,8 +5,8 @@ import time
 from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 from DrissionPage import ChromiumOptions
-from scrapers.base import BaseScraper, _has_display
-from config import (
+from qbu_crawler.scrapers.base import BaseScraper, _has_display
+from qbu_crawler.config import (
     HEADLESS, PAGE_LOAD_TIMEOUT, LOAD_MODE, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL,
     BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, MAX_REVIEWS,
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class WaltonsScraper(BaseScraper):
+
+    SITE_LOAD_MODE = "normal"  # Cloudflare + TrustSpot 需要 normal 模式
 
     @staticmethod
     def _build_options() -> ChromiumOptions:
@@ -48,8 +50,7 @@ class WaltonsScraper(BaseScraper):
     def scrape(self, url: str) -> dict:
         self._maybe_restart_browser()
 
-        tab = self.browser.latest_tab
-        tab.get(url)
+        tab = self._get_page(url)
         tab.wait.ele_displayed('tag:h1', timeout=15)
         self._check_url_match(tab, url)
 
@@ -125,7 +126,9 @@ class WaltonsScraper(BaseScraper):
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
-        return {"product": result, "reviews": reviews}
+        data = {"product": result, "reviews": reviews}
+        self._validate_product(data, url)
+        return data
 
     def _extract_jsonld(self, tab):
         """Extract all JSON-LD scripts and merge Product blocks.
@@ -376,8 +379,7 @@ class WaltonsScraper(BaseScraper):
         new_query = urlencode(qs, doseq=True)
         start_url = urlunparse(parsed._replace(query=new_query))
 
-        tab = self.browser.latest_tab
-        tab.get(start_url)
+        tab = self._get_page(start_url)
         tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
         tab.wait.ele_displayed('tag:h1', timeout=15)
 
@@ -414,7 +416,7 @@ class WaltonsScraper(BaseScraper):
             if not next_href:
                 break
 
-            tab.get(next_href)
+            tab = self._get_page(next_href)
             tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
             tab.wait.ele_displayed('tag:h1', timeout=15)
             page += 1
