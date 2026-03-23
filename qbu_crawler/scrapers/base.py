@@ -131,7 +131,9 @@ class BaseScraper:
         else:
             # 无代理时尝试连接已运行的 Chrome
             try:
-                return Chromium(port)
+                browser = Chromium(port)
+                cls._cleanup_tabs(browser)
+                return browser
             except Exception:
                 pass
 
@@ -152,15 +154,34 @@ class BaseScraper:
         if HEADLESS and _has_display():
             args.append('--headless=new')
         args.append('--disable-session-crashed-bubble')
-        args.append('--restore-last-session=false')
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(20):
             time.sleep(1)
             try:
-                return Chromium(port)
+                browser = Chromium(port)
+                cls._cleanup_tabs(browser)
+                return browser
             except Exception:
                 continue
         raise RuntimeError(f"Chrome with user data failed to start on port {port}")
+
+    @staticmethod
+    def _cleanup_tabs(browser):
+        """关闭多余标签，只保留一个。防止用户数据 Chrome 会话恢复导致标签堆积。"""
+        try:
+            tabs = browser.get_tabs()
+            if len(tabs) <= 1:
+                return
+            # 保留最后一个标签，关闭其余
+            for tab_id in tabs[:-1]:
+                try:
+                    tab = browser.get_tab(tab_id)
+                    tab.close()
+                except Exception:
+                    pass
+            logger.info(f"[清理] 关闭 {len(tabs) - 1} 个多余标签")
+        except Exception:
+            pass
 
     def _warm_up(self):
         """访问站点首页完成反爬 challenge（如 Akamai _abck cookie）。
