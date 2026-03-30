@@ -9,11 +9,13 @@ router = APIRouter(prefix="/api/tasks", dependencies=[Depends(verify_api_key)])
 class ScrapeRequest(BaseModel):
     urls: list[str]
     ownership: str
+    reply_to: str = ""
 
 class CollectRequest(BaseModel):
     category_url: str
     max_pages: int = 0
     ownership: str
+    reply_to: str = ""
 
 
 def _get_tm():
@@ -26,14 +28,14 @@ async def create_scrape_task(req: ScrapeRequest):
     if not req.urls:
         raise HTTPException(400, "urls cannot be empty")
     tm = _get_tm()
-    task = tm.submit_scrape(req.urls, ownership=req.ownership)
+    task = tm.submit_scrape(req.urls, ownership=req.ownership, reply_to=req.reply_to)
     return {"task_id": task.id, "status": task.status.value, "total": len(req.urls)}
 
 
 @router.post("/collect")
 async def create_collect_task(req: CollectRequest):
     tm = _get_tm()
-    task = tm.submit_collect(req.category_url, req.max_pages, ownership=req.ownership)
+    task = tm.submit_collect(req.category_url, req.max_pages, ownership=req.ownership, reply_to=req.reply_to)
     return {"task_id": task.id, "status": task.status.value}
 
 

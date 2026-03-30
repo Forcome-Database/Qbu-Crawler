@@ -8,9 +8,11 @@ Qbu-Crawler 统一启动入口
     qbu-crawler -f urls.txt
     qbu-crawler -c <category-url>
     qbu-crawler serve [--host 0.0.0.0] [--port 9000]
+    qbu-crawler workflow daily-submit [--logical-date YYYY-MM-DD] [--dry-run]
     qbu                             # 短别名
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -56,6 +58,7 @@ def main():
   qbu-crawler -c <分类页URL> [最大页数]     从分类页自动采集产品链接并抓取
   qbu-crawler -c <URL1> -c <URL2>          多站点分类页并行采集
   qbu-crawler serve [--host HOST] [--port PORT]  启动 HTTP API + MCP 服务
+  qbu-crawler workflow daily-submit         从本机 CSV 提交每日批次（幂等）
 
 支持站点: """ + ", ".join(SITE_MAP.keys())
 
@@ -150,6 +153,46 @@ def main():
             else:
                 i += 1
         start_server(host=host, port=port)
+        return
+
+    if len(sys.argv) >= 3 and sys.argv[1] == "workflow" and sys.argv[2] == "daily-submit":
+        from qbu_crawler import config
+        from qbu_crawler.server.workflows import LocalHttpTaskSubmitter, submit_daily_run
+
+        logical_date = None
+        dry_run = False
+        source_csv = config.DAILY_SOURCE_CSV_PATH
+        detail_csv = config.DAILY_PRODUCT_CSV_PATH
+        args = sys.argv[3:]
+        i = 0
+        while i < len(args):
+            if args[i] == "--logical-date" and i + 1 < len(args):
+                logical_date = args[i + 1]
+                i += 2
+            elif args[i] == "--source-csv" and i + 1 < len(args):
+                source_csv = args[i + 1]
+                i += 2
+            elif args[i] == "--detail-csv" and i + 1 < len(args):
+                detail_csv = args[i + 1]
+                i += 2
+            elif args[i] == "--dry-run":
+                dry_run = True
+                i += 1
+            else:
+                print(f"未知参数: {args[i]}")
+                sys.exit(1)
+
+        print("初始化数据库...")
+        init_db()
+        result = submit_daily_run(
+            submitter=LocalHttpTaskSubmitter(),
+            source_csv=source_csv,
+            detail_csv=detail_csv,
+            logical_date=logical_date,
+            requested_by="cli",
+            dry_run=dry_run,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return
 
     if len(sys.argv) < 2:

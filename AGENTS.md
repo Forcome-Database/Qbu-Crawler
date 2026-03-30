@@ -286,3 +286,15 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **`docs/features/`** — 需求文档。命名：`F{序号}-{简述}.md`（如 `F001-basic-scraper.md`）
 - **`docs/plans/`** — 实施计划。命名：`P{序号}-{简述}.md`（如 `P001-basic-scraper.md`），与 feature 序号对应
 - **`docs/devlogs/`** — 开发日志。命名：`D{序号}-{简述}.md`（如 `D001-basic-scraper.md`），记录实现细节和踩坑
+
+## 2026-03-29 结构增量
+
+本次 OpenClaw 混合自动化重构新增的核心文件和目录：
+
+- `qbu_crawler/server/notifier.py` — outbox worker 和 OpenClaw bridge sender
+- `qbu_crawler/server/workflows.py` — daily workflow orchestration 和 reconcile
+- `qbu_crawler/server/report_snapshot.py` — immutable snapshot + fast/full report helpers
+- `qbu_crawler/server/runtime.py` — translator / notifier / workflow worker 的统一生命周期
+- `qbu_crawler/server/openclaw/bridge/app.py` — OpenClaw Host 上的 hardened notify bridge
+- `deploy/crawler/systemd/` — crawler-host daily-submit timer/service
+- `deploy/openclaw/` — OpenClaw host 的 `openclaw.json` 模板、sync 脚本、bridge service

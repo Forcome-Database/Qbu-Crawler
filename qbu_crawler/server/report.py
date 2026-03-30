@@ -454,3 +454,97 @@ def generate_report(
         "excel_path": excel_path,
         "email": email_result,
     }
+
+
+_legacy_query_report_data = query_report_data
+_legacy_generate_excel = generate_excel
+
+
+def _report_ts(value: datetime | str) -> str:
+    """Normalize report cutoffs to the naive timestamp format stored in SQLite."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is not None:
+        value = value.replace(tzinfo=None)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def query_report_data(
+    since: datetime | str,
+    until: datetime | str | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Query products and reviews inside a bounded report window."""
+    if until is None:
+        return _legacy_query_report_data(since if isinstance(since, datetime) else datetime.fromisoformat(since))
+
+    since_str = _report_ts(since)
+    until_str = _report_ts(until)
+
+    conn = models.get_conn()
+    try:
+        product_rows = conn.execute(
+            """
+            SELECT url, name, sku, price, stock_status, rating, review_count,
+                   scraped_at, site, ownership
+            FROM products
+            WHERE scraped_at >= ?
+              AND scraped_at < ?
+            ORDER BY scraped_at DESC
+            """,
+            (since_str, until_str),
+        ).fetchall()
+        products = [dict(r) for r in product_rows]
+
+        review_rows = conn.execute(
+            """
+            SELECT p.name AS product_name, p.sku AS product_sku,
+                   r.author, r.headline, r.body, r.rating,
+                   r.date_published, r.images, p.ownership,
+                   r.headline_cn, r.body_cn, r.translate_status
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            WHERE r.scraped_at >= ?
+              AND r.scraped_at < ?
+            ORDER BY r.scraped_at DESC
+            """,
+            (since_str, until_str),
+        ).fetchall()
+        reviews = []
+        for row in review_rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = json.loads(data["images"])
+                except Exception:
+                    pass
+            reviews.append(data)
+    finally:
+        conn.close()
+
+    logger.info(
+        "query_report_data: since=%s until=%s -> %d products, %d reviews",
+        since_str,
+        until_str,
+        len(products),
+        len(reviews),
+    )
+    return products, reviews
+
+
+def generate_excel(
+    products: list[dict],
+    reviews: list[dict],
+    report_date: datetime | None = None,
+    output_path: str | None = None,
+) -> str:
+    """Generate an Excel report, optionally to an immutable output path."""
+    generated_path = _legacy_generate_excel(products, reviews, report_date=report_date)
+    if not output_path:
+        return generated_path
+
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    if os.path.abspath(generated_path) != os.path.abspath(output_path):
+        Path(generated_path).replace(output_path)
+    return output_path

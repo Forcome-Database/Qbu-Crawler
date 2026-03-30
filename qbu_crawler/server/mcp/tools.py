@@ -293,6 +293,8 @@ def register_tools(mcp: FastMCP):
     def check_pending_completions() -> str:
         """检查已完成但尚未通知的任务。返回所有终态（completed/failed/cancelled）且设置了
         reply_to 但未标记 notified_at 的任务。心跳调用此工具可一次性获取所有待通知任务。"""
+        if config.NOTIFICATION_MODE == "outbox":
+            return _json.dumps({"tasks": [], "count": 0, "mode": "outbox"})
         tasks = models.get_pending_completions()
         return _json.dumps({"tasks": tasks, "count": len(tasks)}, default=str)
 
@@ -302,3 +304,31 @@ def register_tools(mcp: FastMCP):
         标记后这些任务不会再出现在 check_pending_completions 结果中。"""
         count = models.mark_task_notified(task_ids)
         return _json.dumps({"marked": count})
+
+    @mcp.tool
+    def get_workflow_status(run_id: int = -1, trigger_key: str = "") -> str:
+        run = None
+        if run_id >= 0:
+            run = models.get_workflow_run(run_id)
+        elif trigger_key:
+            run = models.get_workflow_run_by_trigger_key(trigger_key)
+        else:
+            return _json.dumps({"error": "Provide run_id or trigger_key"})
+
+        if not run:
+            return _json.dumps({"error": "Workflow run not found"})
+
+        tasks = models.list_workflow_run_tasks(run["id"])
+        return _json.dumps({"run": run, "tasks": tasks}, default=str)
+
+    @mcp.tool
+    def list_workflow_runs(status: str = "", limit: int = 20) -> str:
+        statuses = [status] if status else None
+        runs = models.list_workflow_runs(statuses=statuses, limit=limit)
+        return _json.dumps({"items": runs, "total": len(runs)}, default=str)
+
+    @mcp.tool
+    def list_pending_notifications(status: str = "", limit: int = 20) -> str:
+        statuses = [status] if status else None
+        items = models.list_notifications(statuses=statuses, limit=limit)
+        return _json.dumps({"items": items, "total": len(items)}, default=str)

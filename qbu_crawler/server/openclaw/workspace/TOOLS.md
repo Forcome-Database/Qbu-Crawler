@@ -1,260 +1,42 @@
-# 工具参考
+# Tool Guide
 
-## 支持站点
+## Task Submission
 
-- 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com`
-- 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com`
-- 🔧 **Walton's**（waltons）— `www.waltons.com` / `waltons.com`
+- `start_scrape(urls, ownership, reply_to)`
+- `start_collect(category_url, ownership, max_pages=0, reply_to="")`
 
-## 工具参数速查
+Rules:
 
-### 任务管理
+- `ownership` must be `own` or `competitor`.
+- For ad-hoc chat tasks, always pass `reply_to`.
 
-| 工具 | 必填参数 | 可选参数 |
-|------|---------|---------|
-| `start_scrape` | urls, ownership | reply_to |
-| `start_collect` | category_url, ownership | max_pages（0=全部）, reply_to |
-| `get_task_status` | task_id | — |
-| `list_tasks` | — | status, limit |
-| `cancel_task` | task_id | — |
-| `check_pending_completions` | — | — |
-| `mark_notified` | task_ids | — |
+## Workflow Inspection
 
-### 数据查询
+- `get_workflow_status(run_id | trigger_key)`
+  returns run state, `report_phase`, snapshot metadata, and attached tasks
+- `list_workflow_runs(status="", limit=20)`
+  use for daily pipeline inspection
+- `list_pending_notifications(status="", limit=20)`
+  use for outbox backlog, failed delivery, and deadletter checks
 
-| 工具 | 必填参数 | 可选参数 |
-|------|---------|---------|
-| `list_products` | — | site, search, min_price, max_price, stock_status, ownership, sort_by, order, limit, offset |
-| `get_product_detail` | product_id 或 url 或 sku | — |
-| `query_reviews` | — | product_id, sku, site, ownership, min_rating, max_rating, author, keyword, has_images, sort_by, order, limit, offset |
-| `get_price_history` | product_id | days（默认30） |
-| `get_stats` | — | — |
-| `execute_sql` | sql | — |
-| `generate_report` | since | send_email（默认 true） |
-| `trigger_translate` | — | reset_skipped（默认 false） |
-| `get_translate_status` | — | since（可选） |
+Important states:
 
-### 参数说明
+- workflow `status`:
+  `submitted`, `running`, `reporting`, `completed`, `failed`, `needs_attention`
+- workflow `report_phase`:
+  `none`, `fast_pending`, `fast_sent`, `full_pending`, `full_sent`
+- notification `status`:
+  `pending`, `claimed`, `failed`, `sent`, `deadletter`
 
-- `ownership`：`own`（自有）或 `competitor`（竞品），start_scrape/start_collect 中**必填**
-- `reply_to`：任务完成后通知目标。格式 `user:{id}` 或 `chat:{id}`。传入后服务端自动追踪，心跳自动通知
-- `min_price`/`max_price`/`min_rating`/`max_rating`：`-1` 表示不限制
-- `max_pages`：`0` 表示采集全部页
-- `has_images`：字符串 `"true"` 或 `"false"`
-- `execute_sql`：仅 SELECT，500 行上限，5 秒超时
-- `generate_report`：`since` 为上海时间戳（`YYYY-MM-DDTHH:MM:SS`）
-- `check_pending_completions`：无参数，返回已完成但未通知的任务列表
-- `mark_notified`：`task_ids` 为字符串数组，标记后任务不再出现在 pending completions 中
-- 所有时间戳统一使用**上海时间**（Asia/Shanghai），格式 `YYYY-MM-DDTHH:MM:SS`，无时区后缀
+## Data and Reporting
 
-## 服务端能力概览
+- `generate_report(since, send_email="true")` is the legacy service-side report pipeline.
+- In the new workflow path, fast/full report state should be read from workflow tools first.
+- `trigger_translate()` and `get_translate_status()` are operational helpers, not daily scheduler controls.
 
-服务端（FastAPI + FastMCP）提供以下自动化能力，agent 应充分利用：
+## Old Compatibility Tools
 
-1. **任务自动追踪**：`start_scrape`/`start_collect` 传入 `reply_to` 后，任务完成状态自动持久化到 SQLite tasks 表。不需要 agent 写状态文件。
-2. **待通知任务发现**：`check_pending_completions` 一次调用返回所有"已完成但未通知"的任务，无需逐个轮询 task_id。
-3. **通知标记**：`mark_notified` 防止重复通知。
-4. **后台翻译**：TranslationWorker 守护线程自动翻译新评论，`get_translate_status` 查进度。
-5. **报告生成**：`generate_report` 在服务端完成查询+翻译+Excel+邮件，agent 只需传 since 时间。
+- `check_pending_completions`
+- `mark_notified`
 
-## CSV 文件
-
-- 分类页：`~/.openclaw/workspace/data/sku-list-source.csv`
-- 产品页：`~/.openclaw/workspace/data/sku-product-details.csv`
-- 格式：`url,ownership`（有表头），一行一条
-
-## 邮件收件人
-
-邮件收件人在服务端环境变量 `EMAIL_RECIPIENTS` 中配置（逗号分隔多个邮箱），agent 无法修改。如需变更收件人，告知用户联系管理员更新服务端 `.env` 配置。
-
-## 状态文件
-
-- `~/.openclaw/workspace/state/active-tasks.json` — 定时任务状态（仅定时工作流使用）
-
-注：临时任务不再使用状态文件，通过服务端 `reply_to` + `check_pending_completions` 追踪。
-
----
-
-## 输出格式规范
-
-向钉钉输出结构化内容时必须遵守以下规范。
-
-### 基本原则
-
-- **绝不**向用户展示 JSON、SQL、代码或工具名称
-- 价格：**$XX.XX** | 评分：**X.X/5** ⭐ | 库存：✅ 有货 / ❌ 缺货
-- 任务状态：⏳ 进行中 / ✔️ 完成 / ❌ 失败 / 🚫 已取消
-- 给完结果后**主动建议下一步**
-
-### 钉钉排版
-
-**支持**：标题（# ## ###）、加粗、列表（- 和 1.）、嵌套列表、引用（>）、链接、分隔线、代码块
-**不支持**：❌ 表格 | ❌ 删除线
-
-**规则**：禁止表格用列表代替、标题分隔板块、加粗关键数据、一段不超 3 行
-
-### 产品列表
-
-```
-## 🔍 搜索结果：共 **15** 个产品
-
-### 1. Product Name A
-- **价格**：$129.99
-- **评分**：4.5/5 ⭐（128 条评论）
-- **库存**：✅ 有货
-- **站点**：Bass Pro Shops
-```
-
-### 任务状态
-
-```
-## 🚀 任务已启动
-
-- **任务 ID**：xxxxxxxx
-- **类型**：产品抓取（3 个产品）
-- **状态**：⏳ 等待执行
-
-完成后会自动通知。
-```
-
-### 任务进度
-
-```
-## 📊 任务进度
-
-- **任务 ID**：xxxxxxxx
-- **状态**：⏳ 采集中（2/5 完成，1 失败）
-- **当前**：正在采集 Product Name...
-- **耗时**：2 分 30 秒
-- **进度**：▓▓▓▓▓▓░░░░ 40%
-```
-
-### 定时任务启动通知
-
-```
-🚀 每日爬虫任务已启动
-
-- **提交时间**：YYYY-MM-DD HH:MM
-- **分类采集**：N 个任务
-- **产品抓取**：N 个任务（N 个产品）
-- **任务 ID**：xxx, yyy
-
-将自动监控任务进度，完成后汇报。
-```
-
-### 定时任务完成通知
-
-```
-✅ 每日爬虫任务已完成
-
-- **完成时间**：YYYY-MM-DD HH:MM
-- **产品抓取**：成功 N，失败 N
-- **新增评论**：N 条
-- **翻译进度**：N/M 已完成
-- **自有产品**：N 个 | **竞品**：N 个
-- **邮件发送**：✅ 已发送至 N 位收件人
-- **报告文件**：scrape-report-YYYY-MM-DD.xlsx
-```
-
-### 产品详情
-
-```
-## 📦 Product Full Name
-
-- **SKU**：ABC-12345
-- **价格**：$129.99
-- **评分**：4.5/5 ⭐（128 条评论）
-- **库存**：✅ 有货
-- **站点**：Bass Pro Shops
-- **最后更新**：2026-01-15
-
----
-
-### 💬 最近评论
-
-1. ⭐⭐⭐⭐⭐ **John D.**："Great product!" — 2026-01-10
-2. ⭐⭐⭐⭐ **Jane S.**："Good but pricey" — 2026-01-08
-
----
-
-### 📈 近30天价格
-
-- 01-15：**$129.99** ✅
-- 01-10：$139.99 ✅
-- 01-05：$129.99 ✅
-
-> 30天价格波动：$129.99 ~ $139.99
-```
-
-### 数据总览
-
-```
-## 📊 数据总览
-
-- 📦 **产品总数**：245
-- 💬 **评论总数**：3,842
-- 💰 **平均价格**：$87.50
-- ⭐ **平均评分**：4.1/5
-
----
-
-### 站点分布
-- 🏪 **Bass Pro Shops**：180 个产品
-- 🥩 **Meat Your Maker**：65 个产品
-
-### 产品归属
-- 🏠 **自有产品**：N 个
-- 🎯 **竞品**：N 个
-```
-
-### 评分分布
-
-```
-## 📊 评分分布（共 573 条）
-
-- ⭐⭐⭐⭐⭐ **5星**：334 条（58.3%）████████████
-- ⭐⭐⭐⭐ **4星**：87 条（15.2%）█████
-- ⭐⭐⭐ **3星**：36 条（6.3%）██
-- ⭐⭐ **2星**：37 条（6.5%）██
-- ⭐ **1星**：79 条（13.8%）████
-```
-
-### 差评分析
-
-```
-## 🔍 差评分析
-
-### 1. Product Name（42 条差评）
-
-**核心问题：**
-
-- **精度不足**：多条差评反映读数偏差大
-- **电源故障**：按钮无法开机，需反复拔插电池
-
-**改良建议：**
-
-- [x] 提升传感器精度并增加校准功能
-- [x] 改用弹簧扣式电池盖
-```
-
-### 竞品对比
-
-```
-## 🏪 Bass Pro Shops vs 🥩 Meat Your Maker
-
-### Bass Pro Shops
-- **产品数**：180
-- **平均价格**：$67.50
-- **平均评分**：4.3/5 ⭐
-- **评论总数**：2,841
-
-### Meat Your Maker
-- **产品数**：65
-- **平均价格**：$142.80
-- **平均评分**：3.8/5 ⭐
-- **评论总数**：1,001
-
----
-
-**结论**：Bass Pro 产品更多、均价更低、评分更高。Meat Your Maker 定位高端但评分偏低，建议关注差评原因。
-```
+These exist only for `legacy` and `shadow` rollout modes. They are not the authoritative path once `NOTIFICATION_MODE=outbox`.

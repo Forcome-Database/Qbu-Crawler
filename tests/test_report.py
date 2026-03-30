@@ -125,6 +125,42 @@ def test_query_report_data_future_cutoff(patch_db, monkeypatch):
     assert reviews == []
 
 
+def test_query_report_data_respects_until(patch_db, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", patch_db)
+
+    conn = _get_test_conn(patch_db)
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+2 hours'))
+        """,
+        (
+            "https://example.com/product/2",
+            "basspro",
+            "Future Product",
+            "SKU-002",
+            59.99,
+            "in_stock",
+            0,
+            0,
+            "competitor",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    from qbu_crawler.server.report import query_report_data
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    until = datetime.now(timezone.utc) + timedelta(minutes=30)
+    products, reviews = query_report_data(since, until=until)
+
+    assert len(products) == 1
+    assert products[0]["sku"] == "SKU-001"
+    assert len(reviews) == 1
+
+
 # ---------------------------------------------------------------------------
 # generate_excel
 # ---------------------------------------------------------------------------
@@ -132,8 +168,11 @@ def test_query_report_data_future_cutoff(patch_db, monkeypatch):
 def test_generate_excel(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
+    from qbu_crawler.server import report
     from qbu_crawler.server.report import generate_excel
     from openpyxl import load_workbook
+
+    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
 
     products = [
         {
@@ -185,11 +224,12 @@ def test_generate_excel(tmp_path, monkeypatch):
     assert ws_p.cell(row=2, column=2).value == "Test Product"
 
     ws_r = wb["评论"]
-    r_headers = [ws_r.cell(row=1, column=c).value for c in range(1, 10)]
+    r_headers = [ws_r.cell(row=1, column=c).value for c in range(1, 11)]
     assert "产品名称" in r_headers
     assert "标题（中文）" in r_headers
-    # images list serialised to JSON string
-    images_cell = ws_r.cell(row=2, column=9).value
+    assert ws_r.cell(row=2, column=9).value == "2026-03-01"
+    # When image downloads are unavailable, URLs fall back to the last column.
+    images_cell = ws_r.cell(row=2, column=10).value
     assert "img.example.com" in images_cell
 
 

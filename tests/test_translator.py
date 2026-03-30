@@ -319,7 +319,7 @@ class TestTranslationWorker:
         conn.close()
 
         worker = TranslationWorker(interval=1, batch_size=20)
-        worker._process_batch()
+        worker._process_round()
 
         conn = test_db()
         row = conn.execute("SELECT translate_status, headline_cn, body_cn FROM reviews WHERE body_hash = 'hempty'").fetchone()
@@ -345,7 +345,7 @@ class TestTranslationWorker:
 
         worker = TranslationWorker(interval=1, batch_size=20)
         monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
-        worker._process_batch()
+        worker._process_round()
 
         conn = test_db()
         row = conn.execute("SELECT headline_cn, body_cn, translate_status FROM reviews WHERE id = ?", (rid,)).fetchone()
@@ -379,7 +379,7 @@ class TestTranslationWorker:
 
         worker = TranslationWorker(interval=1, batch_size=20)
         monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
-        worker._process_batch()
+        worker._process_round()
 
         conn = test_db()
         r1 = conn.execute("SELECT translate_status FROM reviews WHERE id = ?", (rid1,)).fetchone()
@@ -405,7 +405,7 @@ class TestTranslationWorker:
 
         worker = TranslationWorker(interval=1, batch_size=20)
         monkeypatch.setattr(worker, "_call_llm", mock_call_llm)
-        worker._process_batch()
+        worker._process_round()
 
         conn = test_db()
         row = conn.execute("SELECT translate_status, translate_retries FROM reviews WHERE id = ?", (rid,)).fetchone()

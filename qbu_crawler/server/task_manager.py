@@ -5,6 +5,7 @@ supports cancellation, and persists task history to SQLite.
 """
 
 import json as _json
+import hashlib
 import urllib.request
 import uuid
 import logging
@@ -38,6 +39,10 @@ class Task:
         self.created_at = config.now_shanghai().isoformat()
         self.started_at: str | None = None
         self.finished_at: str | None = None
+        self.updated_at: str = self.created_at
+        self.last_progress_at: str | None = None
+        self.worker_token: str | None = None
+        self.system_error_code: str | None = None
         self.progress: dict = {}
         self.result: dict | None = None
         self.error: str | None = None
@@ -52,6 +57,10 @@ class Task:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "updated_at": self.updated_at,
+            "last_progress_at": self.last_progress_at,
+            "worker_token": self.worker_token,
+            "system_error_code": self.system_error_code,
             "progress": self.progress,
             "result": self.result,
             "error": self.error,
@@ -109,6 +118,7 @@ class TaskManager:
         task = self._tasks[task_id]
         flag = self._cancel_flags[task_id]
         task.status = TaskStatus.running
+        task.worker_token = uuid.uuid4().hex
         task.started_at = config.now_shanghai().isoformat()
         self._persist(task)
 
@@ -179,6 +189,7 @@ class TaskManager:
         task = self._tasks[task_id]
         flag = self._cancel_flags[task_id]
         task.status = TaskStatus.running
+        task.worker_token = uuid.uuid4().hex
         task.started_at = config.now_shanghai().isoformat()
         self._persist(task)
 
@@ -260,6 +271,10 @@ class TaskManager:
 
     def _persist(self, task: Task):
         try:
+            now = config.now_shanghai().isoformat()
+            task.updated_at = now
+            if task.status == TaskStatus.running:
+                task.last_progress_at = now
             models.save_task(task.to_dict())
         except Exception as e:
             logger.error(f"Failed to persist task {task.id}: {e}")
@@ -268,10 +283,9 @@ class TaskManager:
         """任务完成后通过 /hooks/agent 直接投递通知到钉钉。
         服务端组装通知内容 + 投递 + 标记已通知，不依赖心跳或 HEARTBEAT.md。
         失败时静默（不影响主流程，回退到定时心跳轮询兜底）。"""
+        mode = getattr(config, "NOTIFICATION_MODE", "legacy")
         hook_url = config.OPENCLAW_HOOK_URL
         hook_token = config.OPENCLAW_HOOK_TOKEN
-        if not hook_url:
-            return
 
         task = self._tasks.get(task_id)
         if not task:
@@ -309,6 +323,36 @@ class TaskManager:
         lines.append("")
         lines.append("如需生成报告并发送邮件，请回复「发邮件」。")
         notification = "\n".join(lines)
+
+        if mode in {"shadow", "outbox"}:
+            payload = {
+                "task_id": task.id,
+                "task_type": task.type,
+                "status": task.status.value,
+                "reply_to": task.reply_to,
+                "message": notification,
+                "result": task.result or {},
+                "error": task.error,
+            }
+            payload_hash = hashlib.sha1(
+                _json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            models.enqueue_notification(
+                {
+                    "kind": "task_completed",
+                    "channel": "dingtalk",
+                    "target": task.reply_to,
+                    "payload": payload,
+                    "dedupe_key": f"task:{task.id}:{task.status.value}",
+                    "payload_hash": payload_hash,
+                }
+            )
+            logger.info(f"[Task {task_id}] Completion notification queued to outbox (mode={mode})")
+
+        if mode == "outbox":
+            return
+        if not hook_url:
+            return
 
         # POST /hooks/agent 直接投递
         base = hook_url.rstrip("/").removesuffix("/hooks/wake").removesuffix("/hooks/agent")

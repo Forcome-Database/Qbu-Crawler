@@ -5,8 +5,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 数据目录：优先使用环境变量 QBU_DATA_DIR，否则使用当前工作目录下的 data/
-BASE_DIR = os.getcwd()
+
+def _enum_env(name: str, default: str, allowed: tuple[str, ...]) -> str:
+    """Read an enum-like env var and reject invalid rollout values early."""
+    value = os.getenv(name, default).strip().lower()
+    if value not in allowed:
+        allowed_values = ", ".join(allowed)
+        raise ValueError(f"{name} must be one of: {allowed_values}; got {value!r}")
+    return value
+
+# 数据目录：优先使用环境变量 QBU_DATA_DIR，否则使用项目根目录下的 data/
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(PACKAGE_DIR)
 DATA_DIR = os.getenv("QBU_DATA_DIR", "") or os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "products.db")
 
@@ -57,13 +67,45 @@ MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", "https://minio-api.forcome.com"
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 API_KEY = os.getenv("API_KEY", "")
+LOCAL_API_BASE_URL = os.getenv("LOCAL_API_BASE_URL", "") or f"http://127.0.0.1:{SERVER_PORT}"
 
 # ── Task Manager ────────────────────────────────────
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "3"))
+TASK_STALE_SECONDS = int(os.getenv("TASK_STALE_SECONDS", "900"))
+WORKFLOW_INTERVAL = int(os.getenv("WORKFLOW_INTERVAL", "15"))
+WORKFLOW_NOTIFICATION_TARGET = os.getenv("WORKFLOW_NOTIFICATION_TARGET", "workflow")
+NOTIFIER_INTERVAL = int(os.getenv("NOTIFIER_INTERVAL", "5"))
+NOTIFIER_LEASE_SECONDS = int(os.getenv("NOTIFIER_LEASE_SECONDS", "60"))
+NOTIFIER_MAX_ATTEMPTS = int(os.getenv("NOTIFIER_MAX_ATTEMPTS", "3"))
+
+# ── Rollout Feature Flags ───────────────────────────
+NOTIFICATION_MODE = _enum_env(
+    "NOTIFICATION_MODE",
+    "legacy",
+    ("legacy", "shadow", "outbox"),
+)
+DAILY_SUBMIT_MODE = _enum_env(
+    "DAILY_SUBMIT_MODE",
+    "openclaw",
+    ("openclaw", "crawler_systemd"),
+)
+REPORT_MODE = _enum_env(
+    "REPORT_MODE",
+    "legacy",
+    ("legacy", "snapshot_fast_full"),
+)
+AI_DIGEST_MODE = _enum_env(
+    "AI_DIGEST_MODE",
+    "off",
+    ("off", "async"),
+)
 
 # ── OpenClaw Webhook（任务完成即时通知）────────────
 OPENCLAW_HOOK_URL = os.getenv("OPENCLAW_HOOK_URL", "")      # e.g. http://127.0.0.1:18789
 OPENCLAW_HOOK_TOKEN = os.getenv("OPENCLAW_HOOK_TOKEN", "")   # hooks.token in openclaw.json
+OPENCLAW_BRIDGE_URL = os.getenv("OPENCLAW_BRIDGE_URL", "")
+OPENCLAW_BRIDGE_TOKEN = os.getenv("OPENCLAW_BRIDGE_TOKEN", "")
+OPENCLAW_BRIDGE_TIMEOUT = int(os.getenv("OPENCLAW_BRIDGE_TIMEOUT", "15"))
 
 # ── LLM Translation (OpenAI-compatible) ───────────
 LLM_API_BASE = os.getenv("LLM_API_BASE", "")
@@ -87,6 +129,23 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 # ── Report ────────────────────────────────────────
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
+OPENCLAW_WORKSPACE_DIR = os.getenv("OPENCLAW_WORKSPACE_DIR", "") or os.path.join(
+    BASE_DIR,
+    "qbu_crawler",
+    "server",
+    "openclaw",
+    "workspace",
+)
+DAILY_SOURCE_CSV_PATH = os.getenv("DAILY_SOURCE_CSV_PATH", "") or os.path.join(
+    OPENCLAW_WORKSPACE_DIR,
+    "data",
+    "sku-list-source.csv",
+)
+DAILY_PRODUCT_CSV_PATH = os.getenv("DAILY_PRODUCT_CSV_PATH", "") or os.path.join(
+    OPENCLAW_WORKSPACE_DIR,
+    "data",
+    "sku-product-details.csv",
+)
 EMAIL_RECIPIENTS = [
     addr.strip()
     for addr in os.getenv("EMAIL_RECIPIENTS", "").split(",")
