@@ -546,7 +546,7 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "- **状态**：快报已生成\n"
                 "- **workflow**：7\n"
                 "- **产品数**：41\n"
-                "- **评论数**：2464\n"
+                "- **已入库评论数**：2464\n"
                 "- **翻译进度**：2464/2464\n\n"
                 "完整版报告生成后会继续通知。"
             ),
