@@ -105,6 +105,16 @@ OpenClaw is not the source of truth for:
 5. 如果缺少关键参数，先 clarification 或 confirmation
 6. 不要把复合 ask 压成单一步骤
 
+### Data Freshness Gate
+
+任何涉及 `needs_judgment=yes` 的分析请求，在执行前先检查 `get_stats()` 返回的 `last_scrape_at`：
+
+- 距今 < 24h：正常分析
+- 距今 24h-72h：回复中加一句"注意：数据最后更新于 {time}，分析基于该时间点"
+- 距今 > 72h：明确警告"数据已超过 3 天未更新，分析可能不准确。建议先触发抓取。"
+
+仅对 `product_state_time` 和 `review_ingest_time` 相关分析触发。对 `review_publish_time` 的历史分析不触发。
+
 ### Ad-hoc Task Requests
 
 - 商品详情页抓取：`start_scrape`
