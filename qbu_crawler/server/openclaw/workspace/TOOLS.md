@@ -108,6 +108,16 @@ For ad-hoc email/report requests:
 - `image_review_rows`：带图评论数
 - `preview_scope.counts.products` 只是兼容旧展示的别名；一旦涉及评论过滤，分析和解释优先显式使用 `product_count` 与 `matched_review_product_count`
 
+### User Phrasing → Canonical Mapping
+
+- "评论数 / 多少条评论 / 评论有多少" → `ingested_review_rows`（默认口径）
+- "页面上写的评论数 / 站点显示的" → `site_reported_review_total_current`（需显式标注）
+- "有多少产品 / 产品数" → `product_count`
+- "带图的 / 有图评论" → `image_review_rows`
+- "差评 / 低分 / 吐槽" → 不是单独 metric，是 `max_rating=2` 的筛选条件
+- "好评率" → 需 `execute_sql` 计算，基础工具不直接提供
+- 歧义时默认走 `ingested_review_rows`
+
 ### Canonical Time Wording
 
 - `product_state_time`：最近更新时间
@@ -460,6 +470,15 @@ For ad-hoc email/report requests:
 - {alternative_1}
 - {alternative_2}
 ```
+
+### Empty Result
+
+当查询返回 0 条结果时：
+
+- 说明查询条件（"按 SKU=XXX 查询"）
+- 给出可能原因（1-2 条，不超过 2 句）
+- 给出建议（放宽条件 / 确认拼写 / 先抓取）
+- 保持 2-3 句，不展开成完整模板填充
 
 ### Rating Distribution
 
