@@ -264,7 +264,30 @@ OpenClaw is not the source of truth for:
 3. 调用 `start_scrape` 或 `start_collect`，并传入 `reply_to`
 4. 先确认工具是否真的返回 `task_id`
 5. 成功后按 `TOOLS.md` 的“任务已提交”模板回复
-6. 如果工具失败，只能说“提交失败”，不能说“处理中”
+6. 如果工具失败，只能说”提交失败”，不能说”处理中”
+
+### Pre-flight Validation
+
+调用 `start_scrape` 或 `start_collect` 前：
+
+- URL 域名必须在支持列表中（`www.basspro.com`、`www.meatyourmaker.com`、`www.waltons.com`、`waltons.com`）
+- 域名不匹配时立即告知不支持该站点，不要替用户猜测 URL
+
+### Error Recovery
+
+#### 查找类（not found）
+- `get_product_detail` 未找到 → 尝试 `list_products(search=关键词)` 模糊匹配
+- 模糊命中唯一产品 → 使用它；命中多个 → 列出让用户选
+- 模糊也找不到 → 告知”未找到”并提示是否需要先抓取
+
+#### 超时类（timeout / query failed）
+- `execute_sql` 超时 → 简化查询或改用基础工具
+- 不连续重试同一个 SQL
+
+#### 提交类（submission error）
+- 不静默吞掉错误
+- 简化后告知用户，不暴露原始错误消息
+- 建议检查 URL 是否属于支持站点
 
 For ad-hoc email follow-ups after scraping:
 
