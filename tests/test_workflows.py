@@ -28,7 +28,18 @@ _FEATURE_FLAG_KEYS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_workflow_config(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+
+    import qbu_crawler.config as config_module
+
+    monkeypatch.setattr(config_module, "DAILY_SOURCE_CSV_URL", "")
+    monkeypatch.setattr(config_module, "DAILY_PRODUCT_CSV_URL", "")
+
+
 def _reload_config(monkeypatch: pytest.MonkeyPatch, **overrides: str):
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     for key in _FEATURE_FLAG_KEYS:
         monkeypatch.delenv(key, raising=False)
     for key, value in overrides.items():
@@ -49,15 +60,14 @@ def test_config_feature_flag_defaults(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_config_embedded_daily_scheduler_settings(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("DAILY_SUBMIT_MODE", "embedded")
-    monkeypatch.setenv("DAILY_SCHEDULER_TIME", "07:30")
-    monkeypatch.setenv("WORKFLOW_TRANSLATION_WAIT_SECONDS", "1200")
-    monkeypatch.setenv("DAILY_SOURCE_CSV_URL", "https://example.com/source.csv")
-    monkeypatch.setenv("DAILY_PRODUCT_CSV_URL", "https://example.com/detail.csv")
-
-    import qbu_crawler.config as config_module
-
-    config = importlib.reload(config_module)
+    config = _reload_config(
+        monkeypatch,
+        DAILY_SUBMIT_MODE="embedded",
+        DAILY_SCHEDULER_TIME="07:30",
+        WORKFLOW_TRANSLATION_WAIT_SECONDS="1200",
+        DAILY_SOURCE_CSV_URL="https://example.com/source.csv",
+        DAILY_PRODUCT_CSV_URL="https://example.com/detail.csv",
+    )
 
     assert config.DAILY_SUBMIT_MODE == "embedded"
     assert config.DAILY_SCHEDULER_TIME == "07:30"
@@ -82,12 +92,8 @@ def test_config_rejects_partial_daily_csv_url_pair(
 
 
 def test_config_rejects_invalid_daily_scheduler_time(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("DAILY_SCHEDULER_TIME", "25:99")
-
     with pytest.raises(ValueError, match="DAILY_SCHEDULER_TIME"):
-        import qbu_crawler.config as config_module
-
-        importlib.reload(config_module)
+        _reload_config(monkeypatch, DAILY_SCHEDULER_TIME="25:99")
 
 
 @pytest.mark.parametrize(
