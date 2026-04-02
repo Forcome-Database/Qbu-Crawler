@@ -254,6 +254,29 @@ OpenClaw is not the source of truth for:
   - `report generation status`
   分开说
 
+### Correction pattern
+
+“不对，我要看的是竞品的”
+
+- 修正上一轮 scope 参数（如 ownership → competitor）
+- 其他条件继承上一轮
+- 不重走完整路由流程
+
+### Amendment pattern
+
+“还有呢 / 继续”
+
+- 上一轮有 truncated 结果时，用 offset 翻页
+- 保持完全相同的筛选条件
+
+### Conditional pattern
+
+“如果差评超过 10 条就发邮件”
+
+- decision vector: needs_data_read=yes, needs_confirmation=yes, needs_artifact=conditional
+- 先查 total → 判断条件 → 满足则进入 preview_scope → 确认 → produce
+- 不满足则直接告知数量，不进入 produce 流程
+
 ## Ad-hoc Task SOP
 
 1. 先判断是商品详情页抓取还是分类页采集
