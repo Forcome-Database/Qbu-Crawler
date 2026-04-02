@@ -4,7 +4,7 @@ This directory holds versioned OpenClaw host assets:
 
 - `openclaw.json5.template`
 - workspace files
-- MCP bridge service
+- notify bridge service
 - sync script
 
 ## Required Environment Variables

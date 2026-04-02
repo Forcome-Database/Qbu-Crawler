@@ -224,7 +224,7 @@ Workspace 文件体系：
 - `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）
 - `SOUL.md` — 纯身份定义（豆沙），不含操作规则
 - `TOOLS.md` — 工具参数参考 + 服务端能力概览 + 输出格式模板（钉钉 Markdown 规范）
-- `HEARTBEAT.md` — 心跳检查清单（check_pending_completions → 定时任务监控）
+- `HEARTBEAT.md` — 心跳检查清单（巡检 translation / workflow / notification 异常）
 - `USER.md` / `IDENTITY.md` — 用户和 agent 身份信息
 
 CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。

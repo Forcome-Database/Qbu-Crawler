@@ -246,20 +246,18 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 ### OpenClaw 定时工作流
 
-三阶段架构：
-1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect（带 reply_to）→ 存 task_id 到 active-tasks.json → DingTalk 通知
-2. **Heartbeat（main session，lightContext）**：仅检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3。临时任务通知由服务端通过 `/hooks/agent` 直接投递，不经过心跳
-3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
+当前采用 **服务内嵌调度 + outbox/bridge 通知** 架构：
+1. **DailySchedulerWorker（每日定时，embedded）**：按 `.env` 中的 `DAILY_SCHEDULER_TIME` 检查是否到点；到点后直接读取 CSV，并调用 `submit_daily_run()` 创建当日 workflow run
+2. **WorkflowWorker（后台推进）**：处理 stale task reconcile、报表阶段推进和 run 状态流转；定时提交是否已经跑过由 `workflow_runs.trigger_key` 幂等控制
+3. **NotifierWorker（后台投递）**：消费 `notification_outbox`，通过 OpenClaw notify bridge 投递 DingTalk/即时通知，只有 bridge 明确成功才标记 delivered
 
-临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。任务完成后 `TaskManager` 通过 POST `/hooks/agent` 直接投递通知到 reply_to 目标，服务端调用 `mark_task_notified` 标记。全程不依赖心跳或 HEARTBEAT.md。
-
-即时通知机制：`TaskManager` 在任务完成后通过 POST `/hooks/agent` 直接投递通知到钉钉（组装通知内容 + `deliver: true` + `channel: dingtalk` + `to: reply_to`），服务端标记 `notified_at`。失败时静默，回退到定期心跳通过 `check_pending_completions` 兜底。
+临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。通知链路以 `notification_outbox` 为准，避免把 hook/HTTP 成功误记成“已送达”。`Heartbeat` 仅用于轻量巡检和 AI sidecar，不再承担每日主调度。
 
 Workspace 文件体系：
 - `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）
 - `SOUL.md` — 纯身份定义（豆沙），不含操作规则
 - `TOOLS.md` — 工具参数参考 + 服务端能力概览 + 输出格式模板（钉钉 Markdown 规范）
-- `HEARTBEAT.md` — 心跳检查清单（check_pending_completions → 定时任务监控）
+- `HEARTBEAT.md` — 心跳检查清单（巡检 translation / workflow / notification 异常）
 - `USER.md` / `IDENTITY.md` — 用户和 agent 身份信息
 
 CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。
