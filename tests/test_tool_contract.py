@@ -123,3 +123,29 @@ def test_runtime_workspace_docs_lock_single_product_email_scope():
     assert "Single-product artifact flow" in tools
     assert "must stay locked to the same explicit `url` or `sku`" in tools
     assert "If preview comes back with more than 1 product" in tools
+
+
+def test_all_live_tools_exist_in_contract():
+    """Every tool registered in the MCP server must have a contract entry."""
+    expected_tools = {
+        # inspect
+        "get_stats", "list_products", "get_product_detail", "query_reviews",
+        "get_price_history", "get_task_status", "list_tasks",
+        "get_workflow_status", "list_workflow_runs", "list_pending_notifications",
+        "get_translate_status", "execute_sql",
+        # produce
+        "start_scrape", "start_collect", "cancel_task",
+        "preview_scope", "send_filtered_report", "export_review_images",
+        "generate_report", "trigger_translate",
+    }
+    assert expected_tools == set(TOOL_CONTRACTS.keys())
+
+
+def test_produce_tools_have_does_not_support():
+    """All produce-tier tools must declare what they cannot do."""
+    produce_tiers = {"produce_action", "produce_preview"}
+    for name, contract in TOOL_CONTRACTS.items():
+        if contract["tier"] in produce_tiers:
+            assert contract["does_not_support"], (
+                f"{name} is produce-tier but has empty does_not_support"
+            )

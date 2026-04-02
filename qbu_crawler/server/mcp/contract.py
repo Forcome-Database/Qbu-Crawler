@@ -253,6 +253,7 @@ TOOL_CONTRACTS = {
         metrics=["product_count", "matched_review_product_count", "ingested_review_rows", "image_review_rows"],
         time_axes=["review_ingest_time", "review_publish_time", "product_state_time"],
         supports=["scope preview before filtered report or review-image export"],
+        does_not_support=["artifact generation", "email delivery", "data mutation"],
     ),
     "send_filtered_report": _tool(
         name="send_filtered_report",
@@ -354,6 +355,274 @@ TOOL_CONTRACTS = {
         },
         time_axes=["task_lifecycle_time"],
         supports=["notification delivery inspection"],
+    ),
+    # --- Task lifecycle tools ---
+    "start_scrape": _tool(
+        name="start_scrape",
+        tier="produce_action",
+        description="Submit one or more product URLs for scraping.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}},
+                "ownership": {"type": "string"},
+                "review_limit": {"type": "integer"},
+                "reply_to": {"type": "string"},
+            },
+            "required": ["urls", "ownership"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "status": {"type": "string"},
+                "total": {"type": "integer"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["product page scraping for supported sites"],
+        does_not_support=["category page collection", "CSV maintenance", "unsupported site URLs"],
+    ),
+    "start_collect": _tool(
+        name="start_collect",
+        tier="produce_action",
+        description="Collect product URLs from a category page, then scrape each product.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "category_url": {"type": "string"},
+                "ownership": {"type": "string"},
+                "max_pages": {"type": "integer"},
+                "review_limit": {"type": "integer"},
+                "reply_to": {"type": "string"},
+            },
+            "required": ["category_url", "ownership"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["category page product discovery and scraping"],
+        does_not_support=["direct product URL scraping", "non-category URLs"],
+    ),
+    "get_task_status": _tool(
+        name="get_task_status",
+        tier="inspect_status",
+        description="Query a crawler task's real-time status and progress.",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "status": {"type": "string"},
+                "progress": {"type": "object"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["single task status inspection"],
+    ),
+    "list_tasks": _tool(
+        name="list_tasks",
+        tier="inspect_list",
+        description="List crawler task records, optionally filtered by status.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "tasks": {"type": "array"},
+                "total": {"type": "integer"},
+            },
+            "required": ["tasks", "total"],
+            "additionalProperties": False,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["task list browsing and status filtering"],
+    ),
+    "cancel_task": _tool(
+        name="cancel_task",
+        tier="produce_action",
+        description="Cancel a running or pending crawler task.",
+        input_schema={
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["cancellation of running or pending tasks"],
+        does_not_support=["cancellation of completed or failed tasks"],
+    ),
+    "get_price_history": _tool(
+        name="get_price_history",
+        tier="inspect_detail",
+        description="Get price, stock, rating, and review-count history from snapshots.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "product_id": {"type": "integer"},
+                "days": {"type": "integer"},
+            },
+            "required": ["product_id"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "product_id": {"type": "integer"},
+                "days": {"type": "integer"},
+                "data_points": {"type": "integer"},
+                "history": {"type": "array"},
+            },
+            "additionalProperties": True,
+        },
+        metrics=["avg_price_current", "avg_rating_current"],
+        time_axes=["snapshot_time"],
+        supports=["single-product price and stock trend inspection"],
+        does_not_support=["multi-product comparison", "review content history"],
+    ),
+    "execute_sql": _tool(
+        name="execute_sql",
+        tier="inspect_exact",
+        description="Execute a read-only SQL query against the collected database.",
+        input_schema={
+            "type": "object",
+            "properties": {"sql": {"type": "string"}},
+            "required": ["sql"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "columns": {"type": "array"},
+                "rows": {"type": "array"},
+                "row_count": {"type": "integer"},
+            },
+            "additionalProperties": True,
+        },
+        supports=["read-only SELECT queries", "custom aggregation and cross-dimensional analysis"],
+        does_not_support=["write operations", "DDL", "queries exceeding 500 rows or 5 seconds"],
+    ),
+    "generate_report": _tool(
+        name="generate_report",
+        tier="produce_action",
+        description="Generate a legacy report for data added after a timestamp.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string"},
+                "send_email": {"type": "string"},
+            },
+            "required": ["since"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "products_count": {"type": "integer"},
+                "reviews_count": {"type": "integer"},
+                "email_status": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["review_ingest_time"],
+        supports=["legacy full-scope report generation"],
+        does_not_support=["filtered scope reporting", "review-image export"],
+    ),
+    "trigger_translate": _tool(
+        name="trigger_translate",
+        tier="produce_action",
+        description="Wake the translation worker immediately.",
+        input_schema={
+            "type": "object",
+            "properties": {"reset_skipped": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "pending": {"type": "integer"},
+                "failed": {"type": "integer"},
+            },
+            "additionalProperties": True,
+        },
+        supports=["immediate translation worker trigger"],
+        does_not_support=["selective per-review translation", "translation model selection"],
+    ),
+    "get_translate_status": _tool(
+        name="get_translate_status",
+        tier="inspect_status",
+        description="Query translation backlog and completion counts.",
+        input_schema={
+            "type": "object",
+            "properties": {"since": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "total": {"type": "integer"},
+                "translated": {"type": "integer"},
+                "pending": {"type": "integer"},
+                "failed": {"type": "integer"},
+            },
+            "additionalProperties": True,
+        },
+        time_axes=["review_ingest_time"],
+        supports=["translation progress inspection"],
+    ),
+    "list_workflow_runs": _tool(
+        name="list_workflow_runs",
+        tier="inspect_list",
+        description="List workflow runs, optionally filtered by status.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {
+                "items": {"type": "array"},
+                "total": {"type": "integer"},
+            },
+            "required": ["items", "total"],
+            "additionalProperties": False,
+        },
+        time_axes=["task_lifecycle_time"],
+        supports=["workflow run list browsing and status filtering"],
     ),
 }
 
