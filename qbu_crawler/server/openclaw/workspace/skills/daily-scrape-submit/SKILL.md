@@ -5,15 +5,15 @@ description: Manual fallback only. Use when the operator explicitly asks to re-s
 
 # Manual Daily Submit
 
-This skill is not the primary scheduler. The authoritative path is:
+This skill is not the primary scheduler. The normal production flow runs on:
 
-`Crawler Host systemd -> qbu-crawler workflow daily-submit`
+`Crawler Host qbu-crawler serve -> embedded DailySchedulerWorker -> qbu-crawler workflow daily-submit`
 
 Use this skill only when the operator explicitly asks for:
 
 - manual re-submit
 - backfill for a logical date
-- disaster recovery when the crawler-host timer failed
+- disaster recovery when the crawler service scheduler failed
 
 Procedure:
 
@@ -22,4 +22,4 @@ Procedure:
 3. If a run already exists for that logical date, report that fact before doing anything else.
 4. If the operator still wants fallback action, explain that this uses non-authoritative legacy state and may require crawler-host reconciliation afterward.
 
-Do not pretend this skill replaces the crawler-host timer.
+Do not pretend this skill replaces the crawler-host embedded scheduler or becomes the runtime source of truth.

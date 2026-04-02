@@ -26,6 +26,7 @@ class CollectRequest:
     site: str
     ownership: str
     max_pages: int = 0
+    review_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class ScrapeRequest:
     site: str
     ownership: str
     urls: list[str]
+    review_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,9 @@ class DailyInputsBundle:
 def _validate_headers(fieldnames: list[str] | None, path: str, allow_max_pages: bool) -> None:
     expected = set(_REQUIRED_HEADERS)
     actual = set(fieldnames or [])
-    optional = {"max_pages"} if allow_max_pages else set()
+    optional = {"review_limit"}
+    if allow_max_pages:
+        optional.add("max_pages")
     if not expected.issubset(actual):
         missing = ", ".join(sorted(expected - actual))
         raise DailyInputValidationError([f"{path}: missing required headers: {missing}"])
@@ -80,6 +84,19 @@ def _parse_max_pages(path: str, line_no: int, value: str) -> int:
         raise DailyInputValidationError([f"{path}: line {line_no}: invalid max_pages {value!r}"]) from exc
     if parsed < 0:
         raise DailyInputValidationError([f"{path}: line {line_no}: max_pages must be >= 0"])
+    return parsed
+
+
+def _parse_review_limit(path: str, line_no: int, value: str) -> int:
+    raw = (value or "").strip()
+    if not raw:
+        return 0
+    try:
+        parsed = int(raw)
+    except ValueError as exc:
+        raise DailyInputValidationError([f"{path}: line {line_no}: invalid review_limit {value!r}"]) from exc
+    if parsed < 0:
+        raise DailyInputValidationError([f"{path}: line {line_no}: review_limit must be >= 0"])
     return parsed
 
 
@@ -118,12 +135,14 @@ def _load_collect_requests(path: str) -> tuple[list[CollectRequest], list[str]]:
                 ownership = _normalize_ownership(path, line_no, row.get("ownership", ""))
                 site = _normalize_site(path, line_no, url)
                 max_pages = _parse_max_pages(path, line_no, row.get("max_pages", ""))
+                review_limit = _parse_review_limit(path, line_no, row.get("review_limit", ""))
                 requests.append(
                     CollectRequest(
                         category_url=url,
                         site=site,
                         ownership=ownership,
                         max_pages=max_pages,
+                        review_limit=review_limit,
                     )
                 )
             except DailyInputValidationError as exc:
@@ -132,7 +151,7 @@ def _load_collect_requests(path: str) -> tuple[list[CollectRequest], list[str]]:
 
 
 def _load_scrape_requests(path: str) -> tuple[list[ScrapeRequest], list[str]]:
-    grouped: dict[tuple[str, str], list[str]] = {}
+    grouped: dict[tuple[str, str, int], list[str]] = {}
     errors: list[str] = []
     with open(path, encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -144,14 +163,15 @@ def _load_scrape_requests(path: str) -> tuple[list[ScrapeRequest], list[str]]:
             try:
                 ownership = _normalize_ownership(path, line_no, row.get("ownership", ""))
                 site = _normalize_site(path, line_no, url)
-                grouped.setdefault((site, ownership), [])
-                if url not in grouped[(site, ownership)]:
-                    grouped[(site, ownership)].append(url)
+                review_limit = _parse_review_limit(path, line_no, row.get("review_limit", ""))
+                grouped.setdefault((site, ownership, review_limit), [])
+                if url not in grouped[(site, ownership, review_limit)]:
+                    grouped[(site, ownership, review_limit)].append(url)
             except DailyInputValidationError as exc:
                 errors.extend(exc.errors)
 
     grouped_requests = [
-        ScrapeRequest(site=site, ownership=ownership, urls=urls)
-        for (site, ownership), urls in grouped.items()
+        ScrapeRequest(site=site, ownership=ownership, urls=urls, review_limit=review_limit)
+        for (site, ownership, review_limit), urls in grouped.items()
     ]
     return grouped_requests, errors

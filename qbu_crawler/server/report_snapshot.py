@@ -113,15 +113,17 @@ def generate_full_report_from_snapshot(
 
     email_result = None
     if send_email:
+        subject, body = report.build_legacy_report_email(
+            products=snapshot["products"],
+            reviews=snapshot["reviews"],
+            since_str=snapshot["logical_date"],
+            translated_count=snapshot["translated_count"],
+            untranslated_count=snapshot["untranslated_count"],
+        )
         email_result = report.send_email(
             recipients=config.EMAIL_RECIPIENTS,
-            subject=f"爬虫日报 {snapshot['logical_date']}",
-            body_text=(
-                f"日报日期: {snapshot['logical_date']}\n"
-                f"产品数: {snapshot['products_count']}\n"
-                f"评论数: {snapshot['reviews_count']}\n"
-                f"snapshot_hash: {snapshot['snapshot_hash']}"
-            ),
+            subject=subject,
+            body_text=body,
             attachment_path=excel_path,
         )
 

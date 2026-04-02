@@ -12,7 +12,7 @@ from qbu_crawler.server.notifier import (
 )
 from qbu_crawler.server.task_manager import TaskManager
 from qbu_crawler.server.translator import TranslationWorker
-from qbu_crawler.server.workflows import WorkflowWorker
+from qbu_crawler.server.workflows import DailySchedulerWorker, InProcessTaskSubmitter, WorkflowWorker
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,13 @@ class ServerRuntime:
         task_manager: TaskManager,
         notifier: NotifierWorker | None = None,
         workflow_worker: WorkflowWorker | None = None,
+        daily_scheduler: DailySchedulerWorker | None = None,
     ):
         self.translator = translator
         self.task_manager = task_manager
         self.notifier = notifier
         self.workflow_worker = workflow_worker
+        self.daily_scheduler = daily_scheduler
         self._started = False
 
     def start(self):
@@ -49,11 +51,15 @@ class ServerRuntime:
             self.notifier.start()
         if self.workflow_worker is not None:
             self.workflow_worker.start()
+        if self.daily_scheduler is not None:
+            self.daily_scheduler.start()
         self._started = True
 
     def stop(self):
         if not self._started:
             return
+        if self.daily_scheduler is not None:
+            self.daily_scheduler.stop()
         if self.workflow_worker is not None:
             self.workflow_worker.stop()
         if self.notifier is not None:
@@ -93,12 +99,26 @@ def build_runtime() -> ServerRuntime:
         interval=config.WORKFLOW_INTERVAL,
         task_stale_seconds=config.TASK_STALE_SECONDS,
     )
+    daily_scheduler = None
+    if config.DAILY_SUBMIT_MODE == "embedded":
+        daily_scheduler = DailySchedulerWorker(
+            submitter=InProcessTaskSubmitter(task_manager),
+            source_csv=config.DAILY_SOURCE_CSV_PATH,
+            detail_csv=config.DAILY_PRODUCT_CSV_PATH,
+            source_csv_url=config.DAILY_SOURCE_CSV_URL,
+            detail_csv_url=config.DAILY_PRODUCT_CSV_URL,
+            schedule_time=config.DAILY_SCHEDULER_TIME,
+            interval=config.DAILY_SCHEDULER_INTERVAL,
+            retry_seconds=config.DAILY_SCHEDULER_RETRY_SECONDS,
+            notification_target=config.WORKFLOW_NOTIFICATION_TARGET,
+        )
 
     return ServerRuntime(
         translator=translator,
         task_manager=task_manager,
         notifier=notifier,
         workflow_worker=workflow_worker,
+        daily_scheduler=daily_scheduler,
     )
 
 
@@ -116,3 +136,4 @@ translator = runtime.translator
 task_manager = runtime.task_manager
 notifier = runtime.notifier
 workflow_worker = runtime.workflow_worker
+daily_scheduler = runtime.daily_scheduler

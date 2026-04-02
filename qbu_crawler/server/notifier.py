@@ -17,6 +17,19 @@ from qbu_crawler import config, models
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_TASK_TYPE_DISPLAY = {
+    "scrape": "产品页抓取",
+    "collect": "分类页采集",
+}
+_SITE_DISPLAY = {
+    "basspro": "Bass Pro",
+    "meatyourmaker": "Meat Your Maker",
+    "waltons": "Walton's",
+}
+_OWNERSHIP_DISPLAY = {
+    "own": "自有",
+    "competitor": "竞品",
+}
 
 
 @dataclass
@@ -94,8 +107,16 @@ class OpenClawBridgeSender:
         if kind == "task_completed":
             return {
                 "task_id": payload.get("task_id", ""),
-                "task_type": payload.get("task_type", ""),
+                "task_type": _display_task_type(payload.get("task_type", "")),
                 "status": payload.get("status", ""),
+                "task_heading": payload.get("task_heading", ""),
+                "target_summary": payload.get("target_summary", ""),
+                "site": _display_site(payload.get("site", "")),
+                "ownership": _display_ownership(payload.get("ownership", "")),
+                "result_summary": payload.get("result_summary", _summarize_task_result(payload.get("result"), payload.get("error"))),
+                "product_count": payload.get("product_count", (payload.get("result") or {}).get("products_saved", 0)),
+                "review_count": payload.get("review_count", (payload.get("result") or {}).get("reviews_saved", 0)),
+                "failed_summary": payload.get("failed_summary", "无"),
                 "summary": _summarize_task_result(payload.get("result"), payload.get("error")),
             }
         if kind == "workflow_started":
@@ -222,6 +243,21 @@ def _summarize_task_result(result: Any, error: str | None = None) -> str:
             return ", ".join(parts)
         return json.dumps(result, ensure_ascii=False, sort_keys=True)
     return "" if result is None else str(result)
+
+
+def _display_task_type(value: str) -> str:
+    key = str(value or "").strip().lower()
+    return _TASK_TYPE_DISPLAY.get(key, value)
+
+
+def _display_site(value: str) -> str:
+    key = str(value or "").strip().lower()
+    return _SITE_DISPLAY.get(key, value)
+
+
+def _display_ownership(value: str) -> str:
+    key = str(value or "").strip().lower()
+    return _OWNERSHIP_DISPLAY.get(key, value)
 
 
 def _notification_dedupe_key(notification: dict) -> str:

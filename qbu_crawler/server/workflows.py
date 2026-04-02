@@ -5,8 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import ssl
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
+from ipaddress import ip_address
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -31,23 +36,32 @@ class LocalHttpTaskSubmitter:
         self._base_url = (base_url or config.LOCAL_API_BASE_URL).rstrip("/")
         self._api_key = api_key or config.API_KEY
 
-    def submit_collect(self, category_url: str, ownership: str, max_pages: int = 0, reply_to: str = ""):
+    def submit_collect(
+        self,
+        category_url: str,
+        ownership: str,
+        max_pages: int = 0,
+        review_limit: int = 0,
+        reply_to: str = "",
+    ):
         return self._post(
             "/api/tasks/collect",
             {
                 "category_url": category_url,
                 "max_pages": max_pages,
+                "review_limit": review_limit,
                 "ownership": ownership,
                 "reply_to": reply_to,
             },
         )
 
-    def submit_scrape(self, urls: list[str], ownership: str, reply_to: str = ""):
+    def submit_scrape(self, urls: list[str], ownership: str, review_limit: int = 0, reply_to: str = ""):
         return self._post(
             "/api/tasks/scrape",
             {
                 "urls": urls,
                 "ownership": ownership,
+                "review_limit": review_limit,
                 "reply_to": reply_to,
             },
         )
@@ -67,6 +81,39 @@ class LocalHttpTaskSubmitter:
         return SimpleNamespace(id=body["task_id"], status=body.get("status"))
 
 
+class InProcessTaskSubmitter:
+    """Submit tasks directly into the in-process TaskManager."""
+
+    def __init__(self, task_manager: Any):
+        self._task_manager = task_manager
+
+    def submit_collect(
+        self,
+        category_url: str,
+        ownership: str,
+        max_pages: int = 0,
+        review_limit: int = 0,
+        reply_to: str = "",
+    ):
+        task = self._task_manager.submit_collect(
+            category_url=category_url,
+            max_pages=max_pages,
+            review_limit=review_limit,
+            ownership=ownership,
+            reply_to=reply_to,
+        )
+        return SimpleNamespace(id=task.id, status=task.status.value)
+
+    def submit_scrape(self, urls: list[str], ownership: str, review_limit: int = 0, reply_to: str = ""):
+        task = self._task_manager.submit_scrape(
+            urls=urls,
+            ownership=ownership,
+            review_limit=review_limit,
+            reply_to=reply_to,
+        )
+        return SimpleNamespace(id=task.id, status=task.status.value)
+
+
 def build_daily_trigger_key(logical_date: str) -> str:
     return f"daily:{logical_date}"
 
@@ -75,6 +122,8 @@ def submit_daily_run(
     submitter: Any,
     source_csv: str,
     detail_csv: str,
+    source_csv_url: str | None = None,
+    detail_csv_url: str | None = None,
     logical_date: str | None = None,
     requested_by: str = "cli",
     dry_run: bool = False,
@@ -89,7 +138,12 @@ def submit_daily_run(
     if existing:
         return {"created": False, "run": existing, "trigger_key": trigger_key}
 
-    bundle = load_daily_inputs(source_csv, detail_csv)
+    bundle = _load_daily_inputs_bundle(
+        source_csv,
+        detail_csv,
+        source_csv_url=source_csv_url,
+        detail_csv_url=detail_csv_url,
+    )
     if dry_run:
         return {
             "created": False,
@@ -121,6 +175,7 @@ def submit_daily_run(
             request.category_url,
             ownership=request.ownership,
             max_pages=request.max_pages,
+            review_limit=request.review_limit,
             reply_to="",
         )
         collect_task_ids.append(task.id)
@@ -136,6 +191,7 @@ def submit_daily_run(
         task = submitter.submit_scrape(
             request.urls,
             ownership=request.ownership,
+            review_limit=request.review_limit,
             reply_to="",
         )
         scrape_task_ids.append(task.id)
@@ -181,6 +237,207 @@ def _logical_date_window(logical_date: str) -> tuple[str, str]:
     start = datetime.fromisoformat(logical_date)
     end = start + timedelta(days=1)
     return (f"{start.date().isoformat()}T00:00:00+08:00", f"{end.date().isoformat()}T00:00:00+08:00")
+
+
+def _count_pending_translations_for_window(since: str, until: str) -> int:
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reviews
+            WHERE scraped_at >= ?
+              AND scraped_at < ?
+              AND (
+                    translate_status IS NULL
+                 OR translate_status = 'failed'
+              )
+            """,
+            (_report_db_ts(since), _report_db_ts(until)),
+        ).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def _report_db_ts(value: str) -> str:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _translation_wait_expired(run: dict, now: str) -> bool:
+    updated_at = run.get("updated_at") or run.get("started_at") or now
+    started = datetime.fromisoformat(updated_at)
+    current = datetime.fromisoformat(now)
+    return (current - started).total_seconds() >= config.WORKFLOW_TRANSLATION_WAIT_SECONDS
+
+
+class DailySchedulerWorker:
+    """Embed daily-submit scheduling into the long-running crawler service."""
+
+    def __init__(
+        self,
+        submitter: Any,
+        source_csv: str,
+        detail_csv: str,
+        source_csv_url: str | None = None,
+        detail_csv_url: str | None = None,
+        *,
+        schedule_time: str | None = None,
+        interval: int | None = None,
+        retry_seconds: int | None = None,
+        notification_target: str | None = None,
+        requested_by: str = "embedded_scheduler",
+    ):
+        self._submitter = submitter
+        self._source_csv = source_csv
+        self._detail_csv = detail_csv
+        self._source_csv_url = source_csv_url or config.DAILY_SOURCE_CSV_URL
+        self._detail_csv_url = detail_csv_url or config.DAILY_PRODUCT_CSV_URL
+        self._notification_target = notification_target or config.WORKFLOW_NOTIFICATION_TARGET
+        self._requested_by = requested_by
+        self._schedule_time = schedule_time or config.DAILY_SCHEDULER_TIME
+        self._schedule_hour, self._schedule_minute = _parse_schedule_time(self._schedule_time)
+        self._interval = interval or config.DAILY_SCHEDULER_INTERVAL
+        self._retry_seconds = retry_seconds or config.DAILY_SCHEDULER_RETRY_SECONDS
+        self._stop_event = Event()
+        self._wake_event = Event()
+        self._thread = Thread(target=self._run, daemon=True, name="daily-scheduler")
+        self._last_attempt_logical_date: str | None = None
+        self._last_attempt_at: datetime | None = None
+
+    def start(self):
+        self._thread.start()
+        logger.info(
+            "DailySchedulerWorker: started (time=%s, interval=%ds, retry_seconds=%ds)",
+            self._schedule_time,
+            self._interval,
+            self._retry_seconds,
+        )
+
+    def stop(self):
+        self._stop_event.set()
+        self._wake_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def trigger(self):
+        self._wake_event.set()
+
+    def process_once(self, now: datetime | None = None) -> bool:
+        current = now or config.now_shanghai()
+        logical_date = current.date().isoformat()
+        scheduled_at = current.replace(
+            hour=self._schedule_hour,
+            minute=self._schedule_minute,
+            second=0,
+            microsecond=0,
+        )
+
+        if current < scheduled_at:
+            return False
+
+        trigger_key = build_daily_trigger_key(logical_date)
+        if models.get_workflow_run_by_trigger_key(trigger_key):
+            return False
+
+        if (
+            self._last_attempt_logical_date == logical_date
+            and self._last_attempt_at is not None
+            and (current - self._last_attempt_at).total_seconds() < self._retry_seconds
+        ):
+            return False
+
+        self._last_attempt_logical_date = logical_date
+        self._last_attempt_at = current
+
+        result = submit_daily_run(
+            submitter=self._submitter,
+            source_csv=self._source_csv,
+            detail_csv=self._detail_csv,
+            source_csv_url=self._source_csv_url,
+            detail_csv_url=self._detail_csv_url,
+            logical_date=logical_date,
+            requested_by=self._requested_by,
+            dry_run=False,
+            notification_target=self._notification_target,
+        )
+        if result.get("created"):
+            logger.info(
+                "DailySchedulerWorker: submitted daily run for %s (trigger_key=%s)",
+                logical_date,
+                result["trigger_key"],
+            )
+            return True
+
+        return False
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                while self.process_once() and not self._stop_event.is_set():
+                    continue
+            except Exception:
+                logger.exception("DailySchedulerWorker: unexpected error")
+
+            self._wake_event.clear()
+            self._wake_event.wait(timeout=self._interval)
+
+
+def _parse_schedule_time(value: str) -> tuple[int, int]:
+    parsed = datetime.strptime(value, "%H:%M")
+    return parsed.hour, parsed.minute
+
+
+def _load_daily_inputs_bundle(
+    source_csv: str,
+    detail_csv: str,
+    *,
+    source_csv_url: str | None = None,
+    detail_csv_url: str | None = None,
+):
+    source_csv_url = source_csv_url or config.DAILY_SOURCE_CSV_URL
+    detail_csv_url = detail_csv_url or config.DAILY_PRODUCT_CSV_URL
+    if not source_csv_url and not detail_csv_url:
+        return load_daily_inputs(source_csv, detail_csv)
+
+    with tempfile.TemporaryDirectory(prefix="qbu-daily-inputs-") as tmpdir:
+        resolved_source = source_csv
+        resolved_detail = detail_csv
+        if source_csv_url:
+            resolved_source = _download_daily_csv(source_csv_url, Path(tmpdir) / "sku-list-source.csv")
+        if detail_csv_url:
+            resolved_detail = _download_daily_csv(detail_csv_url, Path(tmpdir) / "sku-product-details.csv")
+        return load_daily_inputs(resolved_source, resolved_detail)
+
+
+def _download_daily_csv(url: str, destination: Path) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"qbu-crawler/{__version__}"},
+        method="GET",
+    )
+    context = _build_daily_csv_ssl_context(url)
+    with urllib.request.urlopen(request, timeout=30, context=context) as response:
+        destination.write_bytes(response.read())
+    return str(destination)
+
+
+def _build_daily_csv_ssl_context(url: str):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme.lower() != "https":
+        return None
+    try:
+        ip_address(parsed.hostname or "")
+    except ValueError:
+        return None
+    logger.warning(
+        "Daily CSV download uses HTTPS IP URL (%s); disabling SSL hostname verification for compatibility",
+        url,
+    )
+    return ssl._create_unverified_context()
 
 
 class WorkflowWorker:
@@ -282,6 +539,24 @@ class WorkflowWorker:
             changed = True
 
         if not run.get("snapshot_path"):
+            pending_translations = _count_pending_translations_for_window(
+                run["data_since"],
+                run["data_until"],
+            )
+            if pending_translations > 0 and not _translation_wait_expired(run, now):
+                if changed:
+                    logger.info(
+                        "WorkflowWorker: waiting for %d translations before reporting run %s",
+                        pending_translations,
+                        run_id,
+                    )
+                return changed
+            if pending_translations > 0:
+                logger.warning(
+                    "WorkflowWorker: translation wait expired for run %s; continuing with %d untranslated reviews",
+                    run_id,
+                    pending_translations,
+                )
             run = freeze_report_snapshot(run_id, now=now)
             changed = True
 
@@ -321,7 +596,10 @@ class WorkflowWorker:
                     "logical_date": run["logical_date"],
                     "snapshot_hash": full_report["snapshot_hash"],
                     "excel_path": full_report["excel_path"],
-                    "email_status": "success" if (full_report.get("email") or {}).get("success") else "failed",
+                    "email_status": _workflow_email_status(
+                        email_success=(full_report.get("email") or {}).get("success"),
+                        untranslated_count=snapshot.get("untranslated_count", 0),
+                    ),
                 },
                 dedupe_key=f"workflow:{run_id}:full-report",
             )
@@ -378,6 +656,14 @@ def _enqueue_workflow_notification(kind: str, target: str, payload: dict, dedupe
             "payload_hash": payload_hash,
         }
     )
+
+
+def _workflow_email_status(email_success: bool | None, untranslated_count: int) -> str:
+    if not email_success:
+        return "failed"
+    if untranslated_count > 0:
+        return f"已发送（{untranslated_count} 条评论仍在翻译中）"
+    return "success"
 
 
 def _maybe_trigger_ai_digest(run_id: int, run: dict, snapshot: dict, full_report: dict):

@@ -4,9 +4,9 @@
 
 **Goal:** 将每日提交、临时任务回执、报表生成改造成基于 Crawler Host 的确定性工作流，同时把 OpenClaw 固定在“自然语言入口 + 消息能力 + 智能摘要”角色上。
 
-**Architecture:** 不再新增公开 workflow 写接口；daily-submit 由 Crawler Host 本机 systemd + CLI 触发。服务端新增 task liveness、workflow idempotency、immutable report snapshot、notification outbox。OpenClaw Host 提供 hardened bridge 和 AI sidecar，并通过版本化 `openclaw.json` 模板消除配置漂移。
+**Architecture:** 不再新增公开 workflow 写接口；daily-submit 由 Crawler Host 上的 `qbu-crawler serve` 内嵌 scheduler 触发。服务端新增 task liveness、workflow idempotency、immutable report snapshot、notification outbox。OpenClaw Host 提供 hardened bridge 和 AI sidecar，并通过版本化 `openclaw.json` 模板消除配置漂移。
 
-**Tech Stack:** Python (FastAPI, SQLite, background workers, openpyxl), OpenClaw CLI, DingTalk channel, systemd, Markdown docs, shell deployment assets
+**Tech Stack:** Python (FastAPI, SQLite, background workers, openpyxl), OpenClaw CLI, DingTalk channel, in-process scheduler, Markdown docs, shell deployment assets
 
 ---
 
@@ -19,8 +19,6 @@
 - `qbu_crawler/server/report_snapshot.py` — report snapshot 生成与加载
 - `qbu_crawler/server/runtime.py` — 管理 TaskManager / notifier / workflow worker 的统一生命周期
 - `qbu_crawler/server/openclaw/bridge/app.py` — OpenClaw Host 上的 hardened notify bridge
-- `deploy/crawler/systemd/qbu-crawler-daily-submit.service` — Crawler Host daily-submit service
-- `deploy/crawler/systemd/qbu-crawler-daily-submit.timer` — Crawler Host daily-submit timer
 - `deploy/openclaw/systemd/qbu-openclaw-notify-bridge.service` — OpenClaw Host bridge service
 - `deploy/openclaw/openclaw.json5.template` — OpenClaw 主配置模板
 - `deploy/openclaw/sync_openclaw_assets.sh` — 同步 `openclaw.json` / workspace / plugin 的脚本
@@ -116,7 +114,7 @@ Expected:
 最少加入：
 
 - `NOTIFICATION_MODE=legacy|shadow|outbox`
-- `DAILY_SUBMIT_MODE=openclaw|crawler_systemd`
+- `DAILY_SUBMIT_MODE=openclaw|embedded`
 - `REPORT_MODE=legacy|snapshot_fast_full`
 - `AI_DIGEST_MODE=off|async`
 
@@ -298,8 +296,8 @@ Expected:
 **Files:**
 - Modify: `main.py`
 - Modify: `qbu_crawler/server/workflows.py`
-- Create: `deploy/crawler/systemd/qbu-crawler-daily-submit.service`
-- Create: `deploy/crawler/systemd/qbu-crawler-daily-submit.timer`
+- Modify: `qbu_crawler/server/runtime.py`
+- Modify: `qbu_crawler/config.py`
 - Test: `tests/test_workflows.py`
 
 - [ ] **Step 1: 给 CLI 增加 `workflow daily-submit` 子命令**
@@ -321,13 +319,13 @@ Expected:
 5. 写 `workflow_runs` / `workflow_run_tasks`
 6. 入队“启动通知”
 
-- [ ] **Step 3: 编写 crawler host systemd timer**
+- [ ] **Step 3: 将 daily scheduler 内嵌到 `qbu-crawler serve`**
 
 要求：
 
-- 部署在 Crawler Host，而不是 OpenClaw Host
-- 调用本机 CLI，不走远程 HTTP
-- 明确 missed-run 策略
+- 仅在 Crawler Host 上生效
+- 由 `.env` 控制开关和时间
+- 通过 `workflow_runs.trigger_key` 保证幂等
 
 - [ ] **Step 4: 写测试**
 
@@ -848,7 +846,7 @@ Expected:
 2. 再上线 schema + liveness + feature flag。
 3. 再上线 hardened bridge，但先跑 `shadow`。
 4. 再切 `NOTIFICATION_MODE=outbox`。
-5. 再将 daily-submit 切到 Crawler Host systemd。
+5. 再将 daily-submit 切到 `qbu-crawler serve` 内嵌 scheduler。
 6. 再切 `REPORT_MODE=snapshot_fast_full`。
 7. 最后打开 `AI_DIGEST_MODE=async`。
 

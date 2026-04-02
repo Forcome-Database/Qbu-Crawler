@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import smtplib
+from dataclasses import asdict
 from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
@@ -21,6 +22,7 @@ from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
 from qbu_crawler import config, models
+from qbu_crawler.server.scope import Scope, normalize_scope
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +359,60 @@ def send_email(
         return {"success": False, "error": str(exc), "recipients": 0}
 
 
+def build_legacy_report_email(
+    products: list[dict],
+    reviews: list[dict],
+    since_str: str,
+    translated_count: int,
+    untranslated_count: int,
+) -> tuple[str, str]:
+    """Build the original report email subject/body template."""
+    site_names = {"basspro": "Bass Pro Shops", "meatyourmaker": "Meat Your Maker"}
+    sites_in_report = set()
+    own_count = 0
+    competitor_count = 0
+    for product in products:
+        sites_in_report.add(product.get("site", ""))
+        if product.get("ownership") == "own":
+            own_count += 1
+        else:
+            competitor_count += 1
+
+    negative_reviews = [item for item in reviews if (item.get("rating") or 5) <= 2]
+    site_display = "、".join(
+        site_names.get(site, site) for site in sorted(sites_in_report) if site
+    ) or "多站点"
+
+    subject = f"【网评监控】{site_display} 产品评论报告 {since_str}"
+    body = (
+        f"各位好，\n\n"
+        f"附件是 {since_str} 从 {site_display} 抓取的最新产品网评报告，请查阅。\n\n"
+        f"【数据概览】\n"
+        f"  - 涉及产品：{len(products)} 个"
+    )
+    if own_count or competitor_count:
+        body += f"（自有 {own_count}，竞品 {competitor_count}）"
+    body += (
+        f"\n"
+        f"  - 新增评论：{len(reviews)} 条（已翻译 {translated_count} 条）\n"
+    )
+    if untranslated_count > 0:
+        body += f"  - 注：{untranslated_count} 条评论翻译进行中，中文列暂时为空\n"
+
+    if negative_reviews:
+        body += (
+            f"\n"
+            f"【差评预警】共 {len(negative_reviews)} 条差评（≤2星），请重点关注并更新改进措施。\n"
+        )
+
+    body += (
+        f"\n"
+        f"详细数据见附件 Excel（产品 + 评论两个 Sheet）。\n"
+        f"如有疑问请随时沟通，谢谢！\n"
+    )
+    return subject, body
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────────
 
 # Alias before defining generate_report so the parameter name doesn't shadow it
@@ -394,50 +450,12 @@ def generate_report(
     if send_email:
         recipients = config.EMAIL_RECIPIENTS
         since_str = since.strftime("%Y-%m-%d")
-
-        # ── 统计维度 ──
-        site_names = {"basspro": "Bass Pro Shops", "meatyourmaker": "Meat Your Maker"}
-        sites_in_report = set()
-        own_count = 0
-        competitor_count = 0
-        for p in products:
-            sites_in_report.add(p.get("site", ""))
-            if p.get("ownership") == "own":
-                own_count += 1
-            else:
-                competitor_count += 1
-
-        negative_reviews = [r for r in reviews if (r.get("rating") or 5) <= 2]
-        site_display = "、".join(
-            site_names.get(s, s) for s in sorted(sites_in_report) if s
-        ) or "多站点"
-
-        subject = f"【网评监控】{site_display} 产品评论报告 {since_str}"
-        body = (
-            f"各位好，\n\n"
-            f"附件是 {since_str} 从 {site_display} 抓取的最新产品网评报告，请查阅。\n\n"
-            f"【数据概览】\n"
-            f"  - 涉及产品：{len(products)} 个"
-        )
-        if own_count or competitor_count:
-            body += f"（自有 {own_count}，竞品 {competitor_count}）"
-        body += (
-            f"\n"
-            f"  - 新增评论：{len(reviews)} 条（已翻译 {translated_count} 条）\n"
-        )
-        if untranslated_count > 0:
-            body += f"  - 注：{untranslated_count} 条评论翻译进行中，中文列暂时为空\n"
-
-        if negative_reviews:
-            body += (
-                f"\n"
-                f"【差评预警】共 {len(negative_reviews)} 条差评（≤2星），请重点关注并更新改进措施。\n"
-            )
-
-        body += (
-            f"\n"
-            f"详细数据见附件 Excel（产品 + 评论两个 Sheet）。\n"
-            f"如有疑问请随时沟通，谢谢！\n"
+        subject, body = build_legacy_report_email(
+            products=products,
+            reviews=reviews,
+            since_str=since_str,
+            translated_count=translated_count,
+            untranslated_count=untranslated_count,
         )
         email_result = _send_email_impl(
             recipients=recipients,
@@ -529,6 +547,204 @@ def query_report_data(
         len(reviews),
     )
     return products, reviews
+
+
+def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
+    """Query products and reviews for a normalized scope."""
+    conn = models.get_conn()
+    try:
+        review_clauses, review_params = models._scope_review_clauses(  # noqa: SLF001
+            scope,
+            review_alias="r",
+            product_alias="p",
+        )
+        review_where = f"WHERE {' AND '.join(review_clauses)}" if review_clauses else ""
+
+        if models._scope_has_review_constraints(scope):  # noqa: SLF001
+            product_rows = conn.execute(
+                f"""
+                SELECT DISTINCT
+                       p.url, p.name, p.sku, p.price, p.stock_status, p.rating, p.review_count,
+                       p.scraped_at, p.site, p.ownership
+                FROM reviews r
+                JOIN products p ON r.product_id = p.id
+                {review_where}
+                ORDER BY p.scraped_at DESC, p.id DESC
+                """,
+                review_params,
+            ).fetchall()
+        else:
+            product_clauses, product_params = models._scope_product_clauses(scope, alias="p")  # noqa: SLF001
+            product_where = f"WHERE {' AND '.join(product_clauses)}" if product_clauses else ""
+            product_rows = conn.execute(
+                f"""
+                SELECT url, name, sku, price, stock_status, rating, review_count,
+                       scraped_at, site, ownership
+                FROM products p
+                {product_where}
+                ORDER BY p.scraped_at DESC, p.id DESC
+                """,
+                product_params,
+            ).fetchall()
+        products = [dict(r) for r in product_rows]
+
+        review_rows = conn.execute(
+            f"""
+            SELECT p.name AS product_name, p.sku AS product_sku,
+                   r.author, r.headline, r.body, r.rating,
+                   r.date_published, r.images, p.ownership,
+                   r.headline_cn, r.body_cn, r.translate_status
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            {review_where}
+            ORDER BY r.scraped_at DESC, r.id DESC
+            """,
+            review_params,
+        ).fetchall()
+        reviews = []
+        for row in review_rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = json.loads(data["images"])
+                except Exception:
+                    pass
+            reviews.append(data)
+    finally:
+        conn.close()
+
+    logger.info(
+        "query_scope_report_data: %d products, %d reviews",
+        len(products),
+        len(reviews),
+    )
+    return products, reviews
+
+
+def _filtered_report_date(scope: Scope) -> datetime:
+    if scope.window.since:
+        return datetime.fromisoformat(scope.window.since)
+    if scope.window.until:
+        return datetime.fromisoformat(scope.window.until)
+    return config.now_shanghai()
+
+
+def _validate_scope_window(scope: Scope) -> str | None:
+    parsed = {}
+    for label, value in (("since", scope.window.since), ("until", scope.window.until)):
+        if not value:
+            continue
+        try:
+            parsed[label] = datetime.fromisoformat(value)
+        except ValueError:
+            return f"Invalid scope window: {label} must be ISO date or datetime"
+    if parsed.get("since") and parsed.get("until") and parsed["since"] > parsed["until"]:
+        return "Invalid scope window: since must be on or before until"
+    return None
+
+
+def send_filtered_report(scope: dict, delivery: dict | None = None) -> dict:
+    """Generate a filtered report while preserving the legacy email contract."""
+    delivery = delivery or {}
+    scope_obj = normalize_scope(
+        products=scope.get("products"),
+        reviews=scope.get("reviews"),
+        window=scope.get("window"),
+    )
+    output_format = str(delivery.get("format", "excel") or "excel").strip().lower()
+    subject_override = str(delivery.get("subject", "") or "").strip()
+    if "recipients" in delivery:
+        recipients = delivery.get("recipients")
+    else:
+        recipients = config.EMAIL_RECIPIENTS
+
+    window_error = _validate_scope_window(scope_obj)
+    if window_error:
+        return {
+            "scope": asdict(scope_obj),
+            "data": {
+                "products_count": 0,
+                "reviews_count": 0,
+                "translated_count": 0,
+                "untranslated_count": 0,
+            },
+            "artifact": {
+                "success": False,
+                "format": "excel",
+                "excel_path": None,
+                "error": window_error,
+            },
+            "email": None,
+        }
+
+    products, reviews = query_scope_report_data(scope_obj)
+
+    translated_count = sum(1 for r in reviews if r.get("translate_status") == "done")
+    untranslated_count = len(reviews) - translated_count
+    for review in reviews:
+        review.setdefault("headline_cn", "")
+        review.setdefault("body_cn", "")
+
+    data_result = {
+        "products_count": len(products),
+        "reviews_count": len(reviews),
+        "translated_count": translated_count,
+        "untranslated_count": untranslated_count,
+    }
+
+    report_date = _filtered_report_date(scope_obj)
+    output_path = delivery.get("output_path")
+    artifact_result = {
+        "success": False,
+        "format": "excel",
+        "excel_path": None,
+    }
+    try:
+        excel_path = generate_excel(
+            products,
+            reviews,
+            report_date=report_date,
+            output_path=output_path,
+        )
+        artifact_result = {
+            "success": True,
+            "format": "excel",
+            "excel_path": excel_path,
+        }
+    except Exception as exc:
+        artifact_result["error"] = str(exc)
+        return {
+            "scope": asdict(scope_obj),
+            "data": data_result,
+            "artifact": artifact_result,
+            "email": None,
+        }
+
+    email_result = None
+    if output_format == "email":
+        since_str = report_date.strftime("%Y-%m-%d")
+        subject, body = build_legacy_report_email(
+            products=products,
+            reviews=reviews,
+            since_str=since_str,
+            translated_count=translated_count,
+            untranslated_count=untranslated_count,
+        )
+        if subject_override:
+            subject = subject_override
+        email_result = _send_email_impl(
+            recipients=recipients,
+            subject=subject,
+            body_text=body,
+            attachment_path=artifact_result["excel_path"],
+        )
+
+    return {
+        "scope": asdict(scope_obj),
+        "data": data_result,
+        "artifact": artifact_result,
+        "email": email_result,
+    }
 
 
 def generate_excel(

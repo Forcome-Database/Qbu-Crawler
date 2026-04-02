@@ -1,0 +1,609 @@
+{
+  "metrics": {
+    "avg_price_current": {
+      "label": "Average current price",
+      "meaning": "Average current product price for the scoped products.",
+      "source": "products.price"
+    },
+    "avg_rating_current": {
+      "label": "Average current rating",
+      "meaning": "Average current product rating for the scoped products.",
+      "source": "products.rating"
+    },
+    "image_review_rows": {
+      "label": "Image review rows",
+      "meaning": "Matched review rows that contain images.",
+      "source": "reviews.images"
+    },
+    "ingested_review_rows": {
+      "label": "Ingested review rows",
+      "meaning": "Number of ingested rows in reviews for the current scope.",
+      "source": "reviews"
+    },
+    "matched_review_product_count": {
+      "label": "Matched-review product count",
+      "meaning": "Distinct product count among the matched review rows.",
+      "source": "reviews x products"
+    },
+    "product_count": {
+      "label": "Product count",
+      "meaning": "Number of products in the current scoped catalog view.",
+      "source": "products"
+    },
+    "site_reported_review_total_current": {
+      "label": "Site-reported review total",
+      "meaning": "Sum of current products.review_count across the scoped products.",
+      "source": "products.review_count"
+    }
+  },
+  "time_axes": {
+    "product_state_time": {
+      "field": "products.scraped_at",
+      "label": "Product state time",
+      "meaning": "Time when the current product state was last refreshed."
+    },
+    "review_ingest_time": {
+      "field": "reviews.scraped_at",
+      "label": "Review ingest time",
+      "meaning": "Time when a review row was ingested by the crawler."
+    },
+    "review_publish_time": {
+      "field": "reviews.date_published",
+      "label": "Review publish time",
+      "meaning": "Time published on the source site."
+    },
+    "snapshot_time": {
+      "field": "product_snapshots.scraped_at",
+      "label": "Snapshot time",
+      "meaning": "Time when a historical product snapshot was captured."
+    },
+    "task_lifecycle_time": {
+      "field": "tasks/workflow_runs/notification_outbox timestamps",
+      "label": "Task lifecycle time",
+      "meaning": "Task, workflow, or notification lifecycle timestamps."
+    }
+  },
+  "tools": {
+    "export_review_images": {
+      "description": "Export review-image links or manifest data for a normalized scope.",
+      "does_not_support": [
+        "product hero-image export",
+        "zip packaging"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "product_count",
+        "ingested_review_rows",
+        "image_review_rows"
+      ],
+      "name": "export_review_images",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "artifact": {
+            "type": "object"
+          },
+          "data": {
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "review-image export only"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "review_ingest_time",
+        "review_publish_time",
+        "product_state_time"
+      ]
+    },
+    "get_product_detail": {
+      "description": "Get one product plus recent reviews and snapshots.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "product_id": {
+            "type": "integer"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "site_reported_review_total_current"
+      ],
+      "name": "get_product_detail",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "recent_reviews": {
+            "type": "array"
+          },
+          "recent_snapshots": {
+            "type": "array"
+          },
+          "review_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "single-product inspection"
+      ],
+      "tier": "inspect_detail",
+      "time_axes": [
+        "product_state_time",
+        "snapshot_time",
+        "review_ingest_time"
+      ]
+    },
+    "get_stats": {
+      "description": "Get a high-level current-state database overview.",
+      "does_not_support": [
+        "historical trend analysis",
+        "site-reported review totals unless explicitly named"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "metrics": [
+        "product_count",
+        "ingested_review_rows",
+        "avg_price_current",
+        "avg_rating_current"
+      ],
+      "name": "get_stats",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "avg_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "avg_price_current": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "avg_rating": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "avg_rating_current": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "by_ownership": {
+            "type": "object"
+          },
+          "by_site": {
+            "type": "object"
+          },
+          "ingested_review_rows": {
+            "type": "integer"
+          },
+          "last_scrape_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "product_count": {
+            "type": "integer"
+          },
+          "site_reported_review_total_current": {
+            "type": "integer"
+          },
+          "time_axes": {
+            "type": "object"
+          },
+          "total_products": {
+            "type": "integer"
+          },
+          "total_reviews": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "product_count",
+          "ingested_review_rows",
+          "total_products",
+          "total_reviews"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "exact current-state catalog overview"
+      ],
+      "tier": "inspect_exact",
+      "time_axes": [
+        "product_state_time"
+      ]
+    },
+    "get_workflow_status": {
+      "description": "Get one workflow run plus child task records.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "trigger_key": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "get_workflow_status",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "run": {
+            "type": "object"
+          },
+          "tasks": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "workflow status inspection"
+      ],
+      "tier": "inspect_status",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "list_pending_notifications": {
+      "description": "List notification outbox rows, optionally filtered by status.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "list_pending_notifications",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "notification delivery inspection"
+      ],
+      "tier": "inspect_status",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "list_products": {
+      "description": "Search and filter current product records.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "max_price": {
+            "type": "number"
+          },
+          "min_price": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "order": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          },
+          "site": {
+            "type": "string"
+          },
+          "sort_by": {
+            "type": "string"
+          },
+          "stock_status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "product_count",
+        "site_reported_review_total_current"
+      ],
+      "name": "list_products",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "sample product browsing",
+        "current-state product filtering"
+      ],
+      "tier": "inspect_list",
+      "time_axes": [
+        "product_state_time"
+      ]
+    },
+    "preview_scope": {
+      "description": "Preview a normalized scope before producing an artifact.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_type": {
+            "type": "string"
+          },
+          "products": {
+            "type": "object"
+          },
+          "reviews": {
+            "type": "object"
+          },
+          "window": {
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "product_count",
+        "matched_review_product_count",
+        "ingested_review_rows",
+        "image_review_rows"
+      ],
+      "name": "preview_scope",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_type": {
+            "type": "string"
+          },
+          "counts": {
+            "type": "object"
+          },
+          "next_action_hint": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "artifact_type",
+          "scope",
+          "counts",
+          "next_action_hint"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "scope preview before filtered report or review-image export"
+      ],
+      "tier": "produce_preview",
+      "time_axes": [
+        "review_ingest_time",
+        "review_publish_time",
+        "product_state_time"
+      ]
+    },
+    "query_reviews": {
+      "description": "Query reviews with structured filters.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "has_images": {
+            "type": "string"
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "max_rating": {
+            "type": "number"
+          },
+          "min_rating": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "order": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "integer"
+          },
+          "site": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "sort_by": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "ingested_review_rows",
+        "image_review_rows"
+      ],
+      "name": "query_reviews",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "review sample inspection",
+        "negative-review inspection"
+      ],
+      "tier": "inspect_reviews",
+      "time_axes": [
+        "review_ingest_time",
+        "review_publish_time"
+      ]
+    },
+    "send_filtered_report": {
+      "description": "Generate a filtered report for a normalized scope and optionally deliver it by email.",
+      "does_not_support": [
+        "arbitrary zip or pdf packaging",
+        "product hero-image export"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "delivery": {
+            "type": "object"
+          },
+          "scope": {
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [
+        "product_count",
+        "ingested_review_rows",
+        "matched_review_product_count"
+      ],
+      "name": "send_filtered_report",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "artifact": {
+            "type": "object"
+          },
+          "data": {
+            "type": "object"
+          },
+          "email": {
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "filtered report artifact generation",
+        "email delivery for supported formats"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "review_ingest_time",
+        "review_publish_time",
+        "product_state_time"
+      ]
+    }
+  },
+  "version": 1
+}

@@ -456,6 +456,82 @@ def test_generate_report_with_email(patch_db, tmp_path, monkeypatch):
     assert "SMTP_HOST" in result["email"]["error"]
 
 
+def test_generate_report_email_keeps_legacy_subject_and_body(tmp_path, monkeypatch):
+    """The daily email must preserve the original subject/body template verbatim."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        config,
+        "EMAIL_RECIPIENTS",
+        ["leo.xia@forcome.com", "howard.yang@forcome.com", "chloe.tu@forcome.com"],
+    )
+
+    from qbu_crawler.server import report
+
+    products = (
+        [{"site": "basspro", "ownership": "own"} for _ in range(13)]
+        + [{"site": "meatyourmaker", "ownership": "competitor"} for _ in range(14)]
+        + [{"site": "waltons", "ownership": "competitor"} for _ in range(13)]
+    )
+    reviews = [
+        {
+            "rating": 2,
+            "translate_status": "done",
+            "headline_cn": "差评标题",
+            "body_cn": "差评内容",
+        }
+        for _ in range(236)
+    ] + [
+        {
+            "rating": 5,
+            "translate_status": "done",
+            "headline_cn": "好评标题",
+            "body_cn": "好评内容",
+        }
+        for _ in range(2345 - 236)
+    ]
+
+    monkeypatch.setattr(report, "query_report_data", lambda since: (products, reviews))
+
+    excel_path = tmp_path / "reports" / "scrape-report-2026-03-27.xlsx"
+    excel_path.parent.mkdir(parents=True, exist_ok=True)
+    excel_path.write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None: str(excel_path),
+    )
+
+    captured = {}
+
+    def fake_send_email(recipients, subject, body_text, attachment_path=None):
+        captured["recipients"] = recipients
+        captured["subject"] = subject
+        captured["body_text"] = body_text
+        captured["attachment_path"] = attachment_path
+        return {"success": True, "error": None, "recipients": len(recipients)}
+
+    monkeypatch.setattr(report, "_send_email_impl", fake_send_email)
+
+    since = datetime(2026, 3, 27, tzinfo=timezone.utc)
+    result = report.generate_report(since, send_email=True)
+
+    assert result["email"] == {"success": True, "error": None, "recipients": 3}
+    assert captured["subject"] == "【网评监控】Bass Pro Shops、Meat Your Maker、waltons 产品评论报告 2026-03-27"
+    assert captured["body_text"] == (
+        "各位好，\n\n"
+        "附件是 2026-03-27 从 Bass Pro Shops、Meat Your Maker、waltons 抓取的最新产品网评报告，请查阅。\n\n"
+        "【数据概览】\n"
+        "  - 涉及产品：40 个（自有 13，竞品 27）\n"
+        "  - 新增评论：2345 条（已翻译 2345 条）\n"
+        "\n"
+        "【差评预警】共 236 条差评（≤2星），请重点关注并更新改进措施。\n"
+        "\n"
+        "详细数据见附件 Excel（产品 + 评论两个 Sheet）。\n"
+        "如有疑问请随时沟通，谢谢！\n"
+    )
+    assert captured["attachment_path"] == str(excel_path)
+
+
 def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
     """Email is skipped gracefully when no recipients configured."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)

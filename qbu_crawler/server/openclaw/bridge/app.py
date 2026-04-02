@@ -17,35 +17,50 @@ import uvicorn
 
 DEFAULT_TEMPLATES = {
     "task_completed": (
-        "任务完成通知\n"
-        "类型: {task_type}\n"
-        "状态: {status}\n"
-        "任务ID: {task_id}\n"
-        "摘要: {summary}"
+        "## {task_heading}\n\n"
+        "- **目标**：{target_summary}\n"
+        "- **站点**：{site}\n"
+        "- **归属**：{ownership}\n"
+        "- **任务类型**：{task_type}\n"
+        "- **结果**：{result_summary}\n\n"
+        "### 本次产出\n"
+        "- **产品记录**：{product_count} 个\n"
+        "- **新增评论**：{review_count} 条\n"
+        "- **失败项**：{failed_summary}\n\n"
+        "- **任务 ID**：{task_id}"
     ),
     "workflow_started": (
-        "每日任务已启动\n"
-        "日期: {logical_date}\n"
-        "采集任务: {collect_count}\n"
-        "抓取任务: {scrape_count}"
+        "## 🚀 每日任务已启动\n\n"
+        "- **日期**：{logical_date}\n"
+        "- **状态**：已触发\n"
+        "- **workflow**：{run_id}\n"
+        "- **分类采集任务**：{collect_count}\n"
+        "- **产品抓取任务**：{scrape_count}\n\n"
+        "后续会继续跟进执行、快报和完整报告状态。"
     ),
     "workflow_fast_report": (
-        "快报已生成\n"
-        "日期: {logical_date}\n"
-        "产品数: {product_count}\n"
-        "评论数: {review_count}\n"
-        "翻译完成: {translated_count}/{review_count}"
+        "## 📊 每日快报已生成\n\n"
+        "- **日期**：{logical_date}\n"
+        "- **状态**：快报已生成\n"
+        "- **workflow**：{run_id}\n"
+        "- **产品数**：{products_count}\n"
+        "- **评论数**：{reviews_count}\n"
+        "- **翻译进度**：{translated_count}/{reviews_count}\n\n"
+        "完整版报告生成后会继续通知。"
     ),
     "workflow_full_report": (
-        "完整版报告已生成\n"
-        "日期: {logical_date}\n"
-        "附件: {excel_path}\n"
-        "邮件: {email_status}"
+        "## ✅ 每日完整报告已生成\n\n"
+        "- **日期**：{logical_date}\n"
+        "- **状态**：完整报告已生成\n"
+        "- **workflow**：{run_id}\n"
+        "- **附件**：{excel_path}\n"
+        "- **邮件发送**：{email_status}\n\n"
+        "如需，我可以继续补充差评、价格波动和竞品对比解读。"
     ),
     "workflow_attention": (
-        "需要人工关注\n"
-        "日期: {logical_date}\n"
-        "原因: {reason}"
+        "## ⚠️ 任务需要人工关注\n\n"
+        "- **日期**：{logical_date}\n"
+        "- **原因**：{reason}"
     ),
 }
 
@@ -92,7 +107,12 @@ def create_bridge_app(settings: BridgeSettings) -> FastAPI:
         if settings.allowed_sources and not _source_allowed(source, settings.allowed_sources):
             raise HTTPException(status_code=403, detail="source not allowed")
 
-        if settings.allowed_targets and payload.target not in settings.allowed_targets:
+        normalized_target = _normalize_target(settings, payload.target)
+        if settings.allowed_targets and not _target_allowed(
+            payload.target,
+            normalized_target,
+            settings.allowed_targets,
+        ):
             raise HTTPException(status_code=403, detail="target not allowed")
 
         template = settings.templates.get(payload.template_key)
@@ -140,17 +160,31 @@ def _render_template(template: str, template_vars: dict[str, Any]) -> str:
         key: "" if value is None else str(value)
         for key, value in template_vars.items()
     }
+    if safe_vars.get("email_status"):
+        safe_vars["email_status"] = _display_email_status(safe_vars["email_status"])
     defaults = {
+        "task_heading": "✅ 任务已完成",
         "task_type": "",
         "status": "",
         "task_id": "",
         "summary": "",
+        "target_summary": "",
+        "site": "",
+        "ownership": "",
+        "result_summary": "",
+        "product_count": "",
+        "review_count": "",
+        "failed_summary": "",
         "logical_date": "",
+        "run_id": "",
         "collect_count": "",
         "scrape_count": "",
         "product_count": "",
         "review_count": "",
+        "products_count": "",
+        "reviews_count": "",
         "translated_count": "",
+        "untranslated_count": "",
         "excel_path": "",
         "email_status": "",
         "reason": "",
@@ -160,13 +194,14 @@ def _render_template(template: str, template_vars: dict[str, Any]) -> str:
 
 
 def _send_via_openclaw(settings: BridgeSettings, target: str, message: str) -> dict[str, Any]:
+    normalized_target = _normalize_target(settings, target)
     completed = subprocess.run(
         [
             *settings.command,
             "--channel",
             settings.channel,
             "--target",
-            target,
+            normalized_target,
             settings.message_flag,
             message,
         ],
@@ -192,6 +227,16 @@ def _send_via_openclaw(settings: BridgeSettings, target: str, message: str) -> d
     }
 
 
+def _normalize_target(settings: BridgeSettings, target: str) -> str:
+    if settings.channel == "dingtalk" and target.startswith("chat:"):
+        return "channel:" + target[5:]
+    return target
+
+
+def _target_allowed(raw_target: str, normalized_target: str, allowlist: set[str]) -> bool:
+    return raw_target in allowlist or normalized_target in allowlist
+
+
 def _extract_message_id(stdout: str) -> str:
     text = (stdout or "").strip()
     if not text:
@@ -207,6 +252,15 @@ def _extract_message_id(stdout: str) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _display_email_status(status: str) -> str:
+    value = status.strip().lower()
+    if value == "success":
+        return "已发送"
+    if value == "failed":
+        return "发送失败"
+    return status
 
 
 def build_settings_from_env() -> BridgeSettings:

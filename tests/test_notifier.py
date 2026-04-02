@@ -154,6 +154,39 @@ def test_completion_notification_cutover(
     manager._executor.shutdown(wait=False, cancel_futures=True)
 
 
+def test_completion_notification_outbox_payload_is_human_contextualized(monkeypatch):
+    from qbu_crawler.server import task_manager as task_manager_module
+
+    manager = task_manager_module.TaskManager(max_workers=1)
+    task = task_manager_module.Task(
+        type="scrape",
+        params={
+            "urls": ["https://waltons.com/waltons-meat-tenderizer/"],
+            "ownership": "competitor",
+        },
+        reply_to="chat:cid-1",
+    )
+    task.status = task_manager_module.TaskStatus.completed
+    task.result = {"products_saved": 1, "reviews_saved": 0}
+    manager._tasks[task.id] = task
+
+    monkeypatch.setattr(task_manager_module.config, "NOTIFICATION_MODE", "outbox")
+
+    with patch.object(task_manager_module.models, "enqueue_notification") as mock_enqueue:
+        manager._notify_completion(task.id)
+
+    payload = mock_enqueue.call_args.args[0]["payload"]
+    assert payload["task_type"] == "scrape"
+    assert payload["site"] == "waltons"
+    assert payload["ownership"] == "competitor"
+    assert payload["target_summary"] == "Waltons Meat Tenderizer"
+    assert payload["result_summary"] == "产品信息已刷新，未发现新评论"
+    assert payload["product_count"] == 1
+    assert payload["review_count"] == 0
+
+    manager._executor.shutdown(wait=False, cancel_futures=True)
+
+
 class _FakeSender:
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
@@ -408,6 +441,248 @@ def test_bridge_cli_failure():
     assert response.status_code == 502
 
 
+def test_bridge_normalizes_dingtalk_group_target_for_cli():
+    from qbu_crawler.server.openclaw.bridge.app import BridgeSettings, _send_via_openclaw
+
+    settings = BridgeSettings(
+        auth_token="secret",
+        allowed_sources=set(),
+        allowed_targets=set(),
+        command=["openclaw", "message", "send"],
+        channel="dingtalk",
+    )
+
+    with patch("qbu_crawler.server.openclaw.bridge.app.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["openclaw"],
+            returncode=0,
+            stdout='{"message_id":"msg-group"}',
+            stderr="",
+        )
+
+        result = _send_via_openclaw(settings, "chat:cid-group", "group test")
+
+    assert result["bridge_request_id"] == "msg-group"
+    called_args = mock_run.call_args.args[0]
+    assert "--target" in called_args
+    assert called_args[called_args.index("--target") + 1] == "channel:cid-group"
+
+
+def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
+    from fastapi.testclient import TestClient
+
+    from qbu_crawler.server.openclaw.bridge.app import BridgeSettings, create_bridge_app
+
+    app = create_bridge_app(
+        BridgeSettings(
+            auth_token="secret",
+            allowed_sources={"10.0.0.1"},
+            allowed_targets={"channel:cid-bridge"},
+            command=["openclaw", "message", "send"],
+            channel="dingtalk",
+        )
+    )
+    client = TestClient(app)
+
+    with patch("qbu_crawler.server.openclaw.bridge.app.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["openclaw"],
+            returncode=0,
+            stdout='{"message_id":"msg-allow"}',
+            stderr="",
+        )
+        response = client.post(
+            "/notify",
+            headers={
+                "X-Bridge-Token": "secret",
+                "X-Forwarded-For": "10.0.0.1",
+            },
+            json={
+                "target": "chat:cid-bridge",
+                "template_key": "task_completed",
+                "template_vars": {"task_type": "scrape", "status": "completed"},
+                "dedupe_key": "bridge-allow-normalized",
+            },
+        )
+
+    assert response.status_code == 200
+    called_args = mock_run.call_args.args[0]
+    assert called_args[called_args.index("--target") + 1] == "channel:cid-bridge"
+
+
+@pytest.mark.parametrize(
+    ("template_key", "template_vars", "expected_message"),
+    [
+        (
+            "workflow_started",
+            {
+                "logical_date": "2026-03-31",
+                "run_id": 7,
+                "collect_count": 2,
+                "scrape_count": 5,
+            },
+            (
+                "## 🚀 每日任务已启动\n\n"
+                "- **日期**：2026-03-31\n"
+                "- **状态**：已触发\n"
+                "- **workflow**：7\n"
+                "- **分类采集任务**：2\n"
+                "- **产品抓取任务**：5\n\n"
+                "后续会继续跟进执行、快报和完整报告状态。"
+            ),
+        ),
+        (
+            "workflow_fast_report",
+            {
+                "logical_date": "2026-03-31",
+                "run_id": 7,
+                "products_count": 41,
+                "reviews_count": 2464,
+                "translated_count": 2464,
+            },
+            (
+                "## 📊 每日快报已生成\n\n"
+                "- **日期**：2026-03-31\n"
+                "- **状态**：快报已生成\n"
+                "- **workflow**：7\n"
+                "- **产品数**：41\n"
+                "- **评论数**：2464\n"
+                "- **翻译进度**：2464/2464\n\n"
+                "完整版报告生成后会继续通知。"
+            ),
+        ),
+        (
+            "workflow_full_report",
+            {
+                "logical_date": "2026-03-31",
+                "run_id": 7,
+                "excel_path": "./reports/workflow-run-7-full-report.xlsx",
+                "email_status": "success",
+            },
+            (
+                "## ✅ 每日完整报告已生成\n\n"
+                "- **日期**：2026-03-31\n"
+                "- **状态**：完整报告已生成\n"
+                "- **workflow**：7\n"
+                "- **附件**：./reports/workflow-run-7-full-report.xlsx\n"
+                "- **邮件发送**：已发送\n\n"
+                "如需，我可以继续补充差评、价格波动和竞品对比解读。"
+            ),
+        ),
+    ],
+)
+def test_bridge_workflow_templates_use_icon_markdown_style(
+    template_key,
+    template_vars,
+    expected_message,
+):
+    from fastapi.testclient import TestClient
+
+    from qbu_crawler.server.openclaw.bridge.app import BridgeSettings, create_bridge_app
+
+    app = create_bridge_app(
+        BridgeSettings(
+            auth_token="secret",
+            allowed_sources={"10.0.0.1"},
+            allowed_targets={"chat:cid-bridge"},
+            command=["openclaw", "message", "send"],
+            channel="dingtalk",
+        )
+    )
+    client = TestClient(app)
+
+    with patch("qbu_crawler.server.openclaw.bridge.app.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["openclaw"],
+            returncode=0,
+            stdout='{"message_id":"msg-template"}',
+            stderr="",
+        )
+        response = client.post(
+            "/notify",
+            headers={
+                "X-Bridge-Token": "secret",
+                "X-Forwarded-For": "10.0.0.1",
+            },
+            json={
+                "target": "chat:cid-bridge",
+                "template_key": template_key,
+                "template_vars": template_vars,
+                "dedupe_key": f"template-{template_key}",
+            },
+        )
+
+    assert response.status_code == 200
+    called_args = mock_run.call_args.args[0]
+    assert called_args[called_args.index("--message") + 1] == expected_message
+
+
+def test_bridge_task_completed_template_uses_human_summary():
+    from fastapi.testclient import TestClient
+
+    from qbu_crawler.server.openclaw.bridge.app import BridgeSettings, create_bridge_app
+
+    app = create_bridge_app(
+        BridgeSettings(
+            auth_token="secret",
+            allowed_sources={"10.0.0.1"},
+            allowed_targets={"chat:cid-bridge"},
+            command=["openclaw", "message", "send"],
+            channel="dingtalk",
+        )
+    )
+    client = TestClient(app)
+
+    with patch("qbu_crawler.server.openclaw.bridge.app.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["openclaw"],
+            returncode=0,
+            stdout='{"message_id":"msg-task-complete"}',
+            stderr="",
+        )
+        response = client.post(
+            "/notify",
+            headers={
+                "X-Bridge-Token": "secret",
+                "X-Forwarded-For": "10.0.0.1",
+            },
+            json={
+                "target": "chat:cid-bridge",
+                "template_key": "task_completed",
+                "template_vars": {
+                    "task_heading": "✅ 抓取完成",
+                    "task_type": "产品页抓取",
+                    "task_id": "task-1",
+                    "target_summary": "Waltons Meat Tenderizer",
+                    "site": "Walton's",
+                    "ownership": "竞品",
+                    "result_summary": "产品信息已刷新，未发现新评论",
+                    "product_count": "1",
+                    "review_count": "0",
+                    "failed_summary": "无",
+                },
+                "dedupe_key": "bridge-task-complete",
+            },
+        )
+
+    assert response.status_code == 200
+    called_args = mock_run.call_args.args[0]
+    expected_message = (
+        "## ✅ 抓取完成\n\n"
+        "- **目标**：Waltons Meat Tenderizer\n"
+        "- **站点**：Walton's\n"
+        "- **归属**：竞品\n"
+        "- **任务类型**：产品页抓取\n"
+        "- **结果**：产品信息已刷新，未发现新评论\n\n"
+        "### 本次产出\n"
+        "- **产品记录**：1 个\n"
+        "- **新增评论**：0 条\n"
+        "- **失败项**：无\n\n"
+        "- **任务 ID**：task-1"
+    )
+    assert called_args[called_args.index("--message") + 1] == expected_message
+
+
 def test_openclaw_bridge_sender_success(monkeypatch):
     from qbu_crawler.server.notifier import OpenClawBridgeSender
 
@@ -438,6 +713,42 @@ def test_openclaw_bridge_sender_success(monkeypatch):
     request = mock_urlopen.call_args.args[0]
     assert request.full_url == "http://bridge.local/notify"
     assert request.headers["X-bridge-token"] == "secret"
+
+
+def test_openclaw_bridge_sender_translates_task_completed_payload_to_human_template_vars():
+    from qbu_crawler.server.notifier import OpenClawBridgeSender
+
+    sender = OpenClawBridgeSender("http://bridge.local/notify", auth_token="secret", timeout=10)
+    template_vars = sender._template_vars_for(
+        {
+            "kind": "task_completed",
+            "payload": {
+                "task_id": "task-1",
+                "task_type": "scrape",
+                "status": "completed",
+                "task_heading": "✅ 抓取完成",
+                "site": "waltons",
+                "ownership": "competitor",
+                "target_summary": "Waltons Meat Tenderizer",
+                "product_count": 1,
+                "review_count": 0,
+                "result_summary": "产品信息已刷新，未发现新评论",
+                "failed_summary": "无",
+            },
+        }
+    )
+
+    assert template_vars["task_id"] == "task-1"
+    assert template_vars["task_heading"] == "✅ 抓取完成"
+    assert template_vars["task_type"] == "产品页抓取"
+    assert template_vars["status"] == "completed"
+    assert template_vars["target_summary"] == "Waltons Meat Tenderizer"
+    assert template_vars["site"] == "Walton's"
+    assert template_vars["ownership"] == "竞品"
+    assert template_vars["result_summary"] == "产品信息已刷新，未发现新评论"
+    assert template_vars["product_count"] == 1
+    assert template_vars["review_count"] == 0
+    assert template_vars["failed_summary"] == "无"
 
 
 def test_openclaw_bridge_sender_classifies_retryable_and_permanent_failures():

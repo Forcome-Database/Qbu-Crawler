@@ -1,11 +1,20 @@
 import hashlib
 import json as _json
 import sqlite3
+from datetime import date, timedelta
+
 from qbu_crawler.config import DB_PATH, now_shanghai
+from qbu_crawler.server.scope import Scope
 
 # SQLite CURRENT_TIMESTAMP is always UTC.
 # Use this expression for Asia/Shanghai (UTC+8) timestamps.
 _NOW_SHANGHAI = "datetime('now', '+8 hours')"
+_TIME_AXIS_FIELDS = {
+    "product_state_time": "products.scraped_at",
+    "snapshot_time": "product_snapshots.scraped_at",
+    "review_ingest_time": "reviews.scraped_at",
+    "review_publish_time": "reviews.date_published",
+}
 
 
 def get_conn():
@@ -799,6 +808,289 @@ def query_reviews(
         conn.close()
 
 
+def _scope_window_clauses(scope: Scope, column: str) -> tuple[list[str], list]:
+    clauses: list[str] = []
+    params: list = []
+
+    since = scope.window.since
+    if since:
+        clauses.append(f"{column} >= ?")
+        params.append(since)
+
+    until = scope.window.until
+    if until:
+        until_exclusive = until
+        try:
+            until_exclusive = (date.fromisoformat(until) + timedelta(days=1)).isoformat()
+        except ValueError:
+            pass
+        clauses.append(f"{column} < ?")
+        params.append(until_exclusive)
+
+    return clauses, params
+
+
+def _scope_product_clauses(
+    scope: Scope,
+    alias: str = "p",
+    *,
+    include_window: bool = True,
+) -> tuple[list[str], list]:
+    clauses: list[str] = []
+    params: list = []
+
+    if scope.products.ids:
+        placeholders = ",".join("?" for _ in scope.products.ids)
+        clauses.append(f"CAST({alias}.id AS TEXT) IN ({placeholders})")
+        params.extend(scope.products.ids)
+    if scope.products.urls:
+        placeholders = ",".join("?" for _ in scope.products.urls)
+        clauses.append(f"{alias}.url IN ({placeholders})")
+        params.extend(scope.products.urls)
+    if scope.products.skus:
+        placeholders = ",".join("?" for _ in scope.products.skus)
+        clauses.append(f"{alias}.sku IN ({placeholders})")
+        params.extend(scope.products.skus)
+    if scope.products.names:
+        placeholders = ",".join("?" for _ in scope.products.names)
+        clauses.append(f"{alias}.name IN ({placeholders})")
+        params.extend(scope.products.names)
+    if scope.products.sites:
+        placeholders = ",".join("?" for _ in scope.products.sites)
+        clauses.append(f"LOWER({alias}.site) IN ({placeholders})")
+        params.extend(scope.products.sites)
+    if scope.products.ownership:
+        placeholders = ",".join("?" for _ in scope.products.ownership)
+        clauses.append(f"LOWER({alias}.ownership) IN ({placeholders})")
+        params.extend(scope.products.ownership)
+    if scope.products.price.min is not None:
+        clauses.append(f"{alias}.price >= ?")
+        params.append(scope.products.price.min)
+    if scope.products.price.max is not None:
+        clauses.append(f"{alias}.price <= ?")
+        params.append(scope.products.price.max)
+    if scope.products.rating.min is not None:
+        clauses.append(f"{alias}.rating >= ?")
+        params.append(scope.products.rating.min)
+    if scope.products.rating.max is not None:
+        clauses.append(f"{alias}.rating <= ?")
+        params.append(scope.products.rating.max)
+    if scope.products.review_count.min is not None:
+        clauses.append(f"{alias}.review_count >= ?")
+        params.append(scope.products.review_count.min)
+    if scope.products.review_count.max is not None:
+        clauses.append(f"{alias}.review_count <= ?")
+        params.append(scope.products.review_count.max)
+
+    if include_window:
+        window_clauses, window_params = _scope_window_clauses(scope, f"{alias}.scraped_at")
+        clauses.extend(window_clauses)
+        params.extend(window_params)
+
+    return clauses, params
+
+
+def _scope_review_clauses(
+    scope: Scope,
+    review_alias: str = "r",
+    product_alias: str = "p",
+    image_only: bool = False,
+) -> tuple[list[str], list]:
+    clauses, params = _scope_product_clauses(scope, alias=product_alias, include_window=False)
+
+    if scope.reviews.rating.min is not None:
+        clauses.append(f"{review_alias}.rating >= ?")
+        params.append(scope.reviews.rating.min)
+    if scope.reviews.rating.max is not None:
+        clauses.append(f"{review_alias}.rating <= ?")
+        params.append(scope.reviews.rating.max)
+    if scope.reviews.keyword:
+        clauses.append(f"({review_alias}.headline LIKE ? OR {review_alias}.body LIKE ?)")
+        params.extend([f"%{scope.reviews.keyword}%", f"%{scope.reviews.keyword}%"])
+    if scope.reviews.has_images is True:
+        clauses.append(f"{review_alias}.images IS NOT NULL AND {review_alias}.images != '[]' AND {review_alias}.images != ''")
+    elif scope.reviews.has_images is False:
+        clauses.append(f"({review_alias}.images IS NULL OR {review_alias}.images = '[]' OR {review_alias}.images = '')")
+    if image_only:
+        clauses.append(f"{review_alias}.images IS NOT NULL AND {review_alias}.images != '[]' AND {review_alias}.images != ''")
+
+    window_clauses, window_params = _scope_window_clauses(scope, f"{review_alias}.scraped_at")
+    clauses.extend(window_clauses)
+    params.extend(window_params)
+
+    return clauses, params
+
+
+def _scope_has_review_constraints(scope: Scope) -> bool:
+    return any(
+        (
+            scope.reviews.rating.min is not None,
+            scope.reviews.rating.max is not None,
+            bool(scope.reviews.keyword),
+            scope.reviews.has_images is not None,
+            bool(scope.window.since),
+            bool(scope.window.until),
+        )
+    )
+
+
+def _fetch_scalar(conn, sql: str, params: list | tuple | None = None, default=0):
+    value = conn.execute(sql, params or []).fetchone()[0]
+    return default if value is None else value
+
+
+def _metric_product_count(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(_fetch_scalar(conn, f"SELECT COUNT(*) FROM products p {where}", params, default=0))
+
+
+def _metric_ingested_review_rows(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def _metric_site_reported_review_total_current(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(_fetch_scalar(conn, f"SELECT COALESCE(SUM(p.review_count), 0) FROM products p {where}", params, default=0))
+
+
+def _metric_matched_review_product_count(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(DISTINCT p.id) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def _metric_image_review_rows(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def get_time_axis_semantics() -> dict:
+    """Return canonical time axes with backing fields and latest observed values."""
+    conn = get_conn()
+    try:
+        latest_values = {
+            "product_state_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM products", default=None),
+            "snapshot_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM product_snapshots", default=None),
+            "review_ingest_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM reviews", default=None),
+            "review_publish_time": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+        }
+        return {
+            axis: {
+                "field": field,
+                "latest": latest_values.get(axis),
+            }
+            for axis, field in _TIME_AXIS_FIELDS.items()
+        }
+    finally:
+        conn.close()
+
+
+def preview_scope_counts(scope: Scope) -> dict:
+    """Return matched product/review counts for a normalized scope."""
+    conn = get_conn()
+    try:
+        product_clauses, product_params = _scope_product_clauses(scope, alias="p", include_window=False)
+        product_where = f"WHERE {' AND '.join(product_clauses)}" if product_clauses else ""
+        product_count = _metric_product_count(conn, product_where, product_params)
+        site_reported_review_total_current = _metric_site_reported_review_total_current(
+            conn, product_where, product_params
+        )
+
+        review_clauses, review_params = _scope_review_clauses(scope, review_alias="r", product_alias="p")
+        review_where = f"WHERE {' AND '.join(review_clauses)}" if review_clauses else ""
+        ingested_review_rows = _metric_ingested_review_rows(conn, review_where, review_params)
+        matched_review_product_count = _metric_matched_review_product_count(conn, review_where, review_params)
+        matched_product_count = matched_review_product_count if _scope_has_review_constraints(scope) else product_count
+
+        image_clauses, image_params = _scope_review_clauses(
+            scope,
+            review_alias="r",
+            product_alias="p",
+            image_only=True,
+        )
+        image_where = f"WHERE {' AND '.join(image_clauses)}" if image_clauses else ""
+        image_review_rows = _metric_image_review_rows(conn, image_where, image_params)
+
+        return {
+            "product_count": product_count,
+            "ingested_review_rows": ingested_review_rows,
+            "site_reported_review_total_current": site_reported_review_total_current,
+            "matched_review_product_count": matched_review_product_count,
+            "image_review_rows": image_review_rows,
+            "matched_product_count": matched_product_count,
+            "matched_review_count": ingested_review_rows,
+            "matched_image_review_count": image_review_rows,
+        }
+    finally:
+        conn.close()
+
+
+def list_review_images_for_scope(scope: Scope, limit: int) -> list[dict]:
+    """Return image-bearing review rows filtered by a normalized scope."""
+    if limit <= 0:
+        return []
+
+    conn = get_conn()
+    try:
+        clauses, params = _scope_review_clauses(scope, review_alias="r", product_alias="p", image_only=True)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT
+                r.id,
+                r.product_id,
+                r.author,
+                r.headline,
+                r.body,
+                r.body_hash,
+                r.rating,
+                r.date_published,
+                r.images,
+                r.scraped_at,
+                p.url AS product_url,
+                p.name AS product_name,
+                p.sku AS product_sku,
+                p.site AS product_site,
+                p.ownership AS product_ownership
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            {where}
+            ORDER BY r.scraped_at DESC, r.id DESC
+            LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = _json.loads(data["images"])
+                except Exception:
+                    pass
+            results.append(data)
+        return results
+    finally:
+        conn.close()
+
+
 def get_snapshots(
     product_id: int,
     days: int = 30,
@@ -825,8 +1117,9 @@ def get_snapshots(
 def get_stats() -> dict:
     conn = get_conn()
     try:
-        total_products = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
-        total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+        total_products = _metric_product_count(conn)
+        total_reviews = _metric_ingested_review_rows(conn)
+        site_reported_review_total_current = _metric_site_reported_review_total_current(conn)
 
         by_site = {}
         for row in conn.execute("SELECT site, COUNT(*) as cnt FROM products GROUP BY site").fetchall():
@@ -842,6 +1135,29 @@ def get_stats() -> dict:
             by_ownership[row["ownership"]] = row["cnt"]
 
         return {
+            "product_count": total_products,
+            "ingested_review_rows": total_reviews,
+            "site_reported_review_total_current": site_reported_review_total_current,
+            "avg_price_current": round(avg_price, 2) if avg_price else None,
+            "avg_rating_current": round(avg_rating, 2) if avg_rating else None,
+            "time_axes": {
+                "product_state_time": {
+                    "field": _TIME_AXIS_FIELDS["product_state_time"],
+                    "latest": last_scrape,
+                },
+                "snapshot_time": {
+                    "field": _TIME_AXIS_FIELDS["snapshot_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM product_snapshots", default=None),
+                },
+                "review_ingest_time": {
+                    "field": _TIME_AXIS_FIELDS["review_ingest_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM reviews", default=None),
+                },
+                "review_publish_time": {
+                    "field": _TIME_AXIS_FIELDS["review_publish_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+                },
+            },
             "total_products": total_products,
             "total_reviews": total_reviews,
             "by_site": by_site,

@@ -9,7 +9,7 @@ This directory now supports the hybrid architecture:
 ## Authoritative Paths
 
 - Daily submit:
-  `Crawler Host systemd -> qbu-crawler workflow daily-submit`
+  `Crawler Host qbu-crawler serve -> embedded DailySchedulerWorker -> submit_daily_run`
 - Temporary task completion:
   `TaskManager -> notification_outbox -> OpenClaw bridge`
 - Daily report:
@@ -22,6 +22,7 @@ OpenClaw `cron`, `heartbeat`, and `/hooks/agent` are no longer the hard-SLA path
 ## Deployment Boundaries
 
 - `daily-submit` must run on the Crawler Host.
+- `daily-submit` is now started by the crawler service itself when `DAILY_SUBMIT_MODE=embedded`.
 - The notify bridge must listen only on loopback or a private network.
 - `/api` and `/mcp` are internal control-plane surfaces.
 - `openclaw.json` must be deployed from versioned templates, not edited by hand.
@@ -29,7 +30,8 @@ OpenClaw `cron`, `heartbeat`, and `/hooks/agent` are no longer the hard-SLA path
 ## Feature Flags
 
 - `NOTIFICATION_MODE=legacy|shadow|outbox`
-- `DAILY_SUBMIT_MODE=openclaw|crawler_systemd`
+- `DAILY_SUBMIT_MODE=openclaw|embedded`
+- `DAILY_SCHEDULER_TIME=HH:MM`
 - `REPORT_MODE=legacy|snapshot_fast_full`
 - `AI_DIGEST_MODE=off|async`
 
@@ -37,7 +39,7 @@ Recommended rollout order:
 
 1. `NOTIFICATION_MODE=shadow`
 2. `NOTIFICATION_MODE=outbox`
-3. `DAILY_SUBMIT_MODE=crawler_systemd`
+3. `DAILY_SUBMIT_MODE=embedded`
 4. `REPORT_MODE=snapshot_fast_full`
 5. `AI_DIGEST_MODE=async`
 
@@ -67,9 +69,15 @@ Recommended rollout order:
 
 ## CSV Inputs
 
-The default CSV source paths still point at the OpenClaw workspace:
+The scheduler can read CSV inputs in two ways:
 
-- `workspace/data/sku-list-source.csv`
-- `workspace/data/sku-product-details.csv`
+1. Local filesystem paths:
+   - `DAILY_SOURCE_CSV_PATH`
+   - `DAILY_PRODUCT_CSV_PATH`
+2. Remote download URLs:
+   - `DAILY_SOURCE_CSV_URL`
+   - `DAILY_PRODUCT_CSV_URL`
 
-When `DAILY_SUBMIT_MODE=crawler_systemd`, these files must be synchronized to the Crawler Host before the timer runs. That sync is part of the OpenClaw asset deployment step.
+If the `*_CSV_URL` variables are configured, the embedded scheduler downloads the latest CSV files at trigger time and the OpenClaw-managed workspace files remain the source of truth.
+
+If the `*_CSV_URL` variables are empty, then the CSV files must already be present on the Crawler Host before `serve` starts.

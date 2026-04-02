@@ -71,7 +71,7 @@ class BassProScraper(BaseScraper):
         except Exception:
             pass  # 无弹窗或异常，正常继续
 
-    def scrape(self, url: str) -> dict:
+    def scrape(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_restart_browser()
 
         tab = self._get_page(url)
@@ -156,7 +156,7 @@ class BassProScraper(BaseScraper):
             result["review_count"] = self._to_int(agg.get("reviewCount"))
 
         # 5. BV 评论数据（从 Shadow DOM 提取）
-        reviews = self._extract_reviews_from_dom(tab)
+        reviews = self._extract_reviews_from_dom(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
         # 6. 库存状态（仅从 JSON-LD offers.availability 判断）
@@ -302,11 +302,12 @@ class BassProScraper(BaseScraper):
         """)
         time.sleep(1)
 
-    def _load_all_reviews(self, tab):
+    def _load_all_reviews(self, tab, review_limit: int | None = None):
         """循环点击 LOAD MORE 按钮加载评论。
         受 config.MAX_REVIEWS 限制，防止加载过多评论导致浏览器内存耗尽或 JS 超时。
         """
         from qbu_crawler.config import MAX_REVIEWS
+        effective_limit = review_limit if review_limit and review_limit > 0 else MAX_REVIEWS
         max_clicks = 200  # 安全上限
         for i in range(max_clicks):
             result = tab.run_js("""
@@ -328,8 +329,8 @@ class BassProScraper(BaseScraper):
             prev_count = data.get("count", 0)
 
             # 检查是否达到评论数上限
-            if MAX_REVIEWS > 0 and prev_count >= MAX_REVIEWS:
-                logger.info(f"已加载 {prev_count} 条评论，达到上限 {MAX_REVIEWS}，停止加载更多")
+            if effective_limit > 0 and prev_count >= effective_limit:
+                logger.info(f"已加载 {prev_count} 条评论，达到上限 {effective_limit}，停止加载更多")
                 break
 
             # 等待评论数量增加（最多等 5 秒）
@@ -406,11 +407,11 @@ class BassProScraper(BaseScraper):
                 time.sleep(0.5)
             time.sleep(1)
 
-    def _extract_reviews_from_dom(self, tab) -> list:
+    def _extract_reviews_from_dom(self, tab, review_limit: int | None = None) -> list:
         """从 BV Shadow DOM 提取所有评论数据（分批提取，避免 JS 超时）"""
         try:
             self._click_reviews_tab(tab)
-            self._load_all_reviews(tab)
+            self._load_all_reviews(tab, review_limit=review_limit)
             self._scroll_all_reviews(tab)
         except Exception as e:
             logger.warning(f"评论加载/滚动阶段异常，尝试提取已加载的评论: {e}")
@@ -536,4 +537,6 @@ class BassProScraper(BaseScraper):
                     seen.add(key)
                     all_reviews.append(r)
 
+        if review_limit and review_limit > 0:
+            return all_reviews[:review_limit]
         return all_reviews

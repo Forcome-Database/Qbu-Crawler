@@ -163,6 +163,8 @@ def main():
         dry_run = False
         source_csv = config.DAILY_SOURCE_CSV_PATH
         detail_csv = config.DAILY_PRODUCT_CSV_PATH
+        source_csv_url = config.DAILY_SOURCE_CSV_URL
+        detail_csv_url = config.DAILY_PRODUCT_CSV_URL
         args = sys.argv[3:]
         i = 0
         while i < len(args):
@@ -188,6 +190,8 @@ def main():
             submitter=LocalHttpTaskSubmitter(),
             source_csv=source_csv,
             detail_csv=detail_csv,
+            source_csv_url=source_csv_url,
+            detail_csv_url=detail_csv_url,
             logical_date=logical_date,
             requested_by="cli",
             dry_run=dry_run,

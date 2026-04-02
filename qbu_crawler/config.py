@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(encoding="utf-8-sig")
 
 
 def _enum_env(name: str, default: str, allowed: tuple[str, ...]) -> str:
@@ -13,6 +13,25 @@ def _enum_env(name: str, default: str, allowed: tuple[str, ...]) -> str:
         allowed_values = ", ".join(allowed)
         raise ValueError(f"{name} must be one of: {allowed_values}; got {value!r}")
     return value
+
+
+def _clock_time_env(name: str, default: str) -> str:
+    """Read an HH:MM local-time value and fail early on invalid schedules."""
+    value = os.getenv(name, default).strip()
+    try:
+        datetime.strptime(value, "%H:%M")
+    except ValueError as exc:
+        raise ValueError(f"{name} must use HH:MM 24-hour format; got {value!r}") from exc
+    return value
+
+
+def _validate_paired_env(name_a: str, value_a: str, name_b: str, value_b: str) -> None:
+    """Require two related env vars to be configured together."""
+    if bool(value_a) ^ bool(value_b):
+        raise ValueError(
+            f"{name_a} and {name_b} must be configured together; "
+            f"got {name_a}={value_a!r}, {name_b}={value_b!r}"
+        )
 
 # 数据目录：优先使用环境变量 QBU_DATA_DIR，否则使用项目根目录下的 data/
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,7 +106,7 @@ NOTIFICATION_MODE = _enum_env(
 DAILY_SUBMIT_MODE = _enum_env(
     "DAILY_SUBMIT_MODE",
     "openclaw",
-    ("openclaw", "crawler_systemd"),
+    ("openclaw", "embedded"),
 )
 REPORT_MODE = _enum_env(
     "REPORT_MODE",
@@ -99,6 +118,10 @@ AI_DIGEST_MODE = _enum_env(
     "off",
     ("off", "async"),
 )
+DAILY_SCHEDULER_TIME = _clock_time_env("DAILY_SCHEDULER_TIME", "08:00")
+DAILY_SCHEDULER_INTERVAL = int(os.getenv("DAILY_SCHEDULER_INTERVAL", "30"))
+DAILY_SCHEDULER_RETRY_SECONDS = int(os.getenv("DAILY_SCHEDULER_RETRY_SECONDS", "300"))
+WORKFLOW_TRANSLATION_WAIT_SECONDS = int(os.getenv("WORKFLOW_TRANSLATION_WAIT_SECONDS", "900"))
 
 # ── OpenClaw Webhook（任务完成即时通知）────────────
 OPENCLAW_HOOK_URL = os.getenv("OPENCLAW_HOOK_URL", "")      # e.g. http://127.0.0.1:18789
@@ -145,6 +168,14 @@ DAILY_PRODUCT_CSV_PATH = os.getenv("DAILY_PRODUCT_CSV_PATH", "") or os.path.join
     OPENCLAW_WORKSPACE_DIR,
     "data",
     "sku-product-details.csv",
+)
+DAILY_SOURCE_CSV_URL = os.getenv("DAILY_SOURCE_CSV_URL", "").strip()
+DAILY_PRODUCT_CSV_URL = os.getenv("DAILY_PRODUCT_CSV_URL", "").strip()
+_validate_paired_env(
+    "DAILY_SOURCE_CSV_URL",
+    DAILY_SOURCE_CSV_URL,
+    "DAILY_PRODUCT_CSV_URL",
+    DAILY_PRODUCT_CSV_URL,
 )
 EMAIL_RECIPIENTS = [
     addr.strip()

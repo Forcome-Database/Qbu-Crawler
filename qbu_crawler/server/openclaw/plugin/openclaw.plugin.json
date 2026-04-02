@@ -10,8 +10,7 @@
     "properties": {
       "endpoint": {
         "type": "string",
-        "description": "MCP endpoint URL (Streamable HTTP)",
-        "default": "http://8.153.109.16:15087/mcp/"
+        "description": "MCP endpoint URL (Streamable HTTP)"
       },
       "protocolVersion": {
         "type": "string",
@@ -20,8 +19,24 @@
       "timeoutMs": {
         "type": "integer",
         "default": 60000
+      },
+      "primaryUserId": {
+        "type": "string",
+        "description": "Primary operator user id. Only this user is allowed to be addressed as Leo by default.",
+        "default": "564550211"
+      },
+      "primaryUserName": {
+        "type": "string",
+        "description": "Primary operator display name used when the current speaker is clearly that person.",
+        "default": "Leo"
+      },
+      "addressingContextEnabled": {
+        "type": "boolean",
+        "description": "Inject current-speaker context before prompt build so the agent addresses people by the right nickname instead of defaulting to Leo.",
+        "default": true
       }
     },
+    "required": ["endpoint"],
     "additionalProperties": false
   }
 }

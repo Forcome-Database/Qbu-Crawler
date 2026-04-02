@@ -25,12 +25,14 @@ def test_server_runtime_starts_and_stops_components():
     translator = _DummyWorker()
     notifier = _DummyWorker()
     workflow = _DummyWorker()
+    scheduler = _DummyWorker()
 
     runtime = ServerRuntime(
         translator=translator,
         task_manager=object(),
         notifier=notifier,
         workflow_worker=workflow,
+        daily_scheduler=scheduler,
     )
     runtime.start()
     runtime.stop()
@@ -38,9 +40,11 @@ def test_server_runtime_starts_and_stops_components():
     assert translator.started == 1
     assert notifier.started == 1
     assert workflow.started == 1
+    assert scheduler.started == 1
     assert translator.stopped == 1
     assert notifier.stopped == 1
     assert workflow.stopped == 1
+    assert scheduler.stopped == 1
 
 
 def test_app_lifespan_starts_and_stops_runtime(monkeypatch):

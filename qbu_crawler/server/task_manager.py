@@ -6,6 +6,8 @@ supports cancellation, and persists task history to SQLite.
 
 import json as _json
 import hashlib
+import re
+from urllib.parse import unquote, urlparse
 import urllib.request
 import uuid
 import logging
@@ -19,6 +21,22 @@ from qbu_crawler import config, models
 from qbu_crawler.scrapers import get_scraper, get_site_key
 
 logger = logging.getLogger(__name__)
+
+_SITE_DISPLAY = {
+    "basspro": "Bass Pro",
+    "meatyourmaker": "Meat Your Maker",
+    "waltons": "Walton's",
+}
+
+_OWNERSHIP_DISPLAY = {
+    "own": "自有",
+    "competitor": "竞品",
+}
+
+_TASK_TYPE_DISPLAY = {
+    "scrape": "产品页抓取",
+    "collect": "分类页采集",
+}
 
 
 class TaskStatus(str, Enum):
@@ -75,8 +93,18 @@ class TaskManager:
         self._cancel_flags: dict[str, Event] = {}
         self._translator = translator
 
-    def submit_scrape(self, urls: list[str], ownership: str = "competitor", reply_to: str = "") -> Task:
-        task = Task(type="scrape", params={"urls": urls, "ownership": ownership}, reply_to=reply_to)
+    def submit_scrape(
+        self,
+        urls: list[str],
+        ownership: str = "competitor",
+        review_limit: int = 0,
+        reply_to: str = "",
+    ) -> Task:
+        task = Task(
+            type="scrape",
+            params={"urls": urls, "ownership": ownership, "review_limit": review_limit},
+            reply_to=reply_to,
+        )
         task.progress = {"total": len(urls), "completed": 0, "failed": 0, "current_url": None}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()
@@ -84,8 +112,24 @@ class TaskManager:
         self._executor.submit(self._run_scrape, task.id)
         return task
 
-    def submit_collect(self, category_url: str, max_pages: int = 0, ownership: str = "competitor", reply_to: str = "") -> Task:
-        task = Task(type="collect", params={"category_url": category_url, "max_pages": max_pages, "ownership": ownership}, reply_to=reply_to)
+    def submit_collect(
+        self,
+        category_url: str,
+        max_pages: int = 0,
+        review_limit: int = 0,
+        ownership: str = "competitor",
+        reply_to: str = "",
+    ) -> Task:
+        task = Task(
+            type="collect",
+            params={
+                "category_url": category_url,
+                "max_pages": max_pages,
+                "review_limit": review_limit,
+                "ownership": ownership,
+            },
+            reply_to=reply_to,
+        )
         task.progress = {"phase": "collecting", "urls_found": 0, "completed": 0, "failed": 0}
         self._tasks[task.id] = task
         self._cancel_flags[task.id] = Event()
@@ -142,7 +186,11 @@ class TaskManager:
                         scraper = get_scraper(url)
                         scraper._current_site = get_site_key(url)
 
-                    data = scraper.scrape(url)
+                    effective_review_limit = self._resolve_review_limit(
+                        url,
+                        task.params.get("review_limit", 0),
+                    )
+                    data = scraper.scrape(url, review_limit=effective_review_limit)
                     product = data.get("product", {})
                     product["ownership"] = task.params["ownership"]
                     reviews = data.get("reviews", [])
@@ -195,6 +243,7 @@ class TaskManager:
 
         category_url = task.params["category_url"]
         max_pages = task.params.get("max_pages", 0)
+        requested_review_limit = task.params.get("review_limit", 0)
         scraper = None
 
         try:
@@ -226,7 +275,8 @@ class TaskManager:
                 self._persist(task)
 
                 try:
-                    data = scraper.scrape(url)
+                    effective_review_limit = self._resolve_review_limit(url, requested_review_limit)
+                    data = scraper.scrape(url, review_limit=effective_review_limit)
                     product = data.get("product", {})
                     product["ownership"] = task.params["ownership"]
                     reviews = data.get("reviews", [])
@@ -269,6 +319,14 @@ class TaskManager:
             self._tasks.pop(task_id, None)
             self._cancel_flags.pop(task_id, None)
 
+    def _resolve_review_limit(self, url: str, requested_limit: int | None) -> int | None:
+        limit = requested_limit or 0
+        if limit <= 0:
+            return None
+        if models.get_product_by_url(url) is None:
+            return None
+        return limit
+
     def _persist(self, task: Task):
         try:
             now = config.now_shanghai().isoformat()
@@ -292,36 +350,50 @@ class TaskManager:
             return
 
         # 组装通知内容
-        type_cn = "产品抓取" if task.type == "scrape" else "分类采集"
+        type_cn = _TASK_TYPE_DISPLAY.get(task.type, task.type)
         status_map = {
             "completed": "成功",
             "failed": "失败",
             "cancelled": "已取消",
         }
         status_cn = status_map.get(task.status.value, task.status.value)
-        result = task.result or {}
-        products = result.get("products_saved", 0)
-        reviews = result.get("reviews_saved", 0)
+        site_key = _task_site_key(task)
+        site_cn = _SITE_DISPLAY.get(site_key, "未知站点")
+        ownership = str(task.params.get("ownership") or "").strip()
+        ownership_cn = _OWNERSHIP_DISPLAY.get(ownership, ownership or "未知")
+        target_summary = _task_target_summary(task)
+        result_summary = _task_result_summary(task)
+        failed_summary = _task_failed_summary(task)
+        product_count = _task_product_count(task)
+        review_count = _task_review_count(task)
 
         if task.status == TaskStatus.completed:
-            title = "✅ 爬虫任务已完成"
+            title = "✅ 抓取完成" if task.type == "scrape" else "✅ 采集完成"
         elif task.status == TaskStatus.failed:
-            title = "❌ 爬虫任务失败"
+            title = "❌ 抓取失败" if task.type == "scrape" else "❌ 采集失败"
         else:
-            title = "🚫 爬虫任务已取消"
+            title = "🚫 抓取已取消" if task.type == "scrape" else "🚫 采集已取消"
 
         lines = [
             title,
             "",
+            f"- **目标**：{target_summary}",
+            f"- **站点**：{site_cn}",
+            f"- **归属**：{ownership_cn}",
             f"- **任务类型**：{type_cn}",
-            f"- **状态**：{status_cn}",
-            f"- **产品数**：{products} 个",
-            f"- **评论数**：{reviews} 条",
+            f"- **结果**：{result_summary}",
+            "",
+            "### 本次产出",
+            f"- **产品记录**：{product_count} 个",
+            f"- **新增评论**：{review_count} 条",
+            f"- **失败项**：{failed_summary}",
+            "",
+            f"- **任务 ID**：{task.id}",
         ]
         if task.status == TaskStatus.failed and task.error:
-            lines.append(f"- **错误**：{task.error[:200]}")
+            lines.append(f"- **错误详情**：{task.error[:200]}")
         lines.append("")
-        lines.append("如需生成报告并发送邮件，请回复「发邮件」。")
+        lines.append("如需，我可以继续做差评总结、价格变化或邮件报告。")
         notification = "\n".join(lines)
 
         if mode in {"shadow", "outbox"}:
@@ -333,6 +405,14 @@ class TaskManager:
                 "message": notification,
                 "result": task.result or {},
                 "error": task.error,
+                "site": site_key,
+                "ownership": ownership,
+                "target_summary": target_summary,
+                "result_summary": result_summary,
+                "failed_summary": failed_summary,
+                "product_count": product_count,
+                "review_count": review_count,
+                "task_heading": title,
             }
             payload_hash = hashlib.sha1(
                 _json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -382,3 +462,92 @@ class TaskManager:
             logger.info(f"[Task {task_id}] Notification delivered via /hooks/agent")
         except Exception as e:
             logger.warning(f"[Task {task_id}] Failed to deliver notification: {e}")
+
+
+def _task_site_key(task: Task) -> str:
+    candidates = []
+    if task.type == "scrape":
+        candidates.extend(task.params.get("urls") or [])
+    elif task.type == "collect":
+        category_url = task.params.get("category_url")
+        if category_url:
+            candidates.append(category_url)
+
+    for candidate in candidates:
+        try:
+            return get_site_key(candidate)
+        except Exception:
+            continue
+    return ""
+
+
+def _humanize_slug(value: str) -> str:
+    text = re.sub(r"\.[a-zA-Z0-9]+$", "", value.strip())
+    text = re.sub(r"[-_]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.title()
+
+
+def _task_target_summary(task: Task) -> str:
+    if task.type == "scrape":
+        urls = task.params.get("urls") or []
+        if not urls:
+            return "未提供目标"
+        if len(urls) > 1:
+            return f"{len(urls)} 个产品链接"
+        parsed = urlparse(urls[0])
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        slug = unquote(segments[-1]) if segments else parsed.netloc
+        return _humanize_slug(slug) or urls[0]
+
+    category_url = str(task.params.get("category_url") or "").strip()
+    if not category_url:
+        return "未提供分类页"
+    parsed = urlparse(category_url)
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    slug = unquote(segments[-1]) if segments else parsed.netloc
+    return _humanize_slug(slug) or category_url
+
+
+def _task_product_count(task: Task) -> int:
+    result = task.result or {}
+    if result.get("products_saved") is not None:
+        return int(result.get("products_saved") or 0)
+    if result.get("products_collected") is not None:
+        return int(result.get("products_collected") or 0)
+    return 0
+
+
+def _task_review_count(task: Task) -> int:
+    result = task.result or {}
+    return int(result.get("reviews_saved") or 0)
+
+
+def _task_failed_summary(task: Task) -> str:
+    if task.status == TaskStatus.failed:
+        return "1 项失败"
+    return "无"
+
+
+def _task_result_summary(task: Task) -> str:
+    if task.status == TaskStatus.failed:
+        return "任务执行失败"
+    if task.status == TaskStatus.cancelled:
+        return "任务已取消"
+
+    result = task.result or {}
+    if task.type == "collect":
+        collected = int(result.get("products_collected") or 0)
+        if collected > 0:
+            return f"分类采集完成，发现 {collected} 个产品链接"
+        return "分类采集完成，未发现新的产品链接"
+
+    products = int(result.get("products_saved") or 0)
+    reviews = int(result.get("reviews_saved") or 0)
+    if products > 0 and reviews > 0:
+        return f"产品信息已刷新，并发现 {reviews} 条新评论"
+    if products > 0 and reviews == 0:
+        return "产品信息已刷新，未发现新评论"
+    if products == 0 and reviews > 0:
+        return f"发现 {reviews} 条评论更新"
+    return "任务完成，但未抓到新的有效数据"
