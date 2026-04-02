@@ -1,11 +1,20 @@
 import hashlib
 import json as _json
 import sqlite3
-from qbu_crawler.config import DB_PATH
+from datetime import date, timedelta
+
+from qbu_crawler.config import DB_PATH, now_shanghai
+from qbu_crawler.server.scope import Scope
 
 # SQLite CURRENT_TIMESTAMP is always UTC.
 # Use this expression for Asia/Shanghai (UTC+8) timestamps.
 _NOW_SHANGHAI = "datetime('now', '+8 hours')"
+_TIME_AXIS_FIELDS = {
+    "product_state_time": "products.scraped_at",
+    "snapshot_time": "product_snapshots.scraped_at",
+    "review_ingest_time": "reviews.scraped_at",
+    "review_publish_time": "reviews.date_published",
+}
 
 
 def get_conn():
@@ -66,8 +75,69 @@ def init_db():
             result       TEXT,
             error        TEXT,
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_progress_at TIMESTAMP,
+            worker_token TEXT,
+            system_error_code TEXT,
             started_at   TIMESTAMP,
             finished_at  TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_phase TEXT NOT NULL DEFAULT 'none',
+            logical_date TEXT NOT NULL,
+            trigger_key TEXT NOT NULL UNIQUE,
+            data_since TIMESTAMP,
+            data_until TIMESTAMP,
+            snapshot_at TIMESTAMP,
+            snapshot_path TEXT,
+            snapshot_hash TEXT,
+            excel_path TEXT,
+            requested_by TEXT,
+            service_version TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_run_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            task_id TEXT NOT NULL,
+            task_type TEXT,
+            site TEXT,
+            ownership TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(run_id, task_id),
+            FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            target TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            payload_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            claimed_at TIMESTAMP,
+            claim_token TEXT,
+            lease_until TIMESTAMP,
+            bridge_request_id TEXT,
+            last_http_status INTEGER,
+            last_exit_code INTEGER,
+            last_error TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            delivered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
     # 兼容旧表：添加缺失的列
@@ -82,6 +152,12 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN translate_retries INTEGER DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN reply_to TEXT",
         "ALTER TABLE tasks ADD COLUMN notified_at TIMESTAMP",
+        "ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP",
+        "ALTER TABLE tasks ADD COLUMN last_progress_at TIMESTAMP",
+        "ALTER TABLE tasks ADD COLUMN worker_token TEXT",
+        "ALTER TABLE tasks ADD COLUMN system_error_code TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN report_phase TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE notification_outbox ADD COLUMN delivered_at TIMESTAMP",
     ]
     for sql in migrations:
         try:
@@ -133,6 +209,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_reviews_translate_status
         ON reviews (translate_status)
     """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tasks_status_updated_at
+        ON tasks (status, updated_at)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_outbox_status_created_at
+        ON notification_outbox (status, created_at)
+    """)
     conn.close()
 
 
@@ -141,6 +225,16 @@ def _body_hash(body: str | None) -> str:
     if not body:
         return ""
     return hashlib.md5(body.encode()).hexdigest()[:16]
+
+
+def _decode_json_fields(row: sqlite3.Row | None, fields: tuple[str, ...] = ()) -> dict | None:
+    if row is None:
+        return None
+    data = dict(row)
+    for field in fields:
+        if data.get(field):
+            data[field] = _json.loads(data[field])
+    return data
 
 
 def save_product(data: dict) -> int:
@@ -222,12 +316,18 @@ def save_task(task_dict: dict) -> None:
     try:
         conn.execute(
             """INSERT INTO tasks (id, type, status, params, progress, result, error,
-                                  created_at, started_at, finished_at, reply_to, notified_at)
+                                  created_at, updated_at, last_progress_at, worker_token,
+                                  system_error_code, started_at, finished_at, reply_to, notified_at)
                VALUES (:id, :type, :status, :params, :progress, :result, :error,
-                       :created_at, :started_at, :finished_at, :reply_to, :notified_at)
+                       :created_at, :updated_at, :last_progress_at, :worker_token,
+                       :system_error_code, :started_at, :finished_at, :reply_to, :notified_at)
                ON CONFLICT(id) DO UPDATE SET
                    status=excluded.status, progress=excluded.progress,
                    result=excluded.result, error=excluded.error,
+                   updated_at=excluded.updated_at,
+                   last_progress_at=excluded.last_progress_at,
+                   worker_token=excluded.worker_token,
+                   system_error_code=excluded.system_error_code,
                    started_at=excluded.started_at, finished_at=excluded.finished_at,
                    notified_at=excluded.notified_at
             """,
@@ -240,6 +340,10 @@ def save_task(task_dict: dict) -> None:
                 "result": _json.dumps(task_dict.get("result")),
                 "error": task_dict.get("error"),
                 "created_at": task_dict.get("created_at"),
+                "updated_at": task_dict.get("updated_at"),
+                "last_progress_at": task_dict.get("last_progress_at"),
+                "worker_token": task_dict.get("worker_token"),
+                "system_error_code": task_dict.get("system_error_code"),
                 "started_at": task_dict.get("started_at"),
                 "finished_at": task_dict.get("finished_at"),
                 "reply_to": task_dict.get("reply_to"),
@@ -255,13 +359,7 @@ def get_task(task_id: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        for k in ("params", "progress", "result"):
-            if d.get(k):
-                d[k] = _json.loads(d[k])
-        return d
+        return _decode_json_fields(row, ("params", "progress", "result"))
     finally:
         conn.close()
 
@@ -281,12 +379,286 @@ def list_tasks(status: str | None = None, limit: int = 20, offset: int = 0) -> t
 
         tasks = []
         for row in rows:
-            d = dict(row)
-            for k in ("params", "progress", "result"):
-                if d.get(k):
-                    d[k] = _json.loads(d[k])
-            tasks.append(d)
+            tasks.append(_decode_json_fields(row, ("params", "progress", "result")))
         return tasks, total
+    finally:
+        conn.close()
+
+
+def list_stale_running_tasks(stale_before: str, limit: int = 100) -> list[dict]:
+    """Return running tasks whose liveness timestamp is older than ``stale_before``."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE status = 'running'
+              AND COALESCE(last_progress_at, updated_at, started_at, created_at) < ?
+            ORDER BY COALESCE(last_progress_at, updated_at, started_at, created_at) ASC
+            LIMIT ?
+            """,
+            (stale_before, limit),
+        ).fetchall()
+        return [_decode_json_fields(row, ("params", "progress", "result")) for row in rows]
+    finally:
+        conn.close()
+
+
+def mark_task_lost(
+    task_id: str,
+    error_code: str = "worker_lost",
+    error_message: str = "Task lost during execution",
+    finished_at: str | None = None,
+) -> bool:
+    """Mark a stale running task as failed so it can be reconciled."""
+    conn = get_conn()
+    try:
+        finished_at = finished_at or _NOW_SHANGHAI
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'failed',
+                error = ?,
+                system_error_code = ?,
+                finished_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'running'
+            """,
+            (error_message, error_code, finished_at, finished_at, task_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def create_workflow_run(run_dict: dict) -> dict:
+    """Create a workflow run or return the existing row for the same trigger key."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO workflow_runs (
+                workflow_type, status, report_phase, logical_date, trigger_key,
+                data_since, data_until, snapshot_at, snapshot_path,
+                snapshot_hash, excel_path, requested_by, service_version,
+                created_at, updated_at, started_at, finished_at, error
+            ) VALUES (
+                :workflow_type, :status, :report_phase, :logical_date, :trigger_key,
+                :data_since, :data_until, :snapshot_at, :snapshot_path,
+                :snapshot_hash, :excel_path, :requested_by, :service_version,
+                :created_at, :updated_at, :started_at, :finished_at, :error
+            )
+            ON CONFLICT(trigger_key) DO NOTHING
+            """,
+            {
+                "workflow_type": run_dict["workflow_type"],
+                "status": run_dict.get("status", "pending"),
+                "report_phase": run_dict.get("report_phase", "none"),
+                "logical_date": run_dict["logical_date"],
+                "trigger_key": run_dict["trigger_key"],
+                "data_since": run_dict.get("data_since"),
+                "data_until": run_dict.get("data_until"),
+                "snapshot_at": run_dict.get("snapshot_at"),
+                "snapshot_path": run_dict.get("snapshot_path"),
+                "snapshot_hash": run_dict.get("snapshot_hash"),
+                "excel_path": run_dict.get("excel_path"),
+                "requested_by": run_dict.get("requested_by"),
+                "service_version": run_dict.get("service_version"),
+                "created_at": run_dict.get("created_at"),
+                "updated_at": run_dict.get("updated_at"),
+                "started_at": run_dict.get("started_at"),
+                "finished_at": run_dict.get("finished_at"),
+                "error": run_dict.get("error"),
+            },
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM workflow_runs WHERE trigger_key = ?",
+            (run_dict["trigger_key"],),
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def get_workflow_run_by_trigger_key(trigger_key: str) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM workflow_runs WHERE trigger_key = ?",
+            (trigger_key,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_workflow_run(run_id: int) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM workflow_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_workflow_run(run_id: int, **fields) -> dict:
+    allowed = {
+        "status",
+        "report_phase",
+        "data_since",
+        "data_until",
+        "snapshot_at",
+        "snapshot_path",
+        "snapshot_hash",
+        "excel_path",
+        "requested_by",
+        "service_version",
+        "updated_at",
+        "started_at",
+        "finished_at",
+        "error",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        row = get_workflow_run(run_id)
+        if row is None:
+            raise ValueError(f"Workflow run {run_id} not found")
+        return row
+
+    conn = get_conn()
+    try:
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        params = list(updates.values())
+        if "updated_at" not in updates:
+            assignments += ", updated_at = ?"
+            params.append(now_shanghai().isoformat())
+        params.append(run_id)
+        cursor = conn.execute(
+            f"UPDATE workflow_runs SET {assignments} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise ValueError(f"Workflow run {run_id} not found")
+        row = conn.execute(
+            "SELECT * FROM workflow_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_workflow_runs(
+    statuses: list[str] | tuple[str, ...] | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    conn = get_conn()
+    try:
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            rows = conn.execute(
+                f"""
+                SELECT * FROM workflow_runs
+                WHERE status IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                [*statuses, limit],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM workflow_runs
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_workflow_run_tasks(run_id: int) -> list[dict]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT wrt.*, t.status, t.error, t.result, t.updated_at, t.finished_at, t.system_error_code
+            FROM workflow_run_tasks wrt
+            JOIN tasks t ON t.id = wrt.task_id
+            WHERE wrt.run_id = ?
+            ORDER BY wrt.id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        return [_decode_json_fields(row, ("result",)) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_notifications(
+    statuses: list[str] | tuple[str, ...] | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    conn = get_conn()
+    try:
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            rows = conn.execute(
+                f"""
+                SELECT * FROM notification_outbox
+                WHERE status IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                [*statuses, limit],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM notification_outbox
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_decode_json_fields(row, ("payload",)) for row in rows]
+    finally:
+        conn.close()
+
+
+def attach_task_to_workflow(
+    run_id: int,
+    task_id: str,
+    task_type: str = "",
+    site: str = "",
+    ownership: str = "",
+) -> dict:
+    """Attach a task to a workflow run, returning the existing row on duplicates."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO workflow_run_tasks (run_id, task_id, task_type, site, ownership)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, task_id) DO NOTHING
+            """,
+            (run_id, task_id, task_type, site, ownership),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM workflow_run_tasks WHERE run_id = ? AND task_id = ?",
+            (run_id, task_id),
+        ).fetchone()
+        return dict(row)
     finally:
         conn.close()
 
@@ -436,6 +808,289 @@ def query_reviews(
         conn.close()
 
 
+def _scope_window_clauses(scope: Scope, column: str) -> tuple[list[str], list]:
+    clauses: list[str] = []
+    params: list = []
+
+    since = scope.window.since
+    if since:
+        clauses.append(f"{column} >= ?")
+        params.append(since)
+
+    until = scope.window.until
+    if until:
+        until_exclusive = until
+        try:
+            until_exclusive = (date.fromisoformat(until) + timedelta(days=1)).isoformat()
+        except ValueError:
+            pass
+        clauses.append(f"{column} < ?")
+        params.append(until_exclusive)
+
+    return clauses, params
+
+
+def _scope_product_clauses(
+    scope: Scope,
+    alias: str = "p",
+    *,
+    include_window: bool = True,
+) -> tuple[list[str], list]:
+    clauses: list[str] = []
+    params: list = []
+
+    if scope.products.ids:
+        placeholders = ",".join("?" for _ in scope.products.ids)
+        clauses.append(f"CAST({alias}.id AS TEXT) IN ({placeholders})")
+        params.extend(scope.products.ids)
+    if scope.products.urls:
+        placeholders = ",".join("?" for _ in scope.products.urls)
+        clauses.append(f"{alias}.url IN ({placeholders})")
+        params.extend(scope.products.urls)
+    if scope.products.skus:
+        placeholders = ",".join("?" for _ in scope.products.skus)
+        clauses.append(f"{alias}.sku IN ({placeholders})")
+        params.extend(scope.products.skus)
+    if scope.products.names:
+        placeholders = ",".join("?" for _ in scope.products.names)
+        clauses.append(f"{alias}.name IN ({placeholders})")
+        params.extend(scope.products.names)
+    if scope.products.sites:
+        placeholders = ",".join("?" for _ in scope.products.sites)
+        clauses.append(f"LOWER({alias}.site) IN ({placeholders})")
+        params.extend(scope.products.sites)
+    if scope.products.ownership:
+        placeholders = ",".join("?" for _ in scope.products.ownership)
+        clauses.append(f"LOWER({alias}.ownership) IN ({placeholders})")
+        params.extend(scope.products.ownership)
+    if scope.products.price.min is not None:
+        clauses.append(f"{alias}.price >= ?")
+        params.append(scope.products.price.min)
+    if scope.products.price.max is not None:
+        clauses.append(f"{alias}.price <= ?")
+        params.append(scope.products.price.max)
+    if scope.products.rating.min is not None:
+        clauses.append(f"{alias}.rating >= ?")
+        params.append(scope.products.rating.min)
+    if scope.products.rating.max is not None:
+        clauses.append(f"{alias}.rating <= ?")
+        params.append(scope.products.rating.max)
+    if scope.products.review_count.min is not None:
+        clauses.append(f"{alias}.review_count >= ?")
+        params.append(scope.products.review_count.min)
+    if scope.products.review_count.max is not None:
+        clauses.append(f"{alias}.review_count <= ?")
+        params.append(scope.products.review_count.max)
+
+    if include_window:
+        window_clauses, window_params = _scope_window_clauses(scope, f"{alias}.scraped_at")
+        clauses.extend(window_clauses)
+        params.extend(window_params)
+
+    return clauses, params
+
+
+def _scope_review_clauses(
+    scope: Scope,
+    review_alias: str = "r",
+    product_alias: str = "p",
+    image_only: bool = False,
+) -> tuple[list[str], list]:
+    clauses, params = _scope_product_clauses(scope, alias=product_alias, include_window=False)
+
+    if scope.reviews.rating.min is not None:
+        clauses.append(f"{review_alias}.rating >= ?")
+        params.append(scope.reviews.rating.min)
+    if scope.reviews.rating.max is not None:
+        clauses.append(f"{review_alias}.rating <= ?")
+        params.append(scope.reviews.rating.max)
+    if scope.reviews.keyword:
+        clauses.append(f"({review_alias}.headline LIKE ? OR {review_alias}.body LIKE ?)")
+        params.extend([f"%{scope.reviews.keyword}%", f"%{scope.reviews.keyword}%"])
+    if scope.reviews.has_images is True:
+        clauses.append(f"{review_alias}.images IS NOT NULL AND {review_alias}.images != '[]' AND {review_alias}.images != ''")
+    elif scope.reviews.has_images is False:
+        clauses.append(f"({review_alias}.images IS NULL OR {review_alias}.images = '[]' OR {review_alias}.images = '')")
+    if image_only:
+        clauses.append(f"{review_alias}.images IS NOT NULL AND {review_alias}.images != '[]' AND {review_alias}.images != ''")
+
+    window_clauses, window_params = _scope_window_clauses(scope, f"{review_alias}.scraped_at")
+    clauses.extend(window_clauses)
+    params.extend(window_params)
+
+    return clauses, params
+
+
+def _scope_has_review_constraints(scope: Scope) -> bool:
+    return any(
+        (
+            scope.reviews.rating.min is not None,
+            scope.reviews.rating.max is not None,
+            bool(scope.reviews.keyword),
+            scope.reviews.has_images is not None,
+            bool(scope.window.since),
+            bool(scope.window.until),
+        )
+    )
+
+
+def _fetch_scalar(conn, sql: str, params: list | tuple | None = None, default=0):
+    value = conn.execute(sql, params or []).fetchone()[0]
+    return default if value is None else value
+
+
+def _metric_product_count(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(_fetch_scalar(conn, f"SELECT COUNT(*) FROM products p {where}", params, default=0))
+
+
+def _metric_ingested_review_rows(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def _metric_site_reported_review_total_current(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(_fetch_scalar(conn, f"SELECT COALESCE(SUM(p.review_count), 0) FROM products p {where}", params, default=0))
+
+
+def _metric_matched_review_product_count(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(DISTINCT p.id) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def _metric_image_review_rows(conn, where: str = "", params: list | tuple | None = None) -> int:
+    return int(
+        _fetch_scalar(
+            conn,
+            f"SELECT COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id {where}",
+            params,
+            default=0,
+        )
+    )
+
+
+def get_time_axis_semantics() -> dict:
+    """Return canonical time axes with backing fields and latest observed values."""
+    conn = get_conn()
+    try:
+        latest_values = {
+            "product_state_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM products", default=None),
+            "snapshot_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM product_snapshots", default=None),
+            "review_ingest_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM reviews", default=None),
+            "review_publish_time": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+        }
+        return {
+            axis: {
+                "field": field,
+                "latest": latest_values.get(axis),
+            }
+            for axis, field in _TIME_AXIS_FIELDS.items()
+        }
+    finally:
+        conn.close()
+
+
+def preview_scope_counts(scope: Scope) -> dict:
+    """Return matched product/review counts for a normalized scope."""
+    conn = get_conn()
+    try:
+        product_clauses, product_params = _scope_product_clauses(scope, alias="p", include_window=False)
+        product_where = f"WHERE {' AND '.join(product_clauses)}" if product_clauses else ""
+        product_count = _metric_product_count(conn, product_where, product_params)
+        site_reported_review_total_current = _metric_site_reported_review_total_current(
+            conn, product_where, product_params
+        )
+
+        review_clauses, review_params = _scope_review_clauses(scope, review_alias="r", product_alias="p")
+        review_where = f"WHERE {' AND '.join(review_clauses)}" if review_clauses else ""
+        ingested_review_rows = _metric_ingested_review_rows(conn, review_where, review_params)
+        matched_review_product_count = _metric_matched_review_product_count(conn, review_where, review_params)
+        matched_product_count = matched_review_product_count if _scope_has_review_constraints(scope) else product_count
+
+        image_clauses, image_params = _scope_review_clauses(
+            scope,
+            review_alias="r",
+            product_alias="p",
+            image_only=True,
+        )
+        image_where = f"WHERE {' AND '.join(image_clauses)}" if image_clauses else ""
+        image_review_rows = _metric_image_review_rows(conn, image_where, image_params)
+
+        return {
+            "product_count": product_count,
+            "ingested_review_rows": ingested_review_rows,
+            "site_reported_review_total_current": site_reported_review_total_current,
+            "matched_review_product_count": matched_review_product_count,
+            "image_review_rows": image_review_rows,
+            "matched_product_count": matched_product_count,
+            "matched_review_count": ingested_review_rows,
+            "matched_image_review_count": image_review_rows,
+        }
+    finally:
+        conn.close()
+
+
+def list_review_images_for_scope(scope: Scope, limit: int) -> list[dict]:
+    """Return image-bearing review rows filtered by a normalized scope."""
+    if limit <= 0:
+        return []
+
+    conn = get_conn()
+    try:
+        clauses, params = _scope_review_clauses(scope, review_alias="r", product_alias="p", image_only=True)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT
+                r.id,
+                r.product_id,
+                r.author,
+                r.headline,
+                r.body,
+                r.body_hash,
+                r.rating,
+                r.date_published,
+                r.images,
+                r.scraped_at,
+                p.url AS product_url,
+                p.name AS product_name,
+                p.sku AS product_sku,
+                p.site AS product_site,
+                p.ownership AS product_ownership
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            {where}
+            ORDER BY r.scraped_at DESC, r.id DESC
+            LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = _json.loads(data["images"])
+                except Exception:
+                    pass
+            results.append(data)
+        return results
+    finally:
+        conn.close()
+
+
 def get_snapshots(
     product_id: int,
     days: int = 30,
@@ -462,8 +1117,9 @@ def get_snapshots(
 def get_stats() -> dict:
     conn = get_conn()
     try:
-        total_products = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
-        total_reviews = conn.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+        total_products = _metric_product_count(conn)
+        total_reviews = _metric_ingested_review_rows(conn)
+        site_reported_review_total_current = _metric_site_reported_review_total_current(conn)
 
         by_site = {}
         for row in conn.execute("SELECT site, COUNT(*) as cnt FROM products GROUP BY site").fetchall():
@@ -479,6 +1135,29 @@ def get_stats() -> dict:
             by_ownership[row["ownership"]] = row["cnt"]
 
         return {
+            "product_count": total_products,
+            "ingested_review_rows": total_reviews,
+            "site_reported_review_total_current": site_reported_review_total_current,
+            "avg_price_current": round(avg_price, 2) if avg_price else None,
+            "avg_rating_current": round(avg_rating, 2) if avg_rating else None,
+            "time_axes": {
+                "product_state_time": {
+                    "field": _TIME_AXIS_FIELDS["product_state_time"],
+                    "latest": last_scrape,
+                },
+                "snapshot_time": {
+                    "field": _TIME_AXIS_FIELDS["snapshot_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM product_snapshots", default=None),
+                },
+                "review_ingest_time": {
+                    "field": _TIME_AXIS_FIELDS["review_ingest_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM reviews", default=None),
+                },
+                "review_publish_time": {
+                    "field": _TIME_AXIS_FIELDS["review_publish_time"],
+                    "latest": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+                },
+            },
             "total_products": total_products,
             "total_reviews": total_reviews,
             "by_site": by_site,
@@ -663,5 +1342,203 @@ def mark_task_notified(task_ids: list[str]) -> int:
         )
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def enqueue_notification(notification: dict) -> dict:
+    """Insert an outbox row or return the existing row for the same dedupe key."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO notification_outbox (
+                kind, channel, target, payload, dedupe_key, payload_hash,
+                status, claimed_at, claim_token, lease_until, bridge_request_id,
+                last_http_status, last_exit_code, last_error, attempts, delivered_at,
+                created_at, updated_at
+            ) VALUES (
+                :kind, :channel, :target, :payload, :dedupe_key, :payload_hash,
+                :status, :claimed_at, :claim_token, :lease_until, :bridge_request_id,
+                :last_http_status, :last_exit_code, :last_error, :attempts, :delivered_at,
+                :created_at, :updated_at
+            )
+            ON CONFLICT(dedupe_key) DO NOTHING
+            """,
+            {
+                "kind": notification["kind"],
+                "channel": notification.get("channel", "dingtalk"),
+                "target": notification["target"],
+                "payload": _json.dumps(notification.get("payload")),
+                "dedupe_key": notification["dedupe_key"],
+                "payload_hash": notification["payload_hash"],
+                "status": notification.get("status", "pending"),
+                "claimed_at": notification.get("claimed_at"),
+                "claim_token": notification.get("claim_token"),
+                "lease_until": notification.get("lease_until"),
+                "bridge_request_id": notification.get("bridge_request_id"),
+                "last_http_status": notification.get("last_http_status"),
+                "last_exit_code": notification.get("last_exit_code"),
+                "last_error": notification.get("last_error"),
+                "attempts": notification.get("attempts", 0),
+                "delivered_at": notification.get("delivered_at"),
+                "created_at": notification.get("created_at"),
+                "updated_at": notification.get("updated_at"),
+            },
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM notification_outbox WHERE dedupe_key = ?",
+            (notification["dedupe_key"],),
+        ).fetchone()
+        return _decode_json_fields(row, ("payload",))
+    finally:
+        conn.close()
+
+
+def get_notification(notification_id: int) -> dict | None:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM notification_outbox WHERE id = ?",
+            (notification_id,),
+        ).fetchone()
+        return _decode_json_fields(row, ("payload",))
+    finally:
+        conn.close()
+
+
+def claim_next_notification(
+    claim_token: str,
+    claimed_at: str,
+    lease_until: str,
+) -> dict | None:
+    """Claim the oldest pending outbox row for a notifier worker."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM notification_outbox
+            WHERE status IN ('pending', 'failed')
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            return None
+
+        cursor = conn.execute(
+            """
+            UPDATE notification_outbox
+            SET status = 'claimed',
+                claimed_at = ?,
+                claim_token = ?,
+                lease_until = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status IN ('pending', 'failed')
+            """,
+            (claimed_at, claim_token, lease_until, claimed_at, row["id"]),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        claimed = conn.execute(
+            "SELECT * FROM notification_outbox WHERE id = ?",
+            (row["id"],),
+        ).fetchone()
+        return _decode_json_fields(claimed, ("payload",))
+    finally:
+        conn.close()
+
+
+def reclaim_stale_notifications(now: str) -> int:
+    """Return expired claims back to pending so another worker can retry them."""
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE notification_outbox
+            SET status = 'pending',
+                claim_token = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                updated_at = ?
+            WHERE status = 'claimed'
+              AND lease_until IS NOT NULL
+              AND lease_until < ?
+            """,
+            (now, now),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def mark_notification_sent(
+    notification_id: int,
+    delivered_at: str,
+    bridge_request_id: str = "",
+    http_status: int | None = None,
+) -> bool:
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE notification_outbox
+            SET status = 'sent',
+                delivered_at = ?,
+                bridge_request_id = ?,
+                last_http_status = ?,
+                claim_token = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (delivered_at, bridge_request_id or None, http_status, delivered_at, notification_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def mark_notification_failure(
+    notification_id: int,
+    failed_at: str,
+    error_message: str,
+    retryable: bool,
+    max_attempts: int,
+    http_status: int | None = None,
+    exit_code: int | None = None,
+) -> str:
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT attempts FROM notification_outbox WHERE id = ?",
+            (notification_id,),
+        ).fetchone()
+        attempts = (row["attempts"] if row else 0) + 1
+        next_status = "failed" if retryable and attempts < max_attempts else "deadletter"
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET status = ?,
+                attempts = ?,
+                last_error = ?,
+                last_http_status = ?,
+                last_exit_code = ?,
+                claim_token = NULL,
+                claimed_at = NULL,
+                lease_until = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (next_status, attempts, error_message, http_status, exit_code, failed_at, notification_id),
+        )
+        conn.commit()
+        return next_status
     finally:
         conn.close()

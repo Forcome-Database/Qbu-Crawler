@@ -47,7 +47,7 @@ class WaltonsScraper(BaseScraper):
         )
         return options
 
-    def scrape(self, url: str) -> dict:
+    def scrape(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_restart_browser()
 
         tab = self._get_page(url)
@@ -122,7 +122,7 @@ class WaltonsScraper(BaseScraper):
                 )
 
         # 3. Extract reviews
-        reviews = self._extract_all_reviews(tab, ld_reviews_raw)
+        reviews = self._extract_all_reviews(tab, ld_reviews_raw, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
@@ -315,13 +315,17 @@ class WaltonsScraper(BaseScraper):
             })
         return reviews
 
-    def _extract_all_reviews(self, tab, ld_reviews_raw: list) -> list:
+    def _extract_all_reviews(self, tab, ld_reviews_raw: list, review_limit: int | None = None) -> list:
         """Extract all reviews: try TrustSpot DOM first, fallback to JSON-LD."""
         trustspot_loaded = self._wait_for_trustspot(tab)
+        effective_limit = review_limit if review_limit and review_limit > 0 else MAX_REVIEWS
 
         if not trustspot_loaded:
             logger.info("TrustSpot not loaded, falling back to JSON-LD reviews")
-            return self._parse_ld_reviews(ld_reviews_raw)
+            parsed_reviews = self._parse_ld_reviews(ld_reviews_raw)
+            if effective_limit > 0:
+                return parsed_reviews[:effective_limit]
+            return parsed_reviews
 
         all_reviews = []
         seen = set()
@@ -351,11 +355,11 @@ class WaltonsScraper(BaseScraper):
                 break
 
             # Check MAX_REVIEWS limit
-            if MAX_REVIEWS > 0 and len(all_reviews) >= MAX_REVIEWS:
+            if effective_limit > 0 and len(all_reviews) >= effective_limit:
                 logger.info(
-                    f"  [TrustSpot] 已达评论上限 {MAX_REVIEWS}，停止翻页"
+                    f"  [TrustSpot] 已达评论上限 {effective_limit}，停止翻页"
                 )
-                all_reviews = all_reviews[:MAX_REVIEWS]
+                all_reviews = all_reviews[:effective_limit]
                 break
 
             # Try to click next page

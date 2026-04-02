@@ -1,0 +1,15 @@
+[Unit]
+Description=Qbu OpenClaw Notify Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/qbu-crawler
+EnvironmentFile=/etc/qbu-openclaw-notify-bridge.env
+ExecStart=/usr/bin/env uv run python -m qbu_crawler.server.openclaw.bridge.app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

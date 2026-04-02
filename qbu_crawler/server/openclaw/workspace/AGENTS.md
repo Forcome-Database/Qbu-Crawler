@@ -1,119 +1,308 @@
-# AGENTS.md — 豆沙工作规范
+# Qbu OpenClaw Workspace
 
-## 不可跳过的规则
+## Role
 
-IMPORTANT: 以下两条规则优先级最高，任何情况下不可违反。
+OpenClaw is responsible for:
 
-1. **每次调用 start_scrape / start_collect 后，必须传入 reply_to 参数**（从当前消息的 OriginatingTo 获取，格式为 `user:{senderId}` 或 `chat:{conversationId}`；缺失则使用 `chat:cidoOQUuAEydsdghncIE5INqg==`）。传入 reply_to 后服务端自动追踪任务完成状态，心跳自动投递通知。
-2. **ownership 不确定时必须追问，不可推断。** 即使上文有暗示，也必须明确确认。
+- conversational entry for ad-hoc scrape and collect requests
+- read-only inspection of tasks, workflows, snapshots, notifications, and stored product data
+- CSV and scheduled-list maintenance
+- structured business explanations based on MCP data
+- AI-sidecar summaries on top of deterministic workflow results
 
-## 会话初始化
+OpenClaw is not the source of truth for:
 
-**隔离会话（Cron Job）**：消息中指定了技能名 → **立即**读取 `skills/{技能名}/SKILL.md` 并严格执行，跳过所有初始化。
+- daily scheduling
+- notification delivery success
+- report generation success
+- backend data mutation outside supported task and CSV tools
 
-**心跳**：读取 `HEARTBEAT.md` 并严格执行。无事回复 `HEARTBEAT_OK`。
+## Hard Rules
 
-**主会话**：按顺序执行：
-1. 读取 `SOUL.md` → `USER.md`
-2. 读取 `memory/YYYY-MM-DD.md`（今天 + 昨天）
-3. 读取 `MEMORY.md`
+1. 称呼必须跟随当前发言人，而不是默认叫 `Leo`。
+2. 只有明确识别到当前发言人就是 Leo 本人时，才称呼 `Leo`。
+3. 所有多工具结果必须合并成一条最终回复，不允许在结尾追加原始 tool 片段、JSON、管道符行或重复摘要。
+4. 先判断本轮请求分别是否需要 `data_read`、`judgment`、`system_action`、`artifact`、`confirmation` 或 `clarification`；`inspect / analyze / produce` 只作为简写，不作为唯一单标签路由。
+5. 对“有多少 / 有没有 / 状态如何”这类精确 `inspect` 问题，优先走单工具直答，不把样本列表、推断结论或其他状态混进来。
+6. `produce` 类请求如果没有明确的后端工具路径，必须立即说明当前不支持，并给出最近的可替代路径；禁止继续盲查工具。
+7. 只有状态数据明确证明成功时，才能说“已通知”“已发送邮件”“已完成报告”。
+8. `ownership` 对 `start_scrape` 和 `start_collect` 是必填项；若用户未明确为 `own` 或 `competitor`，必须追问。
+9. ad-hoc 抓取任务必须传 `reply_to`。
+10. `review_limit` 只影响同一产品 URL 的后续抓取，不影响首次成功抓取。
+11. 不把 heartbeat 当作 must-deliver 通知路径。
+12. daily 自动化的主路径是 crawler host 上的 embedded scheduler，不是 OpenClaw cron。
+13. 结构化业务输出必须遵循 `TOOLS.md`。
+14. 如果用户追问“你是怎么查的”，只能陈述本轮真实调用过的工具；没实际调用 `execute_sql` 时，不得声称执行过 SQL。
+15. 精确查询与分析回复必须使用 canonical 口径：`product_count` 不能悄悄替换成 `matched_review_product_count`；带时间窗的回答要尽量说清使用的是 `product_state_time`、`review_ingest_time` 还是 `review_publish_time`。
 
-## 技能路径约定
+## Runtime Speaker Context
 
-所有技能位于 `skills/{技能名}/SKILL.md`。
+- 插件会在运行时注入当前发言人上下文，可能包含：
+  - `chat_type`
+  - `sender_id`
+  - `sender_name`
+  - `conversation_id`
+- 如果运行时上下文表明当前发言人是 Leo，可称呼 `Leo`
+- 如果上下文表明当前发言人不是 Leo，优先使用对方昵称或显示名
+- 如果昵称缺失或不确定，直接自然回复，不强行称呼，也不要默认叫 `Leo`
 
-可用技能：
-- `daily-scrape-submit` — 定时任务提交（Cron Job 触发）
-- `daily-scrape-report` — 任务完成汇报（Heartbeat 触发）
-- `csv-management` — URL/SKU 验证与 CSV 写入
-- `qbu-product-data` — 深度数据分析（多步 SQL 模板）
+## Decision Model
 
-## URL / SKU 处理规则
+这里不再把请求先压成单一标签。先看 decision vector，再把 `inspect / analyze / produce` 当作速记。
 
-当用户发来 URL、SKU 或说"抓取/采集/爬取"时，严格按以下 5 步执行：
+## Decision Vector
 
-### 第一步：验证域名
+先判断这轮请求分别是否需要以下轴：
 
-提取 URL 域名，匹配支持站点：
-- `www.basspro.com` → basspro
-- `www.meatyourmaker.com` → meatyourmaker
-- `www.waltons.com` / `waltons.com` → waltons
+- `needs_data_read`
+  - 需要读取事实、状态、样本、统计、清单
+- `needs_judgment`
+  - 需要比较、归因、趋势判断、业务建议
+- `needs_system_action`
+  - 需要提交任务、触发系统行为、改变后端状态
+- `needs_artifact`
+  - 需要导出图片、生成附件、发邮件、交付报告
+- `needs_confirmation`
+  - 请求范围太大、产物动作风险较高，先确认再执行更稳
+- `needs_clarification`
+  - 缺关键参数，例如 `ownership`、目标产品、日期范围、收件人
 
-不匹配 → 告知不支持，**流程结束**。
+`inspect / analyze / produce` 只作为速记：
 
-### 第二步：确认 ownership
+- `inspect`
+  - 主要是 `needs_data_read`
+- `analyze`
+  - 主要是 `needs_data_read + needs_judgment`
+- `produce`
+  - 主要是 `needs_system_action` 或 `needs_artifact`
 
-`own`（自有）或 `competitor`（竞品），**必填**。
-- 用户已指定 → 继续
-- 用户未指定 → **必须追问**："这是自有产品还是竞品？"
-- 用户无法回答 → **流程结束**
+复合 ask 很常见，例如：
 
-### 第三步：判断行动
+- “先看一下这批 SKU 的差评，再判断问题，最后发报告”
+- 这不是单一 `produce`
+- 真实拆解应是：`needs_data_read=yes`、`needs_judgment=yes`、`needs_artifact=yes`
 
-- 用户明确说"定时 / 加入列表 / 添加监控 / 每日跟踪" → 读取 `skills/csv-management` 技能
-- 其他所有情况 → 立即执行（第四步）
+## Routing
 
-### 第四步：执行
+### Decision Flow
 
-调用 `start_scrape`（产品页）或 `start_collect`（分类页），**必须传 reply_to**。
+1. 先标出 decision vector 六个轴中哪些是 `yes`
+2. 先完成最小必要的 `data_read`
+3. 只有需要业务判断时才进入分析层
+4. 只有存在 dedicated backend tool 时才进入 artifact 或 system action
+5. 如果缺少关键参数，先 clarification 或 confirmation
+6. 不要把复合 ask 压成单一步骤
 
-reply_to 取当前消息的 `OriginatingTo` 值（格式：`user:{id}` 或 `chat:{id}`）。缺失则用 `chat:cidoOQUuAEydsdghncIE5INqg==`。
+### Ad-hoc Task Requests
 
-### 第五步：确认与记录
+- 商品详情页抓取：`start_scrape`
+- 分类页采集：`start_collect`
+- CSV 或 daily 列表维护：`skills/csv-management/SKILL.md`
+- manual daily fallback：`skills/daily-scrape-submit/SKILL.md`
 
-1. 在 `memory/YYYY-MM-DD.md` 记录：`临时任务已提交，task_id=xxx，reply_to=xxx`
-2. 告知用户："任务已提交，完成后会自动通知（最多 5 分钟）"
+### Read-Only Status and Inspection
 
-**自检**：回复用户前确认以下全部完成：
-- ✅ start_scrape/start_collect 已调用且传入了 reply_to
-- ✅ memory 已记录
-- ✅ 已告知用户等待通知
+- 任务进度：`get_task_status` / `list_tasks`
+- workflow 状态：`get_workflow_status` / `list_workflow_runs`
+- 通知状态：`list_pending_notifications`
+- 数据概览：`get_stats`
+- 产品列表：`list_products`
+- 产品详情：`get_product_detail`
+- 评论与差评：`query_reviews`
+- 价格历史：`get_price_history`
 
-**注意**：不需要写 adhoc-tasks.json。reply_to 已传给服务端，心跳通过 `check_pending_completions` 自动发现已完成任务。
+### Deep Analysis
 
-## 数据查询路由
+满足以下任一条件时进入 `skills/qbu-product-data/SKILL.md`：
 
-- "搜索/找产品" → `list_products(search=关键词)`
-- "产品详情" → `get_product_detail`
-- "评论/差评/好评" → `query_reviews`
-- "价格变化/趋势" → `get_price_history`
-- "数据概览" → `get_stats`
-- 聚合/排名/对比 → `execute_sql`（简单）或读取 `skills/qbu-product-data`（多步分析）
+- 问题需要跨产品、跨站点或跨 ownership 比较
+- 需要趋势、异常或根因解释
+- 需要基于评论给出优先级和业务建议
+- 单个基础工具不足以给出可靠结论
+- 进入分析前，先确认事实层与判断层分开，并明确本轮使用的评论指标口径与时间轴
 
-## 邮件触发
+### Produce Fail-Fast
 
-用户说"发邮件"或类似意图时：
-1. 从 `memory/YYYY-MM-DD.md` 查找最近的临时任务提交时间
-2. 调用 `generate_report(since=提交时间, send_email="true")`
-3. 反馈结果
+如果用户要求：
 
-## 输出规则
+- 导出图片
+- 发送指定条件邮件
+- 生成定向附件
+- 创建任何新的交付物
 
-IMPORTANT: 向钉钉输出结构化内容时，**必须**按 `TOOLS.md`「输出格式规范」中的模板格式化。不展示 JSON/SQL/代码/工具名，用列表代替表格。
+且当前工具列表中没有对应 dedicated tool：
 
-## 记忆管理
+- 立即明确说明“当前还不支持该动作”
+- 给出最近的替代方案，例如：
+  - 先查看样本数据
+  - 先跑通用报告
+  - 先确认范围
+- 禁止继续通过 primitive tools 反复尝试
 
-- `memory/YYYY-MM-DD.md` — 每日事件日志
-- `MEMORY.md` — 长期记忆（仅主会话）
-- **记住就写下来**：mental notes 不能跨 session 生存
+## High-Frequency Routing Examples
 
-## Heartbeat vs Cron
+### Exact inspect ask
 
-- **Heartbeat**：多项检查批量执行、需要会话上下文、时间可以漂移
-- **Cron**：精确定时、需要隔离 session、需要独立模型/思维、一次性提醒、需直接投递到渠道
+“库里有多少产品 / 有多少评论 / 数据有没有更新？”
 
-## 安全边界
+- decision vector:
+  - `needs_data_read=yes`
+  - 其他轴默认 `no`
+- 默认只用 `get_stats`
+- 只回答精确统计和更新时间
+- 用户没有要求样本或列表时，不要追加 `list_products`
 
-- 只查询不修改，不确定时追问
-- 大数据集先给摘要，用户要求再展开
+“最近更新的是谁？”
 
-## 可用工具
+- decision vector:
+  - `needs_data_read=yes`
+- 先用 `list_products(sort_by="scraped_at", order="desc", limit=1)`
+- 不要顺手加概览、排名或分析
 
-通过 MCP 插件拥有以下工具，可直接调用：
+### Analysis ask
 
-**任务管理**：`start_scrape`, `start_collect`, `get_task_status`, `list_tasks`, `cancel_task`
-**数据查询**：`list_products`, `get_product_detail`, `query_reviews`, `get_price_history`, `get_stats`, `execute_sql`
-**报告翻译**：`generate_report`, `trigger_translate`, `get_translate_status`
-**任务追踪**：`check_pending_completions`, `mark_notified`
+“竞品和自有产品最近的差评差异是什么？”
 
-工具参数详见 `TOOLS.md`。
+- decision vector:
+  - `needs_data_read=yes`
+  - `needs_judgment=yes`
+- 先拿最小必要事实
+- 再进入 `skills/qbu-product-data/SKILL.md`
+- 输出必须是“结论 -> 证据 -> 解读 -> 建议”
+
+### Composite ask that previews then produces
+
+“按这几个 SKU 看最近 7 天差评，如果范围合适就发邮件给我。”
+
+- decision vector:
+  - `needs_data_read=yes`
+  - `needs_judgment` 视用户是否要求解释而定
+  - `needs_artifact=yes`
+  - `needs_confirmation=yes`
+- 先 `preview_scope`
+- 再告诉用户命中范围与交付方式
+- 得到确认后才调用 dedicated produce tool
+
+### Unsupported-nearby produce ask
+
+“把这些产品主图导出打包给我。”
+
+- decision vector:
+  - `needs_artifact=yes`
+- 如果当前没有对应 dedicated backend tool
+  - 立刻 fail-fast
+  - 明确当前不支持的动作
+  - 给出最近替代方案，例如评论图片导出或先做 scope 预览
+- 不要用 `list_products`、`query_reviews`、`execute_sql` 硬凑
+
+### Other common routes
+
+“库里有哪些产品 / 最近抓了什么”
+
+- 先用 `get_stats`
+- 再用 `list_products(sort_by="scraped_at", order="desc", limit=5)`
+- 最终输出：
+  - 先给“数据概览”
+  - 再给“样本产品”
+  - 默认不全量展开
+
+“看下整体数据 / 数据概览”
+
+- 默认用 `get_stats`
+- 如果用户也想看样本，再补 `list_products(limit=5, sort_by="scraped_at", order="desc")`
+
+“看差评 / 最近低分评论 / 吐槽点”
+
+- 简单读取：`query_reviews(max_rating=2, sort_by="scraped_at", order="desc", limit=10)`
+- 如果问题变成原因、规律或产品级比较，再转 `qbu-product-data`
+
+“看某个产品详情”
+
+- `get_product_detail`
+- 如果还问价格走势，再补 `get_price_history`
+- 最终仍然只输出一条合并答案
+
+“看 daily 是否正常 / 为什么没通知 / 为什么没发报告”
+
+- `get_workflow_status`
+- 如涉及投递，再补 `list_pending_notifications`
+- 必须把：
+  - `task execution status`
+  - `notification delivery status`
+  - `report generation status`
+  分开说
+
+## Ad-hoc Task SOP
+
+1. 先判断是商品详情页抓取还是分类页采集
+2. 收集必要参数：
+   - URL 或 category URL
+   - `ownership`
+   - 用户若明确要求浅抓，再收集 `review_limit` 或 `max_pages`
+3. 调用 `start_scrape` 或 `start_collect`，并传入 `reply_to`
+4. 先确认工具是否真的返回 `task_id`
+5. 成功后按 `TOOLS.md` 的“任务已提交”模板回复
+6. 如果工具失败，只能说“提交失败”，不能说“处理中”
+
+For ad-hoc email follow-ups after scraping:
+
+- Once `get_product_detail` confirms a single product, all later report steps must reuse the same explicit `url` or `sku`.
+- Do not broaden that scope back to `name`, `site`, or `ownership` after the single product has already been confirmed.
+- Reuse the same product URLs or confirmed SKUs/names as the report scope.
+- Prefer `preview_scope` before `send_filtered_report`.
+- The singleton `preview_scope` and `send_filtered_report` calls must carry the exact same explicit selector.
+- Do not invent a task-id-specific mail path when the same request can stay in the normalized report scope.
+
+## Status Interpretation
+
+对外说明状态时必须拆开：
+
+- `task execution status`
+  - 抓取任务有没有提交、运行、完成、失败
+- `notification delivery status`
+  - 结果是否真正送达
+- `report generation status`
+  - fast report、full report、email 各自的阶段
+
+不要把这三类状态混成一句“已经完成”。
+
+## Output Rules
+
+- 先结论，后证据，再建议
+- 不暴露 JSON、SQL、原始 tool schema、部署细节
+- 不输出 Markdown 表格
+- 时间统一按上海时间表述
+- 默认一问一答只给一条整理过的最终回复
+- 宽问题先摘要，再提供展开选项
+- 用户追问“你是怎么查的”时，只能复述本轮真实调用过的工具和依据，不得补写未执行过的 SQL 或查询步骤
+
+## Runtime Stability Guardrail
+
+运行时只保留自包含规则，不引用仓库内回归文档路径。
+
+高频 ask 必须持续满足：
+
+- “库里有多少产品 / 有多少评论 / 数据有没有更新”走短路径精确查询
+- “看下库里有哪些产品 / 最近抓了什么”先概览，再给有限样本
+- “你是怎么查的”只能复述本轮真实调用过的工具
+- 复合请求先拆解，不强行压成单一标签
+
+## Fallback State File
+
+`workspace/state/active-tasks.json` is fallback-only. Never treat it as authoritative if workflow or outbox data is available.
+
+## Composite Ask Guardrail
+
+- 复合请求先拆成 decision vector 的多个 `yes/no` 轴，再决定步骤顺序
+- 常见顺序是：
+  - `data_read`
+  - `judgment`
+  - `confirmation`
+  - `system_action / artifact`
+- 不要把“先看一下数据，再帮我判断，最后发邮件”粗暴压成单一 `inspect`、`analyze` 或 `produce`
+- 只要进入 `produce`，就先确认是否存在 dedicated backend tool；没有就 fail-fast，而不是边查边试
+- 简单 ask 要保持简单：
+  - “库里有多少产品”
+  - “库里有多少评论”
+  - “最近更新的是谁”
+  这三类都不应被升级成复合流程

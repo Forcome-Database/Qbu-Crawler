@@ -1,260 +1,532 @@
-# 工具参考
+# TOOLS.md
 
-## 支持站点
+## Purpose
 
-- 🏪 **Bass Pro Shops**（basspro）— `www.basspro.com`
-- 🥩 **Meat Your Maker**（meatyourmaker）— `www.meatyourmaker.com`
-- 🔧 **Walton's**（waltons）— `www.waltons.com` / `waltons.com`
+本文件只负责 3 类内容：
 
-## 工具参数速查
+- MCP 工具速查
+- 对外输出契约
+- 常用查询、状态与分析回复模板
 
-### 任务管理
+不要把路由逻辑、支持矩阵、ownership 判断、reply_to 规则、运行时真值说明写回这里；这些分别归 `AGENTS.md` 或 MCP contract / spec。
 
-| 工具 | 必填参数 | 可选参数 |
-|------|---------|---------|
-| `start_scrape` | urls, ownership | reply_to |
-| `start_collect` | category_url, ownership | max_pages（0=全部）, reply_to |
-| `get_task_status` | task_id | — |
-| `list_tasks` | — | status, limit |
-| `cancel_task` | task_id | — |
-| `check_pending_completions` | — | — |
-| `mark_notified` | task_ids | — |
+## Supported Sites
 
-### 数据查询
+- `www.basspro.com`
+- `www.meatyourmaker.com`
+- `www.waltons.com`
+- `waltons.com`
 
-| 工具 | 必填参数 | 可选参数 |
-|------|---------|---------|
-| `list_products` | — | site, search, min_price, max_price, stock_status, ownership, sort_by, order, limit, offset |
-| `get_product_detail` | product_id 或 url 或 sku | — |
-| `query_reviews` | — | product_id, sku, site, ownership, min_rating, max_rating, author, keyword, has_images, sort_by, order, limit, offset |
-| `get_price_history` | product_id | days（默认30） |
-| `get_stats` | — | — |
-| `execute_sql` | sql | — |
-| `generate_report` | since | send_email（默认 true） |
-| `trigger_translate` | — | reset_skipped（默认 false） |
-| `get_translate_status` | — | since（可选） |
+## Task Submission Tools
 
-### 参数说明
+- `start_scrape(urls, ownership, review_limit=0, reply_to)`
+- `start_collect(category_url, ownership, max_pages=0, review_limit=0, reply_to="")`
 
-- `ownership`：`own`（自有）或 `competitor`（竞品），start_scrape/start_collect 中**必填**
-- `reply_to`：任务完成后通知目标。格式 `user:{id}` 或 `chat:{id}`。传入后服务端自动追踪，心跳自动通知
-- `min_price`/`max_price`/`min_rating`/`max_rating`：`-1` 表示不限制
-- `max_pages`：`0` 表示采集全部页
-- `has_images`：字符串 `"true"` 或 `"false"`
-- `execute_sql`：仅 SELECT，500 行上限，5 秒超时
-- `generate_report`：`since` 为上海时间戳（`YYYY-MM-DDTHH:MM:SS`）
-- `check_pending_completions`：无参数，返回已完成但未通知的任务列表
-- `mark_notified`：`task_ids` 为字符串数组，标记后任务不再出现在 pending completions 中
-- 所有时间戳统一使用**上海时间**（Asia/Shanghai），格式 `YYYY-MM-DDTHH:MM:SS`，无时区后缀
+参数真值、支持边界和运行时真值说明以 MCP server contract 为准；本文件只保留工具名和用户可见输出模板。
 
-## 服务端能力概览
+## Workflow and Notification Inspection
 
-服务端（FastAPI + FastMCP）提供以下自动化能力，agent 应充分利用：
+- `get_workflow_status(run_id | trigger_key)`
+- `list_workflow_runs(status="", limit=20)`
+- `list_pending_notifications(status="", limit=20)`
 
-1. **任务自动追踪**：`start_scrape`/`start_collect` 传入 `reply_to` 后，任务完成状态自动持久化到 SQLite tasks 表。不需要 agent 写状态文件。
-2. **待通知任务发现**：`check_pending_completions` 一次调用返回所有"已完成但未通知"的任务，无需逐个轮询 task_id。
-3. **通知标记**：`mark_notified` 防止重复通知。
-4. **后台翻译**：TranslationWorker 守护线程自动翻译新评论，`get_translate_status` 查进度。
-5. **报告生成**：`generate_report` 在服务端完成查询+翻译+Excel+邮件，agent 只需传 since 时间。
+关键状态：
 
-## CSV 文件
+- workflow `status`
+  - `submitted`
+  - `running`
+  - `reporting`
+  - `completed`
+  - `failed`
+  - `needs_attention`
+- workflow `report_phase`
+  - `none`
+  - `fast_pending`
+  - `fast_sent`
+  - `full_pending`
+  - `full_sent`
+- notification `status`
+  - `pending`
+  - `claimed`
+  - `failed`
+  - `sent`
+  - `deadletter`
 
-- 分类页：`~/.openclaw/workspace/data/sku-list-source.csv`
-- 产品页：`~/.openclaw/workspace/data/sku-product-details.csv`
-- 格式：`url,ownership`（有表头），一行一条
+解释规则：
 
-## 邮件收件人
+- `task execution status`
+- `notification delivery status`
+- `report generation status`
 
-邮件收件人在服务端环境变量 `EMAIL_RECIPIENTS` 中配置（逗号分隔多个邮箱），agent 无法修改。如需变更收件人，告知用户联系管理员更新服务端 `.env` 配置。
+这三类必须拆开说，不要混成一句“已经完成”。
 
-## 状态文件
+## Data and Report Tools
 
-- `~/.openclaw/workspace/state/active-tasks.json` — 定时任务状态（仅定时工作流使用）
+- `list_products`
+- `get_product_detail`
+- `query_reviews`
+- `get_price_history`
+- `get_stats`
+- `execute_sql`
+- `generate_report(since, send_email="true")`
+- `trigger_translate()`
+- `get_translate_status()`
 
-注：临时任务不再使用状态文件，通过服务端 `reply_to` + `check_pending_completions` 追踪。
+For ad-hoc email/report requests:
 
----
+- Prefer `preview_scope` first when the request spans multiple products, URLs, or filters.
+- Then use `send_filtered_report`.
+- `scope.products` may use `ids`, `urls`, `skus`, `names`, `sites`, `ownership`, `price`, `rating`, and `review_count`.
+- `delivery.subject` may override the default legacy email subject for one-off emails.
 
-## 输出格式规范
+### Single-product artifact flow
 
-向钉钉输出结构化内容时必须遵守以下规范。
+- Once a product has already been confirmed by `get_product_detail`, the later report scope must stay locked to the same explicit `url` or `sku`.
+- Do not widen the scope back to `name`, `site`, `ownership`, or other broader selectors after the single product is known.
+- If preview comes back with more than 1 product, treat that as scope drift and fix the scope first; do not continue to `send_filtered_report`.
 
-### 基本原则
+## Output Contract
 
-- **绝不**向用户展示 JSON、SQL、代码或工具名称
-- 价格：**$XX.XX** | 评分：**X.X/5** ⭐ | 库存：✅ 有货 / ❌ 缺货
-- 任务状态：⏳ 进行中 / ✔️ 完成 / ❌ 失败 / 🚫 已取消
-- 给完结果后**主动建议下一步**
+### Basic Principles
 
-### 钉钉排版
+- 不向用户展示 JSON、SQL、原始 tool schema、部署细节
+- 优先用简洁业务中文输出，产品名可保留英文原文
+- 关键数字加粗
+- 用列表替代表格
+- 时间统一按上海时间表述
+- 先给结论，再给证据，再给下一步建议
+- 默认一问一答只产出一条最终回复
+- 用户追问“你是怎么查的”时，只能复述本轮真实调用过的工具和依据，不得补写未执行过的 SQL 或查询步骤
+- 默认“评论数”口径指已入库 `reviews` 行数；如果引用站点页面展示的评论总数，必须显式写成“站点展示评论总数”
 
-**支持**：标题（# ## ###）、加粗、列表（- 和 1.）、嵌套列表、引用（>）、链接、分隔线、代码块
-**不支持**：❌ 表格 | ❌ 删除线
+### Canonical Metric Wording
 
-**规则**：禁止表格用列表代替、标题分隔板块、加粗关键数据、一段不超 3 行
+- `product_count`：产品数
+- `ingested_review_rows`：已入库评论数
+- `site_reported_review_total_current`：站点展示评论总数
+- `matched_review_product_count`：命中评论产品数
+- `image_review_rows`：带图评论数
+- `preview_scope.counts.products` 只是兼容旧展示的别名；一旦涉及评论过滤，分析和解释优先显式使用 `product_count` 与 `matched_review_product_count`
 
-### 产品列表
+### Canonical Time Wording
 
-```
-## 🔍 搜索结果：共 **15** 个产品
+- `product_state_time`：最近更新时间
+- `review_ingest_time`：最近抓取时间 / 按抓取时间
+- `review_publish_time`：站点发布时间 / 按发布时间
+- 任何带时间窗的结论，一旦不是显然的当前态概览，就要把时间轴名字说出来，不能只说“最近”
 
-### 1. Product Name A
-- **价格**：$129.99
-- **评分**：4.5/5 ⭐（128 条评论）
-- **库存**：✅ 有货
-- **站点**：Bass Pro Shops
-```
+### Style Preference
 
-### 任务状态
+- 可保留少量 icon 作为版块提示
+- icon 只用于增强扫读，不堆砌
+- 标题 + 列表 + 分隔线优先
+- 适配钉钉 Markdown，可读性优先
 
-```
-## 🚀 任务已启动
+### Status Semantics
 
-- **任务 ID**：xxxxxxxx
-- **类型**：产品抓取（3 个产品）
-- **状态**：⏳ 等待执行
+- “已提交”只表示进入系统
+- “处理中”只表示仍在执行
+- “已完成”只表示任务或 workflow 执行结束
+- “已通知”只表示 outbox 或 delivery 明确成功
+- “已发送邮件”只表示 email 结果明确成功
 
-完成后会自动通知。
-```
+### Forbidden
 
-### 任务进度
+- 不要把工具原始错误原样抛给用户
+- 不要把 `pending` 说成成功
+- 不要在未确认时说“已经发到钉钉”或“邮件已发送”
+- 不要在最终回复后追加原始工具结果或重复摘要
+- 不要用 Markdown 表格
 
-```
-## 📊 任务进度
+## Display Budget
 
-- **任务 ID**：xxxxxxxx
-- **状态**：⏳ 采集中（2/5 完成，1 失败）
-- **当前**：正在采集 Product Name...
-- **耗时**：2 分 30 秒
-- **进度**：▓▓▓▓▓▓░░░░ 40%
-```
+除非用户明确要求全量展开，否则默认：
 
-### 定时任务启动通知
+- 产品列表：最多 5 个
+- 评论样本：最多 3 条
+- 差评样本：最多 5 条
+- workflow / notification 明细：最多 5 条
+- 结果很多时先摘要，再询问是否继续展开
 
-```
-🚀 每日爬虫任务已启动
+## When to Summarize vs Expand
 
-- **提交时间**：YYYY-MM-DD HH:MM
-- **分类采集**：N 个任务
-- **产品抓取**：N 个任务（N 个产品）
-- **任务 ID**：xxx, yyy
+- 用户问“有哪些 / 看下 / 概览 / 最近抓了什么”
+  - 默认摘要 + 样本
+- 用户明确说“全部 / 全量 / 完整清单”
+  - 再展开
+- 用户目标是判断或决策
+  - 优先结论，不先堆明细
 
-将自动监控任务进度，完成后汇报。
-```
+## Routing-Aware Output Guidance
 
-### 定时任务完成通知
+### Exact inspect ask
 
-```
-✅ 每日爬虫任务已完成
+如果这轮只有 `needs_data_read=yes`，而且问题是精确查询：
 
-- **完成时间**：YYYY-MM-DD HH:MM
-- **产品抓取**：成功 N，失败 N
-- **新增评论**：N 条
-- **翻译进度**：N/M 已完成
-- **自有产品**：N 个 | **竞品**：N 个
-- **邮件发送**：✅ 已发送至 N 位收件人
-- **报告文件**：scrape-report-YYYY-MM-DD.xlsx
-```
+- 直接给精确结果
+- 不附带样本、推断、排名、建议
+- 典型例子：
+  - “库里有多少产品”
+  - “库里有多少评论”
+  - “最近更新的是谁”
 
-### 产品详情
+### Analysis ask
 
-```
-## 📦 Product Full Name
+如果是 `needs_data_read=yes` 且 `needs_judgment=yes`：
 
-- **SKU**：ABC-12345
-- **价格**：$129.99
-- **评分**：4.5/5 ⭐（128 条评论）
-- **库存**：✅ 有货
-- **站点**：Bass Pro Shops
-- **最后更新**：2026-01-15
+- 输出顺序保持：
+  - 结论
+  - 证据
+  - 解读
+  - 建议
+- 明确 metric 口径和 time axis
+- 不把样本误写成结论
 
----
+### Composite ask
 
-### 💬 最近评论
+如果是 `needs_data_read + needs_judgment + needs_artifact` 的复合 ask：
 
-1. ⭐⭐⭐⭐⭐ **John D.**："Great product!" — 2026-01-10
-2. ⭐⭐⭐⭐ **Jane S.**："Good but pricey" — 2026-01-08
+- 先给 preview / scope / 风险说明
+- 再等确认
+- 最后再给 artifact 结果
+- 不要把 preview、分析、交付结果揉成一段
 
----
+### Unsupported-nearby produce ask
 
-### 📈 近30天价格
+如果用户要的动作和已支持能力很接近，但仍然不在当前 dedicated tool 范围内：
 
-- 01-15：**$129.99** ✅
-- 01-10：$139.99 ✅
-- 01-05：$129.99 ✅
+- 明确说当前不支持该动作
+- 给最近替代方案
+- 不要输出“像是快成功了”的措辞
 
-> 30天价格波动：$129.99 ~ $139.99
-```
+## Standard Templates
 
-### 数据总览
+### Task Submitted
 
-```
-## 📊 数据总览
+```md
+## 🚀 已接收任务
 
-- 📦 **产品总数**：245
-- 💬 **评论总数**：3,842
-- 💰 **平均价格**：$87.50
-- ⭐ **平均评分**：4.1/5
+- **目标**：{target_summary}
+- **归属**：{ownership}
+- **任务类型**：{scrape_or_collect}
+- **当前阶段**：已入队，开始抓取后会继续反馈
 
----
-
-### 站点分布
-- 🏪 **Bass Pro Shops**：180 个产品
-- 🥩 **Meat Your Maker**：65 个产品
-
-### 产品归属
-- 🏠 **自有产品**：N 个
-- 🎯 **竞品**：N 个
-```
-
-### 评分分布
-
-```
-## 📊 评分分布（共 573 条）
-
-- ⭐⭐⭐⭐⭐ **5星**：334 条（58.3%）████████████
-- ⭐⭐⭐⭐ **4星**：87 条（15.2%）█████
-- ⭐⭐⭐ **3星**：36 条（6.3%）██
-- ⭐⭐ **2星**：37 条（6.5%）██
-- ⭐ **1星**：79 条（13.8%）████
+完成后会继续反馈：
+- 是否已入库或已刷新
+- 是否发现新评论
+- 如有需要，可继续做差评总结、价格变化或邮件报告
 ```
 
-### 差评分析
+### Task Progress
 
+```md
+## ⏳ 任务进度
+
+- **任务 ID**：{task_id}
+- **执行状态**：{status}
+- **当前进度**：{progress_summary}
+- **已完成**：{done_count}
+- **失败**：{failed_count}
+
+如需，我可以继续跟进直到完成。
 ```
+
+### Task Completed
+
+```md
+## ✅ 抓取完成
+
+- **目标**：{target_summary}
+- **站点**：{site}
+- **归属**：{ownership}
+- **任务类型**：{scrape_or_collect}
+- **结果**：{result_summary}
+
+### 本次产出
+- **产品记录**：{product_count}
+- **新增评论**：{review_count}
+- **失败项**：{failed_summary}
+
+- **任务 ID**：{task_id}
+
+如需，我可以继续做差评总结、价格变化或邮件报告。
+```
+
+### Workflow Status
+
+```md
+## 🔄 Workflow 状态
+
+- **workflow**：{run_id_or_trigger_key}
+- **执行状态**：{workflow_status}
+- **报告阶段**：{report_phase}
+- **关联任务数**：{task_count}
+- **开始时间**：{started_at}
+- **结束时间**：{finished_at}
+
+### 说明
+
+- {workflow_takeaway}
+```
+
+### Notification Anomaly
+
+```md
+## ⚠️ 通知投递异常
+
+- **记录数**：{notification_count}
+- **主要状态**：{status_summary}
+
+### 异常项
+
+- **{kind_1}**：{status_1}（{error_1}）
+- **{kind_2}**：{status_2}（{error_2}）
+
+### 影响
+
+- {impact_summary}
+
+### 下一步建议
+
+- {next_step_1}
+- {next_step_2}
+```
+
+### Product Detail
+
+```md
+## 📦 产品详情
+
+### {product_name}
+
+- **SKU**：{sku}
+- **价格**：{price}
+- **评分**：{rating}/5
+- **站点展示评论总数**：{review_count}
+- **库存**：{stock_status}
+- **站点**：{site}
+- **归属**：{ownership}
+- **最近更新时间**：{updated_at}
+
+### 重点结论
+
+- {key_takeaway_1}
+- {key_takeaway_2}
+```
+
+### Product List / Search Result
+
+```md
+## 📋 搜索结果
+
+- **命中产品数**：{total}
+- **当前视图**：展示前 {shown_count} 个
+
+### 样本产品
+
+1. **{product_name_1}**
+   - 站点：{site_1}
+   - 归属：{ownership_1}
+   - 价格：{price_1}
+   - 评分：{rating_1}
+   - 站点展示评论总数：{review_count_1}
+
+2. **{product_name_2}**
+   - 站点：{site_2}
+   - 归属：{ownership_2}
+   - 价格：{price_2}
+   - 评分：{rating_2}
+   - 站点展示评论总数：{review_count_2}
+
+如需，我可以继续展开其余结果，或按站点 / 归属 / 价格区间继续筛选。
+```
+
+### Data Overview
+
+```md
+## 📊 数据概览
+
+- **产品总数**：{product_count}
+- **已入库评论数**：{review_count}
+- **平均价格**：{avg_price}
+- **平均评分**：{avg_rating}
+- **最后更新**：{last_updated}
+
+### 分布
+
+- **自有产品**：{own_count}
+- **竞品**：{competitor_count}
+- **Bass Pro**：{basspro_count}
+- **Meat Your Maker**：{mym_count}
+- **Walton's**：{waltons_count}
+```
+
+### Data Overview + Sample Products
+
+```md
+## 📊 数据概览
+
+- **产品总数**：{product_count}
+- **已入库评论数**：{review_count}
+- **平均价格**：{avg_price}
+- **平均评分**：{avg_rating}
+
+### 样本产品
+
+1. **{product_name_1}** · {site_1} · {ownership_1} · {price_1} · {rating_1} · 站点展示评论 {review_count_1}
+2. **{product_name_2}** · {site_2} · {ownership_2} · {price_2} · {rating_2} · 站点展示评论 {review_count_2}
+3. **{product_name_3}** · {site_3} · {ownership_3} · {price_3} · {rating_3} · 站点展示评论 {review_count_3}
+
+如需完整清单，我可以继续展开。
+```
+
+### Review Result / Negative Samples
+
+```md
+## 💬 评论结果
+
+- **命中评论数**：{total}
+- **当前视图**：展示前 {shown_count} 条
+
+### 评论样本
+
+1. **{product_name_1}** · {rating_1}/5 · {author_1}
+   - {headline_or_preview_1}
+
+2. **{product_name_2}** · {rating_2}/5 · {author_2}
+   - {headline_or_preview_2}
+
+如需，我可以继续按关键词、评分段或站点展开。
+```
+
+### Scope Preview
+
+```md
+## 🔎 范围预览
+
+- **命中产品数**：{product_count}
+- **命中评论数**：{review_count}
+- **带图评论数**：{image_review_count}
+- **下一步建议**：{next_action_hint}
+
+### 说明
+
+- 如需区分“当前产品 scope 总量”和“被评论条件缩小后的产品数”，必须显式写出 `product_count` 与 `matched_review_product_count`
+- {preview_summary}
+```
+
+### Filtered Report Preview
+
+```md
+## 📄 报告预览
+
+- **目标范围**：{scope_summary}
+- **预计命中产品**：{product_count}
+- **预计命中评论**：{review_count}
+- **交付方式**：{delivery_summary}
+
+### 风险或限制
+
+- {constraint_1}
+- {constraint_2}
+```
+
+### Report Delivery Result
+
+```md
+## ✅ 报告处理结果
+
+- **范围**：{scope_summary}
+- **产品数**：{product_count}
+- **命中评论数**：{review_count}
+- **附件结果**：{artifact_status}
+- **邮件结果**：{email_status}
+
+### 说明
+
+- {delivery_takeaway}
+```
+
+### Unsupported Produce Request
+
+```md
+## ℹ️ 当前还不支持这个动作
+
+- **请求类型**：{request_type}
+- **原因**：{unsupported_reason}
+
+### 目前可行的替代方案
+
+- {alternative_1}
+- {alternative_2}
+```
+
+### Rating Distribution
+
+```md
+## ⭐ 评分分布
+
+- **5 星**：{star_5_count}（{star_5_pct}%）
+- **4 星**：{star_4_count}（{star_4_pct}%）
+- **3 星**：{star_3_count}（{star_3_pct}%）
+- **2 星**：{star_2_count}（{star_2_pct}%）
+- **1 星**：{star_1_count}（{star_1_pct}%）
+
+### 解读
+
+- {distribution_takeaway}
+```
+
+### Negative Review Analysis
+
+```md
 ## 🔍 差评分析
 
-### 1. Product Name（42 条差评）
+### 核心问题
 
-**核心问题：**
+- **问题 1**：{issue_1}
+- **问题 2**：{issue_2}
 
-- **精度不足**：多条差评反映读数偏差大
-- **电源故障**：按钮无法开机，需反复拔插电池
+### 影响判断
 
-**改良建议：**
+- {impact_summary}
 
-- [x] 提升传感器精度并增加校准功能
-- [x] 改用弹簧扣式电池盖
+### 建议动作
+
+- {action_1}
+- {action_2}
 ```
 
-### 竞品对比
+### Competitive Comparison
 
+```md
+## 🆚 竞品对比
+
+### 自有产品
+
+- **产品数**：{own_product_count}
+- **平均价格**：{own_avg_price}
+- **平均评分**：{own_avg_rating}
+- **站点展示评论总数**：{own_review_count}
+
+### 竞品
+
+- **产品数**：{competitor_product_count}
+- **平均价格**：{competitor_avg_price}
+- **平均评分**：{competitor_avg_rating}
+- **站点展示评论总数**：{competitor_review_count}
+
+### 结论
+
+- {comparison_takeaway_1}
+- {comparison_takeaway_2}
 ```
-## 🏪 Bass Pro Shops vs 🥩 Meat Your Maker
 
-### Bass Pro Shops
-- **产品数**：180
-- **平均价格**：$67.50
-- **平均评分**：4.3/5 ⭐
-- **评论总数**：2,841
+## Runtime Output Guardrail
 
-### Meat Your Maker
-- **产品数**：65
-- **平均价格**：$142.80
-- **平均评分**：3.8/5 ⭐
-- **评论总数**：1,001
+运行时模板必须保持：
 
----
-
-**结论**：Bass Pro 产品更多、均价更低、评分更高。Meat Your Maker 定位高端但评分偏低，建议关注差评原因。
-```
+- 简单查询先给精确结论，不把样本和推断混进去
+- 需要样本时再展示有限样本，不全量倾倒
+- 评论相关字段必须使用明确口径，不再回到泛化“评论数”
+- 方法说明只能引用真实工具调用，不补写不存在的 SQL 或流程

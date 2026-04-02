@@ -1,99 +1,135 @@
-"""MCP Tools — task management, data queries, and advanced SQL execution.
-
-All parameter types use simple primitives (str, int, float, bool) for maximum
-compatibility with OpenAI-based function calling schema validation.
-"""
+"""MCP tools for task management, reporting, and data queries."""
 
 import json as _json
 import logging
+from dataclasses import asdict
 
 from fastmcp import FastMCP
 
-from qbu_crawler import models, config
+from qbu_crawler import config, models
+from qbu_crawler.server.scope import normalize_scope, preview_hint
 
 logger = logging.getLogger(__name__)
 
 
 def _get_tm():
     from qbu_crawler.server.app import task_manager
+
     return task_manager
+
+
+def _structured(payload):
+    """Convert payloads into plain JSON-compatible Python objects."""
+
+    return _json.loads(_json.dumps(payload, default=str, ensure_ascii=False))
+
+
+def _as_object_or_error(name: str, value: object | None) -> tuple[dict | None, dict | None]:
+    if value is None:
+        return None, None
+    if isinstance(value, dict):
+        return value, None
+    return None, {"error": f"{name} must be an object when provided"}
 
 
 def register_tools(mcp: FastMCP):
     """Register all tools on the MCP server."""
 
-    # ── Task Operations ──────────────────────────────
-
     @mcp.tool
-    def start_scrape(urls: list[str], ownership: str, reply_to: str = "") -> str:
-        """提交一个或多个产品页 URL 开始爬取，返回任务 ID 用于后续查询进度。
-        支持 Bass Pro Shops (www.basspro.com)、Meat Your Maker (www.meatyourmaker.com) 和 Walton's (waltons.com) 站点。
-        ownership: 产品归属，own 表示自有产品，competitor 表示竞品。
-        reply_to: 可选，任务完成后的通知目标（如钉钉群/用户 ID），由心跳自动检测并投递。"""
+    def start_scrape(
+        urls: list[str],
+        ownership: str,
+        review_limit: int = 0,
+        reply_to: str = "",
+    ) -> dict:
+        """Submit one or more product URLs for scraping.
+
+        Supports Bass Pro Shops, Meat Your Maker, and Walton's product pages.
+        `ownership` must be `own` or `competitor`.
+        Pass `reply_to` for ad-hoc chat tasks so completion updates can flow
+        through the outbox/bridge delivery path.
+        `review_limit` only applies to repeat scrapes; the first successful
+        scrape of a product URL still runs full.
+        """
+
         if ownership not in ("own", "competitor"):
-            return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
+            return {"error": "ownership must be 'own' or 'competitor'"}
         tm = _get_tm()
-        task = tm.submit_scrape(urls, ownership=ownership, reply_to=reply_to)
-        return _json.dumps({
-            "message": f"任务启动成功，共 {len(urls)} 个产品待抓取。使用 get_task_status 查询进度。",
+        task = tm.submit_scrape(
+            urls,
+            ownership=ownership,
+            review_limit=review_limit,
+            reply_to=reply_to,
+        )
+        return {
+            "message": f"Task submitted successfully for {len(urls)} product URLs. Use get_task_status to query progress.",
             "task_id": task.id,
             "status": task.status.value,
             "total": len(urls),
-        })
+        }
 
     @mcp.tool
-    def start_collect(category_url: str, ownership: str, max_pages: int = 0, reply_to: str = "") -> str:
-        """从分类/列表页自动采集所有产品 URL 并逐一爬取详情。
-        max_pages 限制最多翻几页，0 表示采集所有页。
-        ownership 必填：own（自有产品）或 competitor（竞品）。
-        reply_to: 可选，任务完成后的通知目标。"""
+    def start_collect(
+        category_url: str,
+        ownership: str,
+        max_pages: int = 0,
+        review_limit: int = 0,
+        reply_to: str = "",
+    ) -> dict:
+        """Collect product URLs from a category page, then scrape each product.
+
+        `max_pages=0` means collect all pages.
+        `ownership` must be `own` or `competitor`.
+        Pass `reply_to` for ad-hoc chat tasks so completion updates can flow
+        through the outbox/bridge delivery path.
+        `review_limit` only applies when a discovered product URL already has a
+        successful scrape record; newly discovered products still run full.
+        """
+
         if ownership not in ("own", "competitor"):
-            return _json.dumps({"error": "ownership must be 'own' or 'competitor'"})
+            return {"error": "ownership must be 'own' or 'competitor'"}
         tm = _get_tm()
-        task = tm.submit_collect(category_url, max_pages, ownership=ownership, reply_to=reply_to)
-        pages_info = f"最多 {max_pages} 页" if max_pages > 0 else "全部页"
-        return _json.dumps({
-            "message": f"采集任务启动成功，将从分类页采集产品（{pages_info}）并逐一抓取。使用 get_task_status 查询进度。",
+        task = tm.submit_collect(
+            category_url,
+            max_pages,
+            review_limit=review_limit,
+            ownership=ownership,
+            reply_to=reply_to,
+        )
+        pages_info = f"up to {max_pages} pages" if max_pages > 0 else "all pages"
+        return {
+            "message": f"Collect task submitted successfully; products will be discovered from the category page ({pages_info}) and then scraped. Use get_task_status to query progress.",
             "task_id": task.id,
             "status": task.status.value,
-        })
+        }
 
     @mcp.tool
-    def get_task_status(task_id: str) -> str:
-        """查询爬虫任务的实时状态。
-        返回信息包括：状态（pending/running/completed/failed/cancelled）、
-        进度（已完成数/总数、当前正在处理的 URL）、
-        结果（成功时的统计）、错误信息（失败时）、耗时等。"""
+    def get_task_status(task_id: str) -> dict:
+        """Query a crawler task's real-time status and progress."""
+
         tm = _get_tm()
         task = tm.get_task(task_id)
         if not task:
-            return _json.dumps({"error": f"Task {task_id} not found"})
-        return _json.dumps(task, default=str)
+            return {"error": f"Task {task_id} not found"}
+        return _structured(task)
 
     @mcp.tool
-    def list_tasks(status: str = "", limit: int = 20) -> str:
-        """列出爬虫任务记录，默认按创建时间倒序返回最近 20 条。
-        status 可选值：pending（等待中）、running（执行中）、
-        completed（已完成）、failed（失败）、cancelled（已取消）。
-        留空则返回全部状态。"""
+    def list_tasks(status: str = "", limit: int = 20) -> dict:
+        """List crawler task records, optionally filtered by status."""
+
         tm = _get_tm()
-        tasks, total = tm.list_tasks(
-            status=status if status else None, limit=limit,
-        )
-        return _json.dumps({"tasks": tasks, "total": total}, default=str)
+        tasks, total = tm.list_tasks(status=status if status else None, limit=limit)
+        return _structured({"tasks": tasks, "total": total})
 
     @mcp.tool
-    def cancel_task(task_id: str) -> str:
-        """取消正在运行或等待中的爬虫任务。
-        当前正在处理的 URL 会完成（不会中途打断），但后续 URL 不再执行。
-        已完成或已失败的任务无法取消。"""
+    def cancel_task(task_id: str) -> dict:
+        """Cancel a running or pending crawler task."""
+
         tm = _get_tm()
         ok = tm.cancel_task(task_id)
         if not ok:
-            return _json.dumps({"error": "Task not found or not cancellable (already completed/failed)"})
-        return _json.dumps({"task_id": task_id, "status": "cancelled"})
-
-    # ── Data Queries ─────────────────────────────────
+            return {"error": "Task not found or not cancellable (already completed/failed)"}
+        return {"task_id": task_id, "status": "cancelled"}
 
     @mcp.tool
     def list_products(
@@ -107,16 +143,9 @@ def register_tools(mcp: FastMCP):
         order: str = "desc",
         limit: int = 20,
         offset: int = 0,
-    ) -> str:
-        """搜索和筛选已采集的产品数据。
-        - site: 按站点筛选，可选 basspro、meatyourmaker 或 waltons，留空不筛选
-        - search: 按产品名称关键词模糊搜索
-        - min_price/max_price: 价格区间过滤（美元），-1 表示不限制
-        - stock_status: 库存状态，可选 in_stock/out_of_stock/unknown，留空不筛选
-        - ownership: 产品归属筛选，可选 own（自有）或 competitor（竞品），留空不筛选
-        - sort_by: 排序字段，可选 price/rating/review_count/scraped_at/name
-        - order: 排序方向，asc 升序或 desc 降序
-        返回产品列表和总数，支持分页。"""
+    ) -> dict:
+        """Search and filter collected product records."""
+
         items, total = models.query_products(
             site=site if site else None,
             search=search if search else None,
@@ -124,20 +153,21 @@ def register_tools(mcp: FastMCP):
             max_price=max_price if max_price >= 0 else None,
             stock_status=stock_status if stock_status else None,
             ownership=ownership if ownership else None,
-            sort_by=sort_by, order=order,
-            limit=limit, offset=offset,
+            sort_by=sort_by,
+            order=order,
+            limit=limit,
+            offset=offset,
         )
-        return _json.dumps({"items": items, "total": total}, default=str)
+        return _structured({"items": items, "total": total})
 
     @mcp.tool
     def get_product_detail(
         product_id: int = -1,
         url: str = "",
         sku: str = "",
-    ) -> str:
-        """获取单个产品的完整信息，包含最新价格、库存状态、评分，
-        以及最近 5 条评论摘要和最近 10 条价格快照。
-        支持三种查找方式（任选其一）：product_id（产品ID）, url（产品页URL）, 或 sku。"""
+    ) -> dict:
+        """Fetch full detail for one product, plus recent reviews and snapshots."""
+
         product = None
         if product_id >= 0:
             product = models.get_product_by_id(product_id)
@@ -146,14 +176,14 @@ def register_tools(mcp: FastMCP):
         elif sku:
             product = models.get_product_by_sku(sku)
         else:
-            return _json.dumps({"error": "Provide at least one of: product_id, url, or sku"})
+            return {"error": "Provide at least one of: product_id, url, or sku"}
 
         if not product:
-            return _json.dumps({"error": "Product not found"})
+            return {"error": "Product not found"}
 
         reviews, _ = models.query_reviews(product_id=product["id"], limit=5)
         snapshots, _ = models.get_snapshots(product_id=product["id"], days=30, limit=10)
-        return _json.dumps({**product, "recent_reviews": reviews, "recent_snapshots": snapshots}, default=str)
+        return _structured({**product, "recent_reviews": reviews, "recent_snapshots": snapshots})
 
     @mcp.tool
     def query_reviews(
@@ -170,17 +200,9 @@ def register_tools(mcp: FastMCP):
         order: str = "desc",
         limit: int = 20,
         offset: int = 0,
-    ) -> str:
-        """查询产品评论，支持多维度筛选。
-        - product_id: 指定产品的评论，-1 表示不限
-        - sku: 按产品 SKU 精确匹配，留空不限
-        - site: 按站点筛选（basspro、meatyourmaker 或 waltons），留空不限
-        - ownership: 按产品归属筛选，可选 own（自有）或 competitor（竞品），留空不限
-        - min_rating/max_rating: 评分区间（0-5），-1 表示不限
-        - author: 作者名模糊匹配
-        - keyword: 在标题和正文中搜索关键词
-        - has_images: 是否有图片，可选 true/false，留空不限
-        返回评论列表（含产品名称和站点）和总数。"""
+    ) -> dict:
+        """Query reviews with multi-dimensional filters."""
+
         _has_images = None
         if has_images == "true":
             _has_images = True
@@ -197,108 +219,277 @@ def register_tools(mcp: FastMCP):
             author=author if author else None,
             keyword=keyword if keyword else None,
             has_images=_has_images,
-            sort_by=sort_by, order=order,
-            limit=limit, offset=offset,
+            sort_by=sort_by,
+            order=order,
+            limit=limit,
+            offset=offset,
         )
-        return _json.dumps({"items": items, "total": total}, default=str)
+        return _structured({"items": items, "total": total})
 
     @mcp.tool
-    def get_price_history(product_id: int, days: int = 30) -> str:
-        """获取产品的价格和库存变化历史（来自 snapshots 表）。
-        默认返回最近 30 天的数据，按时间正序排列，适合绘制趋势图。
-        每条记录包含：price, stock_status, review_count, rating, scraped_at。"""
+    def get_price_history(product_id: int, days: int = 30) -> dict:
+        """Get price, stock, rating, and review-count history from snapshots."""
+
         items, total = models.get_snapshots(product_id=product_id, days=days, limit=1000)
-        return _json.dumps({"product_id": product_id, "days": days, "data_points": total, "history": items}, default=str)
+        return _structured(
+            {
+                "product_id": product_id,
+                "days": days,
+                "data_points": total,
+                "history": items,
+            }
+        )
 
     @mcp.tool
-    def get_stats() -> str:
-        """获取数据库整体统计概览。
-        包含：各站点产品数量、评论总数、最近采集时间、平均价格、平均评分等。
-        适合快速了解当前数据规模和分布。"""
-        return _json.dumps(models.get_stats(), default=str)
+    def preview_scope(
+        products: object | None = None,
+        reviews: object | None = None,
+        window: object | None = None,
+        artifact_type: str = "report",
+    ) -> dict:
+        """Preview a scope without generating files or sending email."""
 
-    # ── Advanced Query ───────────────────────────────
+        products_value, error = _as_object_or_error("products", products)
+        if error:
+            return error
+        reviews_value, error = _as_object_or_error("reviews", reviews)
+        if error:
+            return error
+        window_value, error = _as_object_or_error("window", window)
+        if error:
+            return error
+
+        scope = normalize_scope(products=products_value, reviews=reviews_value, window=window_value)
+        normalized_artifact_type = (artifact_type or "report").strip().lower()
+        counts = models.preview_scope_counts(scope)
+        return _structured(
+            {
+                "artifact_type": normalized_artifact_type,
+                "scope": asdict(scope),
+                "counts": {
+                    "products": counts["matched_product_count"],
+                    "reviews": counts["matched_review_count"],
+                    "image_reviews": counts["matched_image_review_count"],
+                    "product_count": counts["product_count"],
+                    "ingested_review_rows": counts["ingested_review_rows"],
+                    "site_reported_review_total_current": counts["site_reported_review_total_current"],
+                    "matched_review_product_count": counts["matched_review_product_count"],
+                    "image_review_rows": counts["image_review_rows"],
+                },
+                "next_action_hint": preview_hint(scope, artifact_type=normalized_artifact_type),
+            }
+        )
 
     @mcp.tool
-    def execute_sql(sql: str) -> str:
-        """对采集数据库执行只读 SQL 查询，适合语义化工具无法覆盖的复杂分析场景。
-        规则：仅允许 SELECT 语句，超时 5 秒，最多返回 500 行。
-        数据库包含 4 张表：products, product_snapshots, reviews, tasks。
-        使用前建议先读取 db://schema/overview 了解表结构和关系。
-        返回 columns（列名列表）、rows（数据行）、row_count 和 truncated（是否截断）。"""
+    def get_stats() -> dict:
+        """Get a high-level database overview."""
+
+        return _structured(models.get_stats())
+
+    @mcp.tool
+    def execute_sql(sql: str) -> dict:
+        """Execute a read-only SQL query against the collected database."""
+
         try:
             result = models.execute_readonly_sql(
                 sql,
                 timeout=config.SQL_QUERY_TIMEOUT,
                 max_rows=config.SQL_QUERY_MAX_ROWS,
             )
-            return _json.dumps(result, default=str)
-        except ValueError as e:
-            return _json.dumps({"error": str(e)})
-        except Exception as e:
-            return _json.dumps({"error": f"Query failed: {e}"})
-
-    # ── Report Generation ─────────────────────────────
+            return _structured(result)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:
+            return {"error": f"Query failed: {exc}"}
 
     @mcp.tool
-    def generate_report(since: str, send_email: str = "true") -> str:
-        """生成爬虫数据报告：查询新增数据（含已翻译的中文）→ 生成 Excel → 发送邮件。
-        翻译由后台线程自动执行，无需等待。如需确认翻译完成度，先调用 get_translate_status。
-        - since: 上海时间戳（YYYY-MM-DDTHH:MM:SS），查询该时间之后的新增数据
-        - send_email: 是否发送邮件，"true" 或 "false"
-        返回报告摘要：新增产品数、评论数、翻译数、Excel 路径、邮件发送结果。"""
+    def generate_report(since: str, send_email: str = "true") -> dict:
+        """Generate a legacy report for data added after `since`."""
+
         from datetime import datetime
+
         from qbu_crawler.server.report import generate_report as _generate_report
+
         try:
             since_dt = datetime.fromisoformat(since)
             result = _generate_report(
                 since=since_dt,
                 send_email=(send_email.lower() == "true"),
             )
-            return _json.dumps(result, default=str, ensure_ascii=False)
-        except ValueError as e:
-            return _json.dumps({"error": f"Invalid 'since' format: {e}. Use YYYY-MM-DDTHH:MM:SS"})
-        except Exception as e:
-            return _json.dumps({"error": f"Report generation failed: {e}"})
+            return _structured(result)
+        except ValueError as exc:
+            return {"error": f"Invalid 'since' format: {exc}. Use YYYY-MM-DDTHH:MM:SS"}
+        except Exception as exc:
+            return {"error": f"Report generation failed: {exc}"}
 
     @mcp.tool
-    def trigger_translate(reset_skipped: str = "false") -> str:
-        """手动触发翻译，立即唤醒后台翻译线程处理未翻译的评论。
-        reset_skipped: "true" 时先将所有 skipped 评论重置为待翻译（用于补翻历史数据），
-        "false"（默认）只触发现有待翻译队列。
-        返回当前待翻译数量。"""
+    def send_filtered_report(
+        scope: object | None = None,
+        delivery: object | None = None,
+    ) -> dict:
+        """Generate a filtered report for a normalized scope.
+
+        Product scope supports ids, urls, skus, names, sites, ownership,
+        price/rating/review_count ranges. Delivery supports format,
+        recipients, output_path, and an optional email subject override.
+        """
+
+        from qbu_crawler.server import report as report_module
+
+        scope_value, error = _as_object_or_error("scope", scope)
+        if error:
+            return error
+        delivery_value, error = _as_object_or_error("delivery", delivery)
+        if error:
+            return error
+
+        return _structured(
+            report_module.send_filtered_report(
+                scope=scope_value or {},
+                delivery=delivery_value,
+            )
+        )
+
+    @mcp.tool
+    def export_review_images(
+        scope: object | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """Export review-image links for a normalized scope."""
+
+        scope_value, error = _as_object_or_error("scope", scope)
+        if error:
+            return error
+
+        normalized_scope = normalize_scope(**(scope_value or {}))
+        normalized_scope.reviews.has_images = True
+
+        counts = models.preview_scope_counts(normalized_scope)
+        if counts["matched_image_review_count"] <= 0:
+            return _structured(
+                {
+                    "error": "no review images matched the requested scope",
+                    "scope": asdict(normalized_scope),
+                    "counts": {
+                        "products": counts["matched_product_count"],
+                        "reviews": counts["matched_review_count"],
+                        "image_reviews": counts["matched_image_review_count"],
+                    },
+                    "supported_artifact_types": ["review_images"],
+                }
+            )
+
+        rows = models.list_review_images_for_scope(normalized_scope, limit=max(limit, 0))
+        if not rows:
+            return _structured(
+                {
+                    "error": "no review images matched the requested scope",
+                    "scope": asdict(normalized_scope),
+                    "counts": {
+                        "products": counts["matched_product_count"],
+                        "reviews": counts["matched_review_count"],
+                        "image_reviews": counts["matched_image_review_count"],
+                    },
+                    "supported_artifact_types": ["review_images"],
+                }
+            )
+
+        items = []
+        image_links_count = 0
+        for row in rows:
+            images = row.get("images") or []
+            image_links_count += len(images)
+            items.append(
+                {
+                    "review_id": row.get("id"),
+                    "product_id": row.get("product_id"),
+                    "product_name": row.get("product_name"),
+                    "product_sku": row.get("product_sku"),
+                    "product_site": row.get("product_site"),
+                    "product_ownership": row.get("product_ownership"),
+                    "product_url": row.get("product_url"),
+                    "author": row.get("author"),
+                    "headline": row.get("headline"),
+                    "rating": row.get("rating"),
+                    "date_published": row.get("date_published"),
+                    "images": images,
+                }
+            )
+
+        return _structured(
+            {
+                "scope": asdict(normalized_scope),
+                "data": {
+                    "products_count": counts["matched_product_count"],
+                    "reviews_count": counts["matched_review_count"],
+                    "image_reviews_count": counts["matched_image_review_count"],
+                    "image_links_count": image_links_count,
+                },
+                "artifact": {
+                    "success": True,
+                    "format": "links",
+                    "type": "review_images",
+                    "limit": limit,
+                    "truncated": counts["matched_image_review_count"] > len(items),
+                    "items": items,
+                },
+            }
+        )
+
+    @mcp.tool
+    def trigger_translate(reset_skipped: str = "false") -> dict:
+        """Wake the translation worker immediately."""
+
         from qbu_crawler.server.app import translator
+
         if reset_skipped.lower() == "true":
             count = models.reset_skipped_translations()
             logger.info("trigger_translate: reset %d skipped reviews", count)
         translator.trigger()
         stats = models.get_translate_stats()
-        return _json.dumps({
-            "message": "翻译线程已唤醒",
+        return {
+            "message": "Translation worker triggered",
             "pending": stats["pending"],
             "failed": stats["failed"],
-        })
+        }
 
     @mcp.tool
-    def get_translate_status(since: str = "") -> str:
-        """查询翻译进度：总评论数、已翻译、待翻译、失败数、跳过数。
-        since: 可选，上海时间戳（YYYY-MM-DDTHH:MM:SS），只统计该时间之后的评论。
-        留空则返回全量统计。"""
+    def get_translate_status(since: str = "") -> dict:
+        """Query translation backlog and completion counts."""
+
         stats = models.get_translate_stats(since=since if since else None)
-        return _json.dumps(stats)
-
-    # ── Task Completion Tracking ─────────────────────────
+        return _structured(stats)
 
     @mcp.tool
-    def check_pending_completions() -> str:
-        """检查已完成但尚未通知的任务。返回所有终态（completed/failed/cancelled）且设置了
-        reply_to 但未标记 notified_at 的任务。心跳调用此工具可一次性获取所有待通知任务。"""
-        tasks = models.get_pending_completions()
-        return _json.dumps({"tasks": tasks, "count": len(tasks)}, default=str)
+    def get_workflow_status(run_id: str = "", trigger_key: str = "") -> dict:
+        """Get one workflow run plus its child task records."""
+
+        run = None
+        if run_id:
+            run = models.get_workflow_run(run_id)
+        elif trigger_key:
+            run = models.get_workflow_run_by_trigger_key(trigger_key)
+        else:
+            return {"error": "Provide run_id or trigger_key"}
+
+        if not run:
+            return {"error": "Workflow run not found"}
+
+        tasks = models.list_workflow_run_tasks(run["id"])
+        return _structured({"run": run, "tasks": tasks})
 
     @mcp.tool
-    def mark_notified(task_ids: list[str]) -> str:
-        """将任务标记为已通知。在心跳成功投递完成通知后调用。
-        标记后这些任务不会再出现在 check_pending_completions 结果中。"""
-        count = models.mark_task_notified(task_ids)
-        return _json.dumps({"marked": count})
+    def list_workflow_runs(status: str = "", limit: int = 20) -> dict:
+        """List workflow runs, optionally filtered by status."""
+
+        statuses = [status] if status else None
+        runs = models.list_workflow_runs(statuses=statuses, limit=limit)
+        return _structured({"items": runs, "total": len(runs)})
+
+    @mcp.tool
+    def list_pending_notifications(status: str = "", limit: int = 20) -> dict:
+        """List outbox notification records, optionally filtered by status."""
+
+        statuses = [status] if status else None
+        items = models.list_notifications(statuses=statuses, limit=limit)
+        return _structured({"items": items, "total": len(items)})

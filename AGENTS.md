@@ -213,12 +213,12 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 ### OpenClaw 定时工作流
 
-三阶段架构：
-1. **Cron Job（每日定时，isolated）**：读取 CSV → 提交 start_scrape/start_collect（带 reply_to）→ 存 task_id 到 active-tasks.json → DingTalk 通知
-2. **Heartbeat（每 5 分钟，main session，lightContext）**：调用 `check_pending_completions` 处理临时任务通知 → 检查 active-tasks.json 处理定时任务 → 全部完成则触发阶段 3
-3. **Cron Job（一次性，isolated）**：调用 `generate_report` MCP Tool（服务端程序化完成翻译+Excel+邮件） → DingTalk 汇报 → 清除状态
+当前采用“**服务内嵌调度 + 确定性工作流**”架构：
+1. **Crawler Service（`qbu-crawler serve`）**：启动 HTTP API / MCP，同时带起 translator、notifier、workflow worker 和 `DailySchedulerWorker`
+2. **DailySchedulerWorker（每日定时，embedded）**：按 `.env` 中的 `DAILY_SCHEDULER_TIME` 检查是否到点；到点后直接读取 CSV，并调用 `submit_daily_run()` 创建当日 workflow run
+3. **WorkflowWorker（后台推进）**：处理 stale task reconcile、报表阶段推进和 run 状态流转；定时提交是否已经跑过由 `workflow_runs.trigger_key` 幂等控制
 
-临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。心跳通过 `check_pending_completions` 发现已完成任务并投递通知，通知后调用 `mark_notified` 标记。不再依赖 adhoc-tasks.json 文件。
+临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。通知链路以 `notification_outbox` 为准，避免把 hook/HTTP 成功误记成“已送达”。`Heartbeat` 仅用于轻量巡检和 AI sidecar，不再承担每日主调度。
 
 Workspace 文件体系：
 - `AGENTS.md` — 操作规范 SOP（硬规则前置 + 步骤自检 + URL 路由 + 安全边界）
@@ -286,3 +286,15 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **`docs/features/`** — 需求文档。命名：`F{序号}-{简述}.md`（如 `F001-basic-scraper.md`）
 - **`docs/plans/`** — 实施计划。命名：`P{序号}-{简述}.md`（如 `P001-basic-scraper.md`），与 feature 序号对应
 - **`docs/devlogs/`** — 开发日志。命名：`D{序号}-{简述}.md`（如 `D001-basic-scraper.md`），记录实现细节和踩坑
+
+## 2026-03-29 结构增量
+
+本次 OpenClaw 混合自动化重构新增的核心文件和目录：
+
+- `qbu_crawler/server/notifier.py` — outbox worker 和 OpenClaw bridge sender
+- `qbu_crawler/server/workflows.py` — daily workflow orchestration 和 reconcile
+- `qbu_crawler/server/report_snapshot.py` — immutable snapshot + fast/full report helpers
+- `qbu_crawler/server/runtime.py` — translator / notifier / workflow worker 的统一生命周期
+- `qbu_crawler/server/openclaw/bridge/app.py` — OpenClaw Host 上的 hardened notify bridge
+- `qbu_crawler/server/workflows.py::DailySchedulerWorker` — crawler-host 内嵌 daily scheduler
+- `deploy/openclaw/` — OpenClaw host 的 `openclaw.json` 模板、sync 脚本、bridge service

@@ -27,7 +27,7 @@ class MeatYourMakerScraper(BaseScraper):
         options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
         return options
 
-    def scrape(self, url: str) -> dict:
+    def scrape(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_restart_browser()
         tab = self._get_page(url)
         tab.wait.ele_displayed('tag:h1', timeout=15)
@@ -93,7 +93,7 @@ class MeatYourMakerScraper(BaseScraper):
                 pass
 
         # 6. 评论提取（Task 6 实现）
-        reviews = self._extract_all_reviews(tab)
+        reviews = self._extract_all_reviews(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
@@ -231,7 +231,7 @@ class MeatYourMakerScraper(BaseScraper):
         """)
         return json.loads(raw) if isinstance(raw, str) else (raw or [])
 
-    def _extract_all_reviews(self, tab) -> list:
+    def _extract_all_reviews(self, tab, review_limit: int | None = None) -> list:
         """逐页翻页提取全部评论（Reviews 已在 scrape() 中展开）"""
         if not self._wait_for_shadow_root(tab):
             return []
@@ -247,6 +247,8 @@ class MeatYourMakerScraper(BaseScraper):
                 if key not in seen:
                     seen.add(key)
                     all_reviews.append(r)
+                    if review_limit and review_limit > 0 and len(all_reviews) >= review_limit:
+                        return all_reviews[:review_limit]
 
             has_next = tab.run_js("""
                 const c = document.querySelector('[data-bv-show="reviews"]');
@@ -259,6 +261,8 @@ class MeatYourMakerScraper(BaseScraper):
                 break
             time.sleep(2)
 
+        if review_limit and review_limit > 0:
+            return all_reviews[:review_limit]
         return all_reviews
 
     def collect_product_urls(self, category_url: str, max_pages: int = 0) -> list[str]:

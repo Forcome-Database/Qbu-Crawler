@@ -1,0 +1,89 @@
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      agentDir: "~/.openclaw/agents/main/agent",
+      model: {
+        primary: "__MODEL_PRIMARY__",
+        fallbacks: __MODEL_FALLBACKS_JSON__,
+      },
+      maxConcurrent: 2,
+      heartbeat: {
+        every: "0m",
+        target: "none",
+      },
+    },
+    list: [
+      {
+        id: "main",
+        default: true,
+        name: "Qbu Main",
+        workspace: "~/.openclaw/workspace",
+        agentDir: "~/.openclaw/agents/main/agent",
+      },
+      {
+        id: "ops",
+        name: "Qbu Ops",
+        workspace: "~/.openclaw/workspace-ops",
+        agentDir: "~/.openclaw/agents/ops/agent",
+        heartbeat: {
+          every: "5m",
+          target: "none",
+          lightContext: true,
+          activeHours: {
+            start: "07:00",
+            end: "23:00",
+            timezone: "Asia/Shanghai",
+          },
+        },
+      },
+    ],
+  },
+  plugins: {
+    entries: {
+      "mcp-products": {
+        enabled: true,
+        config: {
+          endpoint: "__MCP_ENDPOINT__",
+        },
+      },
+    },
+  },
+  hooks: {
+    enabled: true,
+    token: "__HOOK_TOKEN__",
+    path: "/hooks",
+    allowedAgentIds: ["ops"],
+  },
+  tools: {
+    profile: "coding",
+    alsoAllow: [
+      "start_scrape",
+      "start_collect",
+      "get_task_status",
+      "list_tasks",
+      "cancel_task",
+      "list_products",
+      "get_product_detail",
+      "query_reviews",
+      "get_price_history",
+      "preview_scope",
+      "get_stats",
+      "execute_sql",
+      "generate_report",
+      "send_filtered_report",
+      "export_review_images",
+      "trigger_translate",
+      "get_translate_status",
+      "get_workflow_status",
+      "list_workflow_runs",
+      "list_pending_notifications",
+    ],
+  },
+  cron: {
+    enabled: true,
+  },
+  meta: {
+    lastTouchedVersion: "2026-03-29-qbu-hybrid",
+  },
+}

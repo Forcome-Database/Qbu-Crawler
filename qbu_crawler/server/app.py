@@ -1,18 +1,18 @@
 """Application entry point — FastAPI + FastMCP in one ASGI process."""
 
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
 from fastmcp import FastMCP
 
 from qbu_crawler import config, models
-from qbu_crawler.server.task_manager import TaskManager
-from qbu_crawler.server.translator import TranslationWorker
 from qbu_crawler.server.api.tasks import router as tasks_router
 from qbu_crawler.server.api.products import router as products_router
 from qbu_crawler.server.mcp.tools import register_tools
 from qbu_crawler.server.mcp.resources import register_resources
+from qbu_crawler.server.runtime import runtime, task_manager, translator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,13 +23,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("mcp.shared.session").setLevel(logging.ERROR)
 
 # ── Shared singletons ──────────────────────────────
-translator = TranslationWorker(
-    interval=config.TRANSLATE_INTERVAL,
-    batch_size=config.LLM_TRANSLATE_BATCH_SIZE,
-    concurrency=config.TRANSLATE_WORKERS,
-)
-task_manager = TaskManager(max_workers=config.MAX_WORKERS, translator=translator)
-
 # ── MCP Server ──────────────────────────────────────
 mcp = FastMCP(
     "Qbu-Crawler",
@@ -45,13 +38,20 @@ register_resources(mcp)
 
 # ── MCP ASGI sub-app ────────────────────────────────
 mcp_app = mcp.http_app(path="/")
+@asynccontextmanager
+async def app_lifespan(app_instance: FastAPI):
+    models.init_db()
+    runtime.start()
+    async with mcp_app.lifespan(app_instance):
+        yield
+    runtime.stop()
 
 # ── FastAPI app ─────────────────────────────────────
 app = FastAPI(
     title="Qbu-Crawler API",
     description="多站点产品数据爬虫 HTTP API",
     version="1.0.0",
-    lifespan=mcp_app.lifespan,
+    lifespan=app_lifespan,
 )
 app.include_router(tasks_router)
 app.include_router(products_router)
@@ -68,7 +68,6 @@ async def health():
 def start_server(host: str | None = None, port: int | None = None):
     """Start the ASGI server."""
     models.init_db()
-    translator.start()
     h = host or config.SERVER_HOST
     p = port or config.SERVER_PORT
 
