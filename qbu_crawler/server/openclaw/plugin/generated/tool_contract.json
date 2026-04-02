@@ -248,7 +248,7 @@
       "description": "Get price, stock, rating, and review-count history from snapshots.",
       "does_not_support": [
         "multi-product comparison",
-        "review content history"
+        "review text history"
       ],
       "input_schema": {
         "additionalProperties": false,

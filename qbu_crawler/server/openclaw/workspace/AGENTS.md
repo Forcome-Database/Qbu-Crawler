@@ -359,7 +359,8 @@ For ad-hoc email follow-ups after scraping:
 - workflow 存在 `needs_attention` 状态
 - 查询的产品全部缺货（stock_status=OutOfStock）
 
-不触发：用户已在问相关问题时不重复；精确 inspect 不追加分析。
+触发场景：`get_product_detail` 返回单品低评分时触发。
+不触发：`get_stats` / `list_products` 精确数量查询时不触发；用户已在问相关问题时不重复。
 
 ### Tone Calibration
 

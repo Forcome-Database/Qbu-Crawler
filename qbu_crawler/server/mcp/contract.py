@@ -507,7 +507,7 @@ TOOL_CONTRACTS = {
         metrics=["avg_price_current", "avg_rating_current"],
         time_axes=["snapshot_time"],
         supports=["single-product price and stock trend inspection"],
-        does_not_support=["multi-product comparison", "review content history"],
+        does_not_support=["multi-product comparison", "review text history"],
     ),
     "execute_sql": _tool(
         name="execute_sql",
