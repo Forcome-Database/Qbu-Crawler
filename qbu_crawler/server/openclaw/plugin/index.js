@@ -12,11 +12,22 @@ var CONTRACT_TOOL_ORDER = [
   "list_products",
   "get_product_detail",
   "query_reviews",
+  "get_price_history",
+  "get_task_status",
+  "list_tasks",
+  "get_workflow_status",
+  "list_workflow_runs",
+  "list_pending_notifications",
+  "get_translate_status",
+  "execute_sql",
+  "start_scrape",
+  "start_collect",
+  "cancel_task",
   "preview_scope",
   "send_filtered_report",
   "export_review_images",
-  "get_workflow_status",
-  "list_pending_notifications",
+  "generate_report",
+  "trigger_translate",
 ];
 
 function getContractTool(name) {
@@ -776,7 +787,7 @@ function summarizeProductList(data) {
       " · " + ownershipLabel(item.ownership) +
       " · " + formatMoney(item.price) +
       " · " + formatRating(item.rating) +
-      " · 评论 " + (item.review_count ?? 0) + " 条"
+      " · 站点评论 " + (item.review_count ?? 0) + " 条"
     );
   }
 
@@ -797,7 +808,7 @@ function summarizeProductDetail(data) {
     "- **归属**：" + ownershipLabel(data.ownership),
     "- **价格**：" + formatMoney(data.price),
     "- **评分**：" + formatRating(data.rating),
-    "- **评论数**：" + (data.review_count ?? 0),
+    "- **站点展示评论总数**：" + (data.review_count ?? 0),
   ];
 
   if (Array.isArray(data.recent_reviews) && data.recent_reviews.length > 0) {
@@ -821,7 +832,7 @@ function summarizeReviewList(data) {
     return lines.join("\n");
   }
 
-  var shown = items.slice(0, 5);
+  var shown = items.slice(0, 3);
   lines.push("", "### 评论样本");
   for (var i = 0; i < shown.length; i++) {
     var item = shown[i] ?? {};

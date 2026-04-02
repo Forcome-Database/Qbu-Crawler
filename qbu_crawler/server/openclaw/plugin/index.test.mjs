@@ -367,6 +367,31 @@ function testHighValueToolNamesComeFromSharedContractArtifact() {
   assert.ok(!LOCAL_ONLY_TOOL_NAMES.includes("preview_scope"));
 }
 
+function testSummarizeProductDetailUsesCanonicalLabel() {
+  var result = normalizeMcpToolResult("get_product_detail", {
+    structuredContent: {
+      name: "Test Product", sku: "TP-001", site: "basspro",
+      ownership: "own", price: 29.99, rating: 4.5, review_count: 42,
+    },
+  });
+  var text = result.content[0].text;
+  assert.ok(text.includes("站点展示评论总数"), "must use canonical label, got: " + text);
+  assert.ok(!text.includes("**评论数**"), "must not use generic 评论数 label");
+}
+
+function testSummarizeReviewListRespectsDisplayBudgetOf3() {
+  var items = [];
+  for (var i = 0; i < 10; i++) {
+    items.push({ product_name: "Product " + i, rating: 3, author: "Author " + i });
+  }
+  var result = normalizeMcpToolResult("query_reviews", {
+    structuredContent: { items: items, total: 10 },
+  });
+  var text = result.content[0].text;
+  var sampleMatches = text.match(/^\d+\.\s/gm) || [];
+  assert.ok(sampleMatches.length <= 3, "review samples must be <= 3, got " + sampleMatches.length);
+}
+
 testExtractSpeakerContextFromMessageEvent();
 testBuildSpeakerPromptAdditionsForLeo();
 testBuildSpeakerPromptAdditionsForOtherSpeaker();
@@ -384,5 +409,7 @@ testNormalizeMcpToolResultSummarizesSendFilteredReport();
 testNormalizeMcpToolResultSummarizesExportReviewImages();
 testPluginConfigSchemaRequiresEndpoint();
 testHighValueToolNamesComeFromSharedContractArtifact();
+testSummarizeProductDetailUsesCanonicalLabel();
+testSummarizeReviewListRespectsDisplayBudgetOf3();
 
 console.log("plugin tests passed");
