@@ -600,6 +600,277 @@ LLM 负责：
 - run 进入 `needs_attention`
 - 不允许静默降级成“只发 Excel 但冒充成功”
 
+## 依赖与技术选型
+
+### 目标
+
+技术选型必须同时满足：
+
+- PDF 版式优雅、干净、稳定
+- 图表和图片支持良好
+- 中文排版可控
+- 首次开发速度快
+- 与当前 daily workflow 集成成本低
+- 后续维护成本可控
+
+### 方案对比
+
+#### 方案 A：Jinja2 + HTML/CSS + Playwright + 静态图表
+
+优点：
+
+- 最适合做高质量版式
+- 浏览器打印结果稳定
+- 易于调试，先看 HTML 再导出 PDF
+- 适合图文混排、分页控制、页眉页脚、封面设计
+- 与现有项目“浏览器自动化”能力模型接近
+
+缺点：
+
+- 需要新增浏览器渲染依赖
+- 部署机必须具备 Chromium 运行前提
+
+结论：
+
+一期推荐采用
+
+#### 方案 B：Jinja2 + HTML/CSS + WeasyPrint + 静态图表
+
+优点：
+
+- Python 侧整合更纯
+- 适合静态 HTML 到 PDF 渲染
+
+缺点：
+
+- 对系统字体和依赖环境较敏感
+- 面对复杂页面还原、长文分页和部分样式细节时弹性不如 Chromium
+- 当前项目没有现成相关依赖和运行经验
+
+结论：
+
+作为备选，不作为一期主路线
+
+#### 方案 C：ReportLab 直接生成 PDF
+
+优点：
+
+- 底层可控
+- 不依赖浏览器
+
+缺点：
+
+- 开发成本高
+- 做出“优雅、干净、漂亮”的日报排版成本明显更高
+- 不适合频繁调整版式
+
+结论：
+
+不适合作为一期主路线
+
+#### 方案 D：DOCX 作为主产物，再转 PDF
+
+优点：
+
+- 可编辑
+
+缺点：
+
+- 转换链更长
+- 版式一致性和自动化部署复杂度更高
+- 不适合每日自动发送的正式主产物
+
+结论：
+
+不采用
+
+### 一期依赖建议
+
+推荐新增依赖：
+
+- `jinja2`
+  用于 HTML 模板渲染
+- `playwright`
+  用于 headless Chromium 打印 PDF
+- `matplotlib`
+  用于生成基础静态图表，优先输出 SVG
+
+可选依赖：
+
+- `seaborn`
+  如果热力图、统计图样式需要更快成型
+
+一期不建议引入：
+
+- `plotly + kaleido`
+  视觉更强，但依赖和运行前提更重，可留到二期
+- `weasyprint`
+  不作为一期主路线
+- `reportlab`
+  不作为日报主产物路线
+
+### 选型结论
+
+一期技术选型固定为：
+
+- 模板层：`Jinja2`
+- 图表层：`matplotlib` 输出 `SVG/PNG`
+- PDF 渲染层：`Playwright + Chromium`
+- 数据边界：`snapshot + analytics`
+
+这套组合在“美观度、稳定性、迭代速度、兼容性、维护成本”之间最均衡。
+
+## PDF 版式设计原则
+
+### 视觉方向
+
+日报必须满足：
+
+- 干净
+- 稳定
+- 易扫描
+- 适合打印和移动端预览
+
+不追求炫技风格，不使用过重视觉元素。
+
+### 版式规则
+
+- 纸张固定为 A4
+- 使用统一页边距
+- 统一页眉页脚
+- 控制单页信息密度
+- 标题层级不超过 3 层
+- 正文只放重点图表和重点表格
+- 大明细全部留给 Excel
+
+### 视觉 token
+
+应在模板层固化：
+
+- 字体族
+- 标题字号
+- 正文字号
+- 行高
+- 颜色体系
+- 卡片边框
+- 圆角
+- 页内间距
+- 图表默认色板
+
+### 图表规则
+
+- 优先使用 `SVG`
+- 每份日报图表总数建议控制在 6 到 8 张
+- 统一颜色语义：
+  - 风险/负向：红或橙
+  - 正向/竞品优势：绿或蓝
+  - 中性/基线：灰
+- 避免 3D 图、饼图堆砌、装饰性阴影
+
+### 分页规则
+
+通过 print CSS 控制：
+
+- 避免标题孤行
+- 避免卡片被硬切页
+- 图片评论卡片尽量整块分页
+- 长表格只出现在附录或 Excel，不在正文跨多页铺开
+
+## 模块设计
+
+### 新增模块建议
+
+#### `qbu_crawler/server/report_analytics.py`
+
+职责：
+
+- 从 snapshot 和标签层生成 analytics JSON
+- 汇总自有产品风险排序
+- 汇总问题簇统计
+- 汇总竞品正向主题
+- 生成 PDF 所需的结构化视图数据
+
+说明：
+
+不要把这部分继续堆进 `report.py`，否则职责会越来越混。
+
+#### `qbu_crawler/server/report_pdf.py`
+
+职责：
+
+- 渲染 HTML
+- 生成静态图表
+- 调用 Playwright 打印 PDF
+- 管理模板、样式、字体和静态资源
+
+说明：
+
+PDF 生成是独立能力，应与 Excel 生成分离。
+
+### 现有模块调整
+
+#### `qbu_crawler/server/report.py`
+
+保留：
+
+- 查询 products/reviews
+- 生成 Excel
+- 邮件发送
+
+新增最小职责：
+
+- 多附件邮件发送兼容
+
+不建议在这里堆积复杂 PDF 模板逻辑。
+
+#### `qbu_crawler/server/report_snapshot.py`
+
+新增编排职责：
+
+- 在 full report 阶段串联：
+  - analytics 生成
+  - Excel 生成
+  - PDF 生成
+  - 多附件发送
+
+### 模块边界结论
+
+- `report.py`
+  偏数据查询和 Excel/email 能力
+- `report_analytics.py`
+  偏 run 级聚合和分析逻辑
+- `report_pdf.py`
+  偏 HTML/PDF 渲染能力
+- `report_snapshot.py`
+  偏 full report artifact 编排
+
+## PDF 生成流程
+
+### 运行时流程
+
+1. `WorkflowWorker` 进入 `full_pending`
+2. `generate_full_report_from_snapshot(snapshot)` 被调用
+3. 调用 `report_analytics.py` 生成 analytics JSON
+4. 调用 `report.py` 生成 Excel
+5. 调用 `report_pdf.py`：
+   - 生成图表资源
+   - 渲染 HTML
+   - 由 Playwright 导出 PDF
+6. 调用多附件邮件发送
+7. 更新 `workflow_runs` 的 artifact 路径
+8. 派发 `workflow_full_report`
+
+### 本地调试流程
+
+开发阶段应支持：
+
+1. 单独输入 snapshot/analytics
+2. 先产出 HTML 预览
+3. 人工确认版式
+4. 再导出 PDF
+
+这样可以显著降低调试成本。
+
 ### 不推荐的一期路线
 
 - 直接用 Python 原生 PDF 库做复杂排版
