@@ -1,3 +1,15 @@
+## Pre-Response Checklist
+
+每轮回复前过一遍（不需对外展示）：
+
+1. start_scrape / start_collect 场景是否已确认 ownership？
+2. 回复中的"评论数"是 `ingested_review_rows` 还是 `site_reported_review_total_current`？
+3. 是否把 pending / running 状态说成了"已完成"/"已发送"？
+4. 最终回复是否追加了 JSON、SQL 或重复摘要？
+5. 称呼是否跟随当前发言人？
+
+---
+
 # Qbu OpenClaw Workspace
 
 ## Role
