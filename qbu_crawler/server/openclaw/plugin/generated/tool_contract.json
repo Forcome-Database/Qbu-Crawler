@@ -64,6 +64,88 @@
     }
   },
   "tools": {
+    "cancel_task": {
+      "description": "Cancel a running or pending crawler task.",
+      "does_not_support": [
+        "cancellation of completed or failed tasks"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "cancel_task",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "cancellation of running or pending tasks"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "execute_sql": {
+      "description": "Execute a read-only SQL query against the collected database.",
+      "does_not_support": [
+        "write operations",
+        "DDL",
+        "queries exceeding 500 rows or 5 seconds"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "sql": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "execute_sql",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "columns": {
+            "type": "array"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "read-only SELECT queries",
+        "custom aggregation and cross-dimensional analysis"
+      ],
+      "tier": "inspect_exact",
+      "time_axes": []
+    },
     "export_review_images": {
       "description": "Export review-image links or manifest data for a normalized scope.",
       "does_not_support": [
@@ -114,6 +196,104 @@
         "review_ingest_time",
         "review_publish_time",
         "product_state_time"
+      ]
+    },
+    "generate_report": {
+      "description": "Generate a legacy report for data added after a timestamp.",
+      "does_not_support": [
+        "filtered scope reporting",
+        "review-image export"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "send_email": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "since"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "generate_report",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "email_status": {
+            "type": "string"
+          },
+          "products_count": {
+            "type": "integer"
+          },
+          "reviews_count": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "legacy full-scope report generation"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "review_ingest_time"
+      ]
+    },
+    "get_price_history": {
+      "description": "Get price, stock, rating, and review-count history from snapshots.",
+      "does_not_support": [
+        "multi-product comparison",
+        "review content history"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "type": "integer"
+          },
+          "product_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "product_id"
+        ],
+        "type": "object"
+      },
+      "metrics": [
+        "avg_price_current",
+        "avg_rating_current"
+      ],
+      "name": "get_price_history",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "data_points": {
+            "type": "integer"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "history": {
+            "type": "array"
+          },
+          "product_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "single-product price and stock trend inspection"
+      ],
+      "tier": "inspect_detail",
+      "time_axes": [
+        "snapshot_time"
       ]
     },
     "get_product_detail": {
@@ -264,6 +444,86 @@
         "product_state_time"
       ]
     },
+    "get_task_status": {
+      "description": "Query a crawler task's real-time status and progress.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "get_task_status",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "single task status inspection"
+      ],
+      "tier": "inspect_status",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "get_translate_status": {
+      "description": "Query translation backlog and completion counts.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "get_translate_status",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "failed": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "translated": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "translation progress inspection"
+      ],
+      "tier": "inspect_status",
+      "time_axes": [
+        "review_ingest_time"
+      ]
+    },
     "get_workflow_status": {
       "description": "Get one workflow run plus child task records.",
       "does_not_support": [],
@@ -407,9 +667,95 @@
         "product_state_time"
       ]
     },
+    "list_tasks": {
+      "description": "List crawler task records, optionally filtered by status.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "list_tasks",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tasks": {
+            "type": "array"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tasks",
+          "total"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "task list browsing and status filtering"
+      ],
+      "tier": "inspect_list",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "list_workflow_runs": {
+      "description": "List workflow runs, optionally filtered by status.",
+      "does_not_support": [],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "list_workflow_runs",
+      "output_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "supports": [
+        "workflow run list browsing and status filtering"
+      ],
+      "tier": "inspect_list",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
     "preview_scope": {
       "description": "Preview a normalized scope before producing an artifact.",
-      "does_not_support": [],
+      "does_not_support": [
+        "artifact generation",
+        "email delivery",
+        "data mutation"
+      ],
       "input_schema": {
         "additionalProperties": false,
         "properties": {
@@ -603,6 +949,154 @@
         "review_publish_time",
         "product_state_time"
       ]
+    },
+    "start_collect": {
+      "description": "Collect product URLs from a category page, then scrape each product.",
+      "does_not_support": [
+        "direct product URL scraping",
+        "non-category URLs"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "category_url": {
+            "type": "string"
+          },
+          "max_pages": {
+            "type": "integer"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "reply_to": {
+            "type": "string"
+          },
+          "review_limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category_url",
+          "ownership"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "start_collect",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "category page product discovery and scraping"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "start_scrape": {
+      "description": "Submit one or more product URLs for scraping.",
+      "does_not_support": [
+        "category page collection",
+        "CSV maintenance",
+        "unsupported site URLs"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "ownership": {
+            "type": "string"
+          },
+          "reply_to": {
+            "type": "string"
+          },
+          "review_limit": {
+            "type": "integer"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "urls",
+          "ownership"
+        ],
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "start_scrape",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "product page scraping for supported sites"
+      ],
+      "tier": "produce_action",
+      "time_axes": [
+        "task_lifecycle_time"
+      ]
+    },
+    "trigger_translate": {
+      "description": "Wake the translation worker immediately.",
+      "does_not_support": [
+        "selective per-review translation",
+        "translation model selection"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "reset_skipped": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "metrics": [],
+      "name": "trigger_translate",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "failed": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "supports": [
+        "immediate translation worker trigger"
+      ],
+      "tier": "produce_action",
+      "time_axes": []
     }
   },
   "version": 1
