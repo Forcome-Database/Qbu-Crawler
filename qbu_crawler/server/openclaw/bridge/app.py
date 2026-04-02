@@ -44,7 +44,7 @@ DEFAULT_TEMPLATES = {
         "- **状态**：快报已生成\n"
         "- **workflow**：{run_id}\n"
         "- **产品数**：{products_count}\n"
-        "- **评论数**：{reviews_count}\n"
+        "- **已入库评论数**：{reviews_count}\n"
         "- **翻译进度**：{translated_count}/{reviews_count}\n\n"
         "完整版报告生成后会继续通知。"
     ),
