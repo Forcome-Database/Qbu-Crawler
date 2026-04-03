@@ -59,6 +59,14 @@ def test_config_feature_flag_defaults(monkeypatch: pytest.MonkeyPatch):
     assert config.AI_DIGEST_MODE == "off"
 
 
+def test_config_report_pdf_defaults(monkeypatch: pytest.MonkeyPatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.REPORT_LABEL_MODE == "rule"
+    assert config.REPORT_PDF_TIMEOUT_SECONDS == 60
+    assert config.REPORT_PDF_FONT_FAMILY == "Noto Sans CJK SC"
+
+
 def test_config_embedded_daily_scheduler_settings(monkeypatch: pytest.MonkeyPatch):
     config = _reload_config(
         monkeypatch,

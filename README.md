@@ -67,9 +67,15 @@ PROXY_MAX_RETRIES=3
 
 ```bash
 uv sync
+uv run playwright install chromium
 uv run python main.py <product-url>
 uv run python main.py serve
 ```
+
+PDF 报告运行前提：
+
+- 部署环境需要安装统一中文字体，例如 `Noto Sans CJK SC`
+- PDF 模板、CSS、图表资源全部使用本地文件，不依赖 CDN 或外部网络资源
 
 ## 发布
 
