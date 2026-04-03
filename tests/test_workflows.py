@@ -28,7 +28,18 @@ _FEATURE_FLAG_KEYS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_workflow_config(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+
+    import qbu_crawler.config as config_module
+
+    monkeypatch.setattr(config_module, "DAILY_SOURCE_CSV_URL", "")
+    monkeypatch.setattr(config_module, "DAILY_PRODUCT_CSV_URL", "")
+
+
 def _reload_config(monkeypatch: pytest.MonkeyPatch, **overrides: str):
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
     for key in _FEATURE_FLAG_KEYS:
         monkeypatch.delenv(key, raising=False)
     for key, value in overrides.items():
@@ -48,16 +59,23 @@ def test_config_feature_flag_defaults(monkeypatch: pytest.MonkeyPatch):
     assert config.AI_DIGEST_MODE == "off"
 
 
+def test_config_report_pdf_defaults(monkeypatch: pytest.MonkeyPatch):
+    config = _reload_config(monkeypatch)
+
+    assert config.REPORT_LABEL_MODE == "rule"
+    assert config.REPORT_PDF_TIMEOUT_SECONDS == 60
+    assert config.REPORT_PDF_FONT_FAMILY == "Noto Sans CJK SC"
+
+
 def test_config_embedded_daily_scheduler_settings(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("DAILY_SUBMIT_MODE", "embedded")
-    monkeypatch.setenv("DAILY_SCHEDULER_TIME", "07:30")
-    monkeypatch.setenv("WORKFLOW_TRANSLATION_WAIT_SECONDS", "1200")
-    monkeypatch.setenv("DAILY_SOURCE_CSV_URL", "https://example.com/source.csv")
-    monkeypatch.setenv("DAILY_PRODUCT_CSV_URL", "https://example.com/detail.csv")
-
-    import qbu_crawler.config as config_module
-
-    config = importlib.reload(config_module)
+    config = _reload_config(
+        monkeypatch,
+        DAILY_SUBMIT_MODE="embedded",
+        DAILY_SCHEDULER_TIME="07:30",
+        WORKFLOW_TRANSLATION_WAIT_SECONDS="1200",
+        DAILY_SOURCE_CSV_URL="https://example.com/source.csv",
+        DAILY_PRODUCT_CSV_URL="https://example.com/detail.csv",
+    )
 
     assert config.DAILY_SUBMIT_MODE == "embedded"
     assert config.DAILY_SCHEDULER_TIME == "07:30"
@@ -82,12 +100,8 @@ def test_config_rejects_partial_daily_csv_url_pair(
 
 
 def test_config_rejects_invalid_daily_scheduler_time(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("DAILY_SCHEDULER_TIME", "25:99")
-
     with pytest.raises(ValueError, match="DAILY_SCHEDULER_TIME"):
-        import qbu_crawler.config as config_module
-
-        importlib.reload(config_module)
+        _reload_config(monkeypatch, DAILY_SCHEDULER_TIME="25:99")
 
 
 @pytest.mark.parametrize(
@@ -260,6 +274,42 @@ class TestWorkflowModels:
 
         assert run["report_phase"] == "none"
 
+    def test_workflow_run_artifact_columns_exist(self, workflow_db):
+        conn = workflow_db()
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()}
+        conn.close()
+
+        assert "analytics_path" in cols
+        assert "pdf_path" in cols
+
+    def test_review_issue_labels_table_roundtrip(self, workflow_db):
+        conn = workflow_db()
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        conn.close()
+
+        assert "review_issue_labels" in tables
+
+    def test_workflow_run_new_artifact_fields_roundtrip(self, workflow_db):
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "pending",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:artifacts",
+                "analytics_path": "a.json",
+                "pdf_path": "b.pdf",
+            }
+        )
+        assert run["analytics_path"] == "a.json"
+        assert run["pdf_path"] == "b.pdf"
+
+        updated = models.update_workflow_run(run["id"], analytics_path="c.json", pdf_path="d.pdf")
+        assert updated["analytics_path"] == "c.json"
+        assert updated["pdf_path"] == "d.pdf"
+
     def test_workflow_run_trigger_key_is_idempotent(self, workflow_db):
         first = models.create_workflow_run(
             {
@@ -329,6 +379,52 @@ class TestWorkflowModels:
         count = conn.execute("SELECT COUNT(*) FROM workflow_run_tasks").fetchone()[0]
         conn.close()
         assert count == 1
+
+    def test_review_issue_labels_helpers_replace_and_list(self, workflow_db):
+        conn = workflow_db()
+        conn.execute(
+            "INSERT INTO products (url, site, ownership) VALUES ('https://example.com/p/1', 'basspro', 'own')"
+        )
+        product_id = conn.execute("SELECT id FROM products").fetchone()[0]
+        conn.execute(
+            "INSERT INTO reviews (product_id, author, headline, body, body_hash) VALUES (?, 'a', 'h', 'b', 'hash')",
+            (product_id,),
+        )
+        review_id = conn.execute("SELECT id FROM reviews").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        models.replace_review_issue_labels(
+            review_id,
+            [
+                {
+                    "label_code": "quality_stability",
+                    "label_polarity": "negative",
+                    "severity": "high",
+                    "confidence": 0.9,
+                    "source": "rule",
+                    "taxonomy_version": "v1",
+                }
+            ],
+        )
+        labels = models.list_review_issue_labels([review_id])
+        assert labels[review_id][0]["label_code"] == "quality_stability"
+
+        models.replace_review_issue_labels(
+            review_id,
+            [
+                {
+                    "label_code": "easy_to_use",
+                    "label_polarity": "positive",
+                    "severity": "low",
+                    "confidence": 0.7,
+                    "source": "rule",
+                    "taxonomy_version": "v1",
+                }
+            ],
+        )
+        labels = models.list_review_issue_labels([review_id])
+        assert [item["label_code"] for item in labels[review_id]] == ["easy_to_use"]
 
 
 class _StubSubmitter:
@@ -764,7 +860,17 @@ class TestWorkflowReconcile:
         monkeypatch.setattr(workflows_module, "freeze_report_snapshot", lambda run_id, now=None: models.update_workflow_run(run_id, snapshot_path=snapshot_path, snapshot_hash="hash-1", snapshot_at=now))
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"run_id": run["id"], "logical_date": "2026-03-29", "snapshot_hash": "hash-1", "products_count": 1, "reviews_count": 2, "translated_count": 1, "untranslated_count": 1})
         monkeypatch.setattr(workflows_module, "build_fast_report", lambda snapshot: dict(snapshot))
-        monkeypatch.setattr(workflows_module, "generate_full_report_from_snapshot", lambda snapshot, send_email=True: {"snapshot_hash": snapshot["snapshot_hash"], "excel_path": str(tmp_path / "full.xlsx"), "email": {"success": True}})
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: {
+                "snapshot_hash": snapshot["snapshot_hash"],
+                "excel_path": str(tmp_path / "full.xlsx"),
+                "analytics_path": str(tmp_path / "analytics.json"),
+                "pdf_path": str(tmp_path / "full.pdf"),
+                "email": {"success": True},
+            },
+        )
 
         worker = WorkflowWorker(task_stale_seconds=60)
         assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
@@ -776,10 +882,15 @@ class TestWorkflowReconcile:
         assert refreshed["report_phase"] == "full_sent"
         assert refreshed["snapshot_hash"] == "hash-1"
         assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
+        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
+        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
         assert [item["kind"] for item in notifications if item["kind"].startswith("workflow_")] == [
             "workflow_fast_report",
             "workflow_full_report",
         ]
+        full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
+        assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
+        assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
 
     def test_reconcile_waits_for_translation_before_freezing_snapshot(self, workflow_db, monkeypatch):
         from qbu_crawler.server import workflows as workflows_module
@@ -912,6 +1023,7 @@ class TestWorkflowReconcile:
 
     def test_full_report_failure_leaves_fast_sent_snapshot_intact(self, workflow_db, monkeypatch, tmp_path):
         from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.report_snapshot import FullReportGenerationError
         from qbu_crawler.server.workflows import WorkflowWorker
 
         _save_task(
@@ -942,7 +1054,17 @@ class TestWorkflowReconcile:
 
         monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"snapshot_hash": "hash-fast", "logical_date": "2026-03-29", "run_id": run["id"]})
-        monkeypatch.setattr(workflows_module, "generate_full_report_from_snapshot", lambda snapshot, send_email=True: (_ for _ in ()).throw(RuntimeError("smtp exploded")))
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: (_ for _ in ()).throw(
+                FullReportGenerationError(
+                    "pdf exploded",
+                    analytics_path=str(tmp_path / "analytics.json"),
+                    excel_path=str(tmp_path / "full.xlsx"),
+                )
+            ),
+        )
 
         worker = WorkflowWorker(task_stale_seconds=60)
         assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
@@ -953,3 +1075,70 @@ class TestWorkflowReconcile:
         assert refreshed["report_phase"] == "fast_sent"
         assert refreshed["snapshot_path"] == snapshot_path
         assert refreshed["snapshot_hash"] == "hash-fast"
+        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
+        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
+
+    def test_smtp_failure_keeps_generated_pdf_artifact(self, workflow_db, monkeypatch, tmp_path):
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.report_snapshot import FullReportGenerationError
+        from qbu_crawler.server.workflows import WorkflowWorker
+
+        _save_task(
+            "task-pdf-artifact",
+            status="completed",
+            last_progress_at="2026-03-29T08:05:00+08:00",
+            finished_at="2026-03-29T08:05:00+08:00",
+        )
+        snapshot_path = str(tmp_path / "snapshot.json")
+        Path(snapshot_path).write_text('{"snapshot_hash":"hash-pdf"}', encoding="utf-8")
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "reporting",
+                "report_phase": "full_pending",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:smtp-fail",
+                "data_since": "2026-03-29T00:00:00+08:00",
+                "data_until": "2026-03-30T00:00:00+08:00",
+                "snapshot_at": "2026-03-29T08:06:00+08:00",
+                "snapshot_path": snapshot_path,
+                "snapshot_hash": "hash-pdf",
+                "requested_by": "systemd",
+                "service_version": "test",
+            }
+        )
+        models.attach_task_to_workflow(
+            run_id=run["id"],
+            task_id="task-pdf-artifact",
+            task_type="scrape",
+            site="basspro",
+            ownership="own",
+        )
+
+        monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
+        monkeypatch.setattr(
+            workflows_module,
+            "load_report_snapshot",
+            lambda path: {"snapshot_hash": "hash-pdf", "logical_date": "2026-03-29", "run_id": run["id"]},
+        )
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: (_ for _ in ()).throw(
+                FullReportGenerationError(
+                    "smtp exploded",
+                    analytics_path=str(tmp_path / "analytics.json"),
+                    excel_path=str(tmp_path / "full.xlsx"),
+                    pdf_path=str(tmp_path / "full.pdf"),
+                )
+            ),
+        )
+
+        worker = WorkflowWorker(task_stale_seconds=60)
+        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+
+        refreshed = models.get_workflow_run(run["id"])
+
+        assert refreshed["status"] == "needs_attention"
+        assert refreshed["report_phase"] == "fast_sent"
+        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")

@@ -150,6 +150,9 @@ SMTP_FROM = os.getenv("SMTP_FROM", "")
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 # ── Report ────────────────────────────────────────
+REPORT_LABEL_MODE = _enum_env("REPORT_LABEL_MODE", "rule", ("rule", "hybrid"))
+REPORT_PDF_TIMEOUT_SECONDS = int(os.getenv("REPORT_PDF_TIMEOUT_SECONDS", "60"))
+REPORT_PDF_FONT_FAMILY = os.getenv("REPORT_PDF_FONT_FAMILY", "Noto Sans CJK SC").strip()
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 OPENCLAW_WORKSPACE_DIR = os.getenv("OPENCLAW_WORKSPACE_DIR", "") or os.path.join(

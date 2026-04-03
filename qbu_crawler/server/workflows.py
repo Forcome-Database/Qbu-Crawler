@@ -20,6 +20,7 @@ from typing import Any
 from qbu_crawler import __version__, config, models
 from qbu_crawler.server.daily_inputs import load_daily_inputs
 from qbu_crawler.server.report_snapshot import (
+    FullReportGenerationError,
     build_fast_report,
     freeze_report_snapshot,
     generate_full_report_from_snapshot,
@@ -584,6 +585,15 @@ class WorkflowWorker:
             try:
                 snapshot = load_report_snapshot(run["snapshot_path"])
                 full_report = generate_full_report_from_snapshot(snapshot, send_email=True)
+            except FullReportGenerationError as exc:
+                models.update_workflow_run(
+                    run_id,
+                    analytics_path=exc.analytics_path,
+                    excel_path=exc.excel_path,
+                    pdf_path=exc.pdf_path,
+                )
+                self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
+                return True
             except Exception as exc:
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
@@ -596,6 +606,8 @@ class WorkflowWorker:
                     "logical_date": run["logical_date"],
                     "snapshot_hash": full_report["snapshot_hash"],
                     "excel_path": full_report["excel_path"],
+                    "analytics_path": full_report.get("analytics_path"),
+                    "pdf_path": full_report.get("pdf_path"),
                     "email_status": _workflow_email_status(
                         email_success=(full_report.get("email") or {}).get("success"),
                         untranslated_count=snapshot.get("untranslated_count", 0),
@@ -608,6 +620,8 @@ class WorkflowWorker:
                 status="completed",
                 report_phase="full_sent",
                 excel_path=full_report["excel_path"],
+                analytics_path=full_report.get("analytics_path"),
+                pdf_path=full_report.get("pdf_path"),
                 finished_at=now,
                 error=None,
             )

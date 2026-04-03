@@ -9,7 +9,15 @@ from datetime import datetime
 from pathlib import Path
 
 from qbu_crawler import config, models
-from qbu_crawler.server import report
+from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
+
+
+class FullReportGenerationError(RuntimeError):
+    def __init__(self, message, *, analytics_path=None, excel_path=None, pdf_path=None):
+        super().__init__(message)
+        self.analytics_path = analytics_path
+        self.excel_path = excel_path
+        self.pdf_path = pdf_path
 
 
 def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
@@ -97,35 +105,79 @@ def generate_full_report_from_snapshot(
     send_email: bool = True,
     output_path: str | None = None,
 ) -> dict:
-    report_date = datetime.fromisoformat(snapshot["data_since"])
+    report_date = datetime.fromisoformat(
+        snapshot.get("data_since") or f"{snapshot['logical_date']}T00:00:00+08:00"
+    )
     if output_path is None:
         output_path = os.path.join(
             config.REPORT_DIR,
             f"workflow-run-{snapshot['run_id']}-full-report.xlsx",
         )
 
-    excel_path = report.generate_excel(
-        snapshot["products"],
-        snapshot["reviews"],
-        report_date=report_date,
-        output_path=output_path,
+    os.makedirs(config.REPORT_DIR, exist_ok=True)
+    analytics_path = os.path.join(
+        config.REPORT_DIR,
+        f"workflow-run-{snapshot['run_id']}-analytics-{snapshot['logical_date']}.json",
     )
+    pdf_output_path = os.path.join(
+        config.REPORT_DIR,
+        f"workflow-run-{snapshot['run_id']}-full-report.pdf",
+    )
+    excel_path = None
+    pdf_path = None
+
+    try:
+        report_analytics.sync_review_labels(snapshot)
+        analytics = report_analytics.build_report_analytics(snapshot)
+        llm_result = report_llm.run_llm_report_analysis(snapshot, analytics)
+        validated_result = report_llm.validate_findings(snapshot, analytics, llm_result)
+        analytics = report_llm.merge_final_analytics(analytics, llm_result, validated_result)
+        Path(analytics_path).write_text(
+            json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+
+        excel_path = report.generate_excel(
+            snapshot["products"],
+            snapshot["reviews"],
+            report_date=report_date,
+            output_path=output_path,
+        )
+        pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, pdf_output_path)
+    except Exception as exc:
+        if isinstance(exc, FullReportGenerationError):
+            raise
+        raise FullReportGenerationError(
+            str(exc),
+            analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
+            excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
+            pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
+        ) from exc
 
     email_result = None
     if send_email:
-        subject, body = report.build_legacy_report_email(
-            products=snapshot["products"],
-            reviews=snapshot["reviews"],
-            since_str=snapshot["logical_date"],
-            translated_count=snapshot["translated_count"],
-            untranslated_count=snapshot["untranslated_count"],
-        )
-        email_result = report.send_email(
-            recipients=config.EMAIL_RECIPIENTS,
-            subject=subject,
-            body_text=body,
-            attachment_path=excel_path,
-        )
+        subject, body = report.build_daily_deep_report_email(snapshot, analytics)
+        try:
+            email_result = report.send_email(
+                recipients=config.EMAIL_RECIPIENTS,
+                subject=subject,
+                body_text=body,
+                attachment_paths=[excel_path, pdf_path],
+            )
+        except Exception as exc:
+            raise FullReportGenerationError(
+                str(exc),
+                analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
+                excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
+                pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
+            ) from exc
+        if not (email_result or {}).get("success"):
+            raise FullReportGenerationError(
+                (email_result or {}).get("error") or "send_email failed",
+                analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
+                excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
+                pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
+            )
 
     return {
         "run_id": snapshot["run_id"],
@@ -135,5 +187,7 @@ def generate_full_report_from_snapshot(
         "translated_count": snapshot["translated_count"],
         "untranslated_count": snapshot["untranslated_count"],
         "excel_path": excel_path,
+        "analytics_path": analytics_path,
+        "pdf_path": pdf_path,
         "email": email_result,
     }

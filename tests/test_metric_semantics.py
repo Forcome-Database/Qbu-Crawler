@@ -198,3 +198,72 @@ def test_time_axis_helpers_expose_canonical_fields_and_latest_values(metric_db):
     assert time_axes["review_ingest_time"]["latest"] == "2026-03-03 13:00:00"
     assert time_axes["review_publish_time"]["field"] == "reviews.date_published"
     assert time_axes["review_publish_time"]["latest"] == "2026-03-02"
+
+
+def test_report_analytics_keeps_ingested_and_site_total_separate(metric_db):
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    analytics = build_report_analytics(
+        {
+            "run_id": 999,
+            "logical_date": "2026-03-03",
+            "snapshot_hash": "hash-metrics",
+            "products_count": 2,
+            "reviews_count": 2,
+            "translated_count": 2,
+            "untranslated_count": 0,
+            "products": [
+                {
+                    "name": "Own Product",
+                    "sku": "SKU-OWN",
+                    "site": "basspro",
+                    "ownership": "own",
+                    "review_count": 7,
+                    "rating": 4.6,
+                    "price": 499.99,
+                },
+                {
+                    "name": "Competitor Product",
+                    "sku": "SKU-COMP",
+                    "site": "waltons",
+                    "ownership": "competitor",
+                    "review_count": 3,
+                    "rating": 4.2,
+                    "price": 299.99,
+                },
+            ],
+            "reviews": [
+                {
+                    "product_name": "Own Product",
+                    "product_sku": "SKU-OWN",
+                    "author": "Alice",
+                    "headline": "Broken",
+                    "body": "The motor broke quickly.",
+                    "rating": 2,
+                    "date_published": "2026-03-02",
+                    "images": [],
+                    "ownership": "own",
+                    "headline_cn": "",
+                    "body_cn": "",
+                    "translate_status": "done",
+                },
+                {
+                    "product_name": "Competitor Product",
+                    "product_sku": "SKU-COMP",
+                    "author": "Bob",
+                    "headline": "Easy",
+                    "body": "Easy to use and worth the money.",
+                    "rating": 5,
+                    "date_published": "2026-03-02",
+                    "images": [],
+                    "ownership": "competitor",
+                    "headline_cn": "",
+                    "body_cn": "",
+                    "translate_status": "done",
+                },
+            ],
+        }
+    )
+
+    assert analytics["kpis"]["ingested_review_rows"] == 2
+    assert analytics["kpis"]["site_reported_review_total_current"] == 10

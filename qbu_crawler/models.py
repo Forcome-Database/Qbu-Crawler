@@ -96,6 +96,8 @@ def init_db():
             snapshot_path TEXT,
             snapshot_hash TEXT,
             excel_path TEXT,
+            analytics_path TEXT,
+            pdf_path TEXT,
             requested_by TEXT,
             service_version TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -103,6 +105,21 @@ def init_db():
             started_at TIMESTAMP,
             finished_at TIMESTAMP,
             error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS review_issue_labels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id INTEGER NOT NULL,
+            label_code TEXT NOT NULL,
+            label_polarity TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            source TEXT NOT NULL,
+            taxonomy_version TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(review_id, label_code, label_polarity),
+            FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS workflow_run_tasks (
@@ -157,6 +174,8 @@ def init_db():
         "ALTER TABLE tasks ADD COLUMN worker_token TEXT",
         "ALTER TABLE tasks ADD COLUMN system_error_code TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN report_phase TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE workflow_runs ADD COLUMN analytics_path TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN pdf_path TEXT",
         "ALTER TABLE notification_outbox ADD COLUMN delivered_at TIMESTAMP",
     ]
     for sql in migrations:
@@ -442,12 +461,12 @@ def create_workflow_run(run_dict: dict) -> dict:
             INSERT INTO workflow_runs (
                 workflow_type, status, report_phase, logical_date, trigger_key,
                 data_since, data_until, snapshot_at, snapshot_path,
-                snapshot_hash, excel_path, requested_by, service_version,
+                snapshot_hash, excel_path, analytics_path, pdf_path, requested_by, service_version,
                 created_at, updated_at, started_at, finished_at, error
             ) VALUES (
                 :workflow_type, :status, :report_phase, :logical_date, :trigger_key,
                 :data_since, :data_until, :snapshot_at, :snapshot_path,
-                :snapshot_hash, :excel_path, :requested_by, :service_version,
+                :snapshot_hash, :excel_path, :analytics_path, :pdf_path, :requested_by, :service_version,
                 :created_at, :updated_at, :started_at, :finished_at, :error
             )
             ON CONFLICT(trigger_key) DO NOTHING
@@ -464,6 +483,8 @@ def create_workflow_run(run_dict: dict) -> dict:
                 "snapshot_path": run_dict.get("snapshot_path"),
                 "snapshot_hash": run_dict.get("snapshot_hash"),
                 "excel_path": run_dict.get("excel_path"),
+                "analytics_path": run_dict.get("analytics_path"),
+                "pdf_path": run_dict.get("pdf_path"),
                 "requested_by": run_dict.get("requested_by"),
                 "service_version": run_dict.get("service_version"),
                 "created_at": run_dict.get("created_at"),
@@ -517,6 +538,8 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         "snapshot_path",
         "snapshot_hash",
         "excel_path",
+        "analytics_path",
+        "pdf_path",
         "requested_by",
         "service_version",
         "updated_at",
@@ -553,6 +576,71 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         return dict(row)
     finally:
         conn.close()
+
+
+def replace_review_issue_labels(review_id: int, labels: list[dict]) -> None:
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM review_issue_labels WHERE review_id = ?", (review_id,))
+        for item in labels:
+            conn.execute(
+                """
+                INSERT INTO review_issue_labels (
+                    review_id, label_code, label_polarity, severity,
+                    confidence, source, taxonomy_version, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    review_id,
+                    item["label_code"],
+                    item["label_polarity"],
+                    item["severity"],
+                    item["confidence"],
+                    item["source"],
+                    item["taxonomy_version"],
+                    now_shanghai().isoformat(),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_review_issue_labels(review_ids: list[int]) -> dict[int, list[dict]]:
+    if not review_ids:
+        return {}
+
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" for _ in review_ids)
+        rows = conn.execute(
+            f"""
+            SELECT review_id, label_code, label_polarity, severity,
+                   confidence, source, taxonomy_version, created_at, updated_at
+            FROM review_issue_labels
+            WHERE review_id IN ({placeholders})
+            ORDER BY review_id ASC, id ASC
+            """,
+            review_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    result = {review_id: [] for review_id in review_ids}
+    for row in rows:
+        result[row["review_id"]].append(
+            {
+                "label_code": row["label_code"],
+                "label_polarity": row["label_polarity"],
+                "severity": row["severity"],
+                "confidence": row["confidence"],
+                "source": row["source"],
+                "taxonomy_version": row["taxonomy_version"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+        )
+    return result
 
 
 def list_workflow_runs(
