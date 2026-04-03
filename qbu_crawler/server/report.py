@@ -307,6 +307,7 @@ def send_email(
     subject: str,
     body_text: str,
     attachment_path: str | None = None,
+    attachment_paths: list[str] | None = None,
 ) -> dict:
     """Send an email via SMTP.
 
@@ -328,14 +329,20 @@ def send_email(
         msg["Subject"] = subject
         msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
-        if attachment_path and os.path.isfile(attachment_path):
-            with open(attachment_path, "rb") as f:
+        attachments = [path for path in (attachment_paths or []) if path]
+        if attachment_path:
+            attachments.insert(0, attachment_path)
+
+        for path in attachments:
+            if not os.path.isfile(path):
+                continue
+            with open(path, "rb") as f:
                 part = MIMEBase("application", "octet-stream")
                 part.set_payload(f.read())
             encoders.encode_base64(part)
             part.add_header(
                 "Content-Disposition",
-                f"attachment; filename={os.path.basename(attachment_path)}",
+                f"attachment; filename={os.path.basename(path)}",
             )
             msg.attach(part)
 

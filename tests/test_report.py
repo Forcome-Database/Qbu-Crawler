@@ -5,6 +5,7 @@ import os
 import smtplib
 import tempfile
 from datetime import datetime, timezone, timedelta
+from email import message_from_string
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -312,6 +313,72 @@ def test_send_email_ssl(monkeypatch):
     assert result["success"] is True
     # No STARTTLS for SSL connections
     mock_smtp_instance.starttls.assert_not_called()
+
+
+def test_send_email_supports_multiple_attachments(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_PORT", 587)
+    monkeypatch.setattr(config, "SMTP_USER", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(config, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+
+    first = tmp_path / "a.xlsx"
+    second = tmp_path / "b.pdf"
+    first.write_text("a", encoding="utf-8")
+    second.write_text("b", encoding="utf-8")
+
+    mock_smtp_instance = MagicMock()
+
+    with patch("smtplib.SMTP", return_value=mock_smtp_instance):
+        from qbu_crawler.server.report import send_email
+
+        result = send_email(
+            recipients=["recipient@example.com"],
+            subject="Test",
+            body_text="Body",
+            attachment_paths=[str(first), str(second)],
+        )
+
+    assert result["success"] is True
+    raw_message = mock_smtp_instance.sendmail.call_args.args[2]
+    parsed = message_from_string(raw_message)
+    filenames = sorted(
+        part.get_filename()
+        for part in parsed.walk()
+        if part.get_filename()
+    )
+    assert filenames == ["a.xlsx", "b.pdf"]
+
+
+def test_send_email_attachment_path_still_works(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_PORT", 587)
+    monkeypatch.setattr(config, "SMTP_USER", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(config, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+
+    attachment = tmp_path / "legacy.xlsx"
+    attachment.write_text("legacy", encoding="utf-8")
+
+    mock_smtp_instance = MagicMock()
+
+    with patch("smtplib.SMTP", return_value=mock_smtp_instance):
+        from qbu_crawler.server.report import send_email
+
+        result = send_email(
+            recipients=["recipient@example.com"],
+            subject="Test",
+            body_text="Body",
+            attachment_path=str(attachment),
+        )
+
+    assert result["success"] is True
+    raw_message = mock_smtp_instance.sendmail.call_args.args[2]
+    parsed = message_from_string(raw_message)
+    filenames = [part.get_filename() for part in parsed.walk() if part.get_filename()]
+    assert filenames == ["legacy.xlsx"]
 
 
 def test_send_email_no_config(monkeypatch):
