@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>每日深度报告 {{ snapshot.logical_date }}</title>
+  <link rel="stylesheet" href="{{ css_href }}">
+  <style>
+    :root {
+      --report-font-family: "{{ report_font_family }}", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Daily Product Intelligence</p>
+      <h1>每日深度分析报告</h1>
+      <p class="meta">Run #{{ snapshot.run_id }} | {{ snapshot.logical_date }} | {{ analytics.mode }}</p>
+    </div>
+    <div class="hero-kpis">
+      <div class="kpi-card">
+        <span>产品数</span>
+        <strong>{{ analytics.kpis.product_count }}</strong>
+      </div>
+      <div class="kpi-card">
+        <span>入库评论</span>
+        <strong>{{ analytics.kpis.ingested_review_rows }}</strong>
+      </div>
+      <div class="kpi-card">
+        <span>站点评论总量</span>
+        <strong>{{ analytics.kpis.site_reported_review_total_current }}</strong>
+      </div>
+      <div class="kpi-card">
+        <span>图片评论</span>
+        <strong>{{ analytics.kpis.image_review_rows }}</strong>
+      </div>
+    </div>
+  </header>
+
+  <section class="section">
+    <h2>执行摘要</h2>
+    <div class="card-grid two">
+      <article class="card">
+        <h3>模式与覆盖</h3>
+        <p>当前模式：{{ analytics.mode }}</p>
+        <p>基线样本天数：{{ analytics.baseline_sample_days }}</p>
+        <p>自有产品 {{ analytics.kpis.own_product_count }}，竞品 {{ analytics.kpis.competitor_product_count }}</p>
+      </article>
+      <article class="card chart-card">
+        <h3>覆盖概览</h3>
+        <img src="{{ chart_paths.coverage_summary }}" alt="coverage summary">
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>自有产品差评总览</h2>
+    <div class="card-grid two">
+      <article class="card chart-card">
+        <h3>风险产品</h3>
+        <img src="{{ chart_paths.self_risk_products }}" alt="self risk products">
+      </article>
+      <article class="card">
+        <h3>重点风险产品</h3>
+        {% for item in analytics.self.risk_products %}
+        <div class="list-row">
+          <strong>{{ item.product_sku }}</strong>
+          <span>风险分 {{ item.risk_score }}</span>
+          <span>差评 {{ item.negative_review_rows }}</span>
+        </div>
+        {% endfor %}
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>自有产品问题簇深挖</h2>
+    <div class="card-grid two">
+      <article class="card chart-card">
+        <h3>负向问题簇</h3>
+        <img src="{{ chart_paths.self_negative_clusters }}" alt="self negative clusters">
+      </article>
+      <article class="card">
+        <h3>问题簇列表</h3>
+        {% for item in analytics.self.top_negative_clusters %}
+        <div class="list-row">
+          <strong>{{ item.label_code }}</strong>
+          <span>评论 {{ item.review_count }}</span>
+          <span>严重度 {{ item.severity }}</span>
+        </div>
+        {% endfor %}
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>改良建议与优先级</h2>
+    <div class="card-grid">
+      {% for item in analytics.self.recommendations %}
+      <article class="card">
+        <h3>{{ item.label_code }} / {{ item.priority }}</h3>
+        <p>{{ item.possible_cause_boundary }}</p>
+        <p>{{ item.improvement_direction }}</p>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>竞品好评 benchmark</h2>
+    <div class="card-grid two">
+      <article class="card chart-card">
+        <h3>正向主题簇</h3>
+        <img src="{{ chart_paths.competitor_positive_themes }}" alt="competitor positive themes">
+      </article>
+      <article class="card">
+        <h3>高价值好评样本</h3>
+        {% for item in analytics.competitor.benchmark_examples %}
+        <div class="quote">
+          <strong>{{ item.product_sku }} / {{ item.author }}</strong>
+          <p>{{ item.headline }}</p>
+          <p>{{ item.body }}</p>
+        </div>
+        {% endfor %}
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>竞品差评与机会窗口</h2>
+    <div class="card-grid">
+      {% for item in analytics.competitor.negative_opportunities %}
+      <article class="card">
+        <h3>{{ item.product_sku }} / {{ item.rating }}</h3>
+        <p>{{ item.headline }}</p>
+        <p>{{ item.body }}</p>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>附录与口径</h2>
+    <div class="card-grid two">
+      <article class="card">
+        <h3>图片评论索引</h3>
+        {% for item in analytics.appendix.image_reviews %}
+        <div class="list-row">
+          <strong>{{ item.product_sku }}</strong>
+          <span>{{ item.headline }}</span>
+          <span>图片 {{ item.images|length }}</span>
+        </div>
+        {% endfor %}
+      </article>
+      <article class="card">
+        <h3>指标口径</h3>
+        <p>ingested_review_rows：{{ analytics.metric_semantics.ingested_review_rows }}</p>
+        <p>site_reported_review_total_current：{{ analytics.metric_semantics.site_reported_review_total_current }}</p>
+      </article>
+    </div>
+  </section>
+</body>
+</html>

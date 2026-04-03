@@ -77,6 +77,10 @@ PDF 报告运行前提：
 - 部署环境需要安装统一中文字体，例如 `Noto Sans CJK SC`
 - PDF 模板、CSS、图表资源全部使用本地文件，不依赖 CDN 或外部网络资源
 
+PDF 渲染失败处理：
+- `report_pdf.py` 只负责渲染和导出，失败时直接抛错
+- workflow 层需要保留已生成产物，并把 run 状态降级到 `needs_attention`
+
 ## 发布
 
 ### 一键脚本发布

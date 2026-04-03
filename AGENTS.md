@@ -18,6 +18,7 @@
 - **FastAPI + Uvicorn** — HTTP API 服务
 - **FastMCP** — MCP 协议服务（Streamable HTTP 传输）
 - **openpyxl** — Excel 报告生成
+- **Jinja2 + matplotlib + Playwright** — HTML/CSS 模板、SVG 图表和 PDF 导出
 - **openai SDK** — LLM 翻译（OpenAI 兼容 API）
 
 ## 项目结构
@@ -35,6 +36,9 @@ Qbu-Crawler/
 │   ├── __init__.py
 │   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
 │   ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
+│   ├── report_analytics.py # 日报分析层（标签分类 + analytics JSON 组装）
+│   ├── report_pdf.py       # HTML/CSS 模板渲染 + SVG 图表 + Playwright PDF 导出
+│   ├── report_templates/   # 日报 PDF 模板和 print CSS
 │   ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
 │   ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
 │   ├── api/
@@ -175,7 +179,10 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
-| `REPORT_DIR` | `data/reports` | Excel 报告输出目录 |
+| `REPORT_DIR` | `data/reports` | Excel / PDF / analytics JSON 报告输出目录 |
+| `REPORT_LABEL_MODE` | `rule` | 日报标签模式：`rule` 或 `hybrid` |
+| `REPORT_PDF_TIMEOUT_SECONDS` | `60` | Playwright 导出 PDF 超时（秒） |
+| `REPORT_PDF_FONT_FAMILY` | `Noto Sans CJK SC` | 日报 PDF 默认中文字体 |
 
 ### MinIO 配置（.env）
 
@@ -208,6 +215,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - 爬虫在 `ThreadPoolExecutor` 中同步执行，支持 URL 粒度取消
 - MCP Tools 提供语义化查询（list_products, query_reviews 等）+ 只读 SQL + 报告生成（generate_report）
 - `generate_report` Tool：查询新增数据（含已翻译的中文）→ openpyxl 生成 Excel → smtplib 发送邮件，翻译由后台线程自动完成
+- `report_snapshot` 的 full report 链路扩展为：snapshot → analytics JSON → Excel → PDF → 多附件邮件；`report_pdf.py` 只负责本地模板渲染和导出，不吞系统边界错误
+- PDF 运行前必须执行 `uv run playwright install chromium`，Linux 部署机还必须安装统一中文字体；如果 PDF 导出失败，workflow 层必须把 run 状态改为 `needs_attention`，并把 `report_phase` 回退到 `fast_sent`
 - `TranslationWorker` 守护线程：DB-as-Queue 模式，轮询未翻译评论 → LLM 批量翻译 → 持久化到 reviews 表，与爬虫并行执行
 - MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
 
