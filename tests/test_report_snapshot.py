@@ -174,6 +174,7 @@ def test_generate_full_report_from_snapshot_keeps_legacy_email_template(tmp_path
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
 
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setattr(
         config,
         "EMAIL_RECIPIENTS",
@@ -255,6 +256,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
 
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
     excel_path = tmp_path / "workflow-run-1-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
     pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
@@ -300,6 +302,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
 
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
 
     excel_path = tmp_path / "workflow-run-2-full-report.xlsx"
@@ -349,3 +352,69 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     assert result["pdf_path"] == str(pdf_path)
     assert captured["attachment_path"] is None
     assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
+
+
+def test_generate_full_report_from_snapshot_raises_on_email_failure_with_partial_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import (
+        FullReportGenerationError,
+        generate_full_report_from_snapshot,
+    )
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
+
+    excel_path = tmp_path / "workflow-run-3-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    pdf_path = tmp_path / "workflow-run-3-full-report.pdf"
+    pdf_path.write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
+    monkeypatch.setattr(
+        report,
+        "send_email",
+        lambda recipients, subject, body_text, attachment_path=None, attachment_paths=None: {
+            "success": False,
+            "error": "smtp failed",
+            "recipients": 0,
+        },
+    )
+
+    snapshot = {
+        "run_id": 3,
+        "logical_date": "2026-03-29",
+        "data_since": "2026-03-29T00:00:00+08:00",
+        "snapshot_hash": "hash-email-fail",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"rating": 1, "translate_status": "done"}],
+    }
+
+    with pytest.raises(FullReportGenerationError, match="smtp failed") as exc_info:
+        generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+
+    exc = exc_info.value
+    assert exc.excel_path == str(excel_path)
+    assert exc.pdf_path == str(pdf_path)
+    assert exc.analytics_path.endswith(".json")
