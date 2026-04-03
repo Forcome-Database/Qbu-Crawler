@@ -274,6 +274,42 @@ class TestWorkflowModels:
 
         assert run["report_phase"] == "none"
 
+    def test_workflow_run_artifact_columns_exist(self, workflow_db):
+        conn = workflow_db()
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()}
+        conn.close()
+
+        assert "analytics_path" in cols
+        assert "pdf_path" in cols
+
+    def test_review_issue_labels_table_roundtrip(self, workflow_db):
+        conn = workflow_db()
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        conn.close()
+
+        assert "review_issue_labels" in tables
+
+    def test_workflow_run_new_artifact_fields_roundtrip(self, workflow_db):
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "pending",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:artifacts",
+                "analytics_path": "a.json",
+                "pdf_path": "b.pdf",
+            }
+        )
+        assert run["analytics_path"] == "a.json"
+        assert run["pdf_path"] == "b.pdf"
+
+        updated = models.update_workflow_run(run["id"], analytics_path="c.json", pdf_path="d.pdf")
+        assert updated["analytics_path"] == "c.json"
+        assert updated["pdf_path"] == "d.pdf"
+
     def test_workflow_run_trigger_key_is_idempotent(self, workflow_db):
         first = models.create_workflow_run(
             {
@@ -343,6 +379,52 @@ class TestWorkflowModels:
         count = conn.execute("SELECT COUNT(*) FROM workflow_run_tasks").fetchone()[0]
         conn.close()
         assert count == 1
+
+    def test_review_issue_labels_helpers_replace_and_list(self, workflow_db):
+        conn = workflow_db()
+        conn.execute(
+            "INSERT INTO products (url, site, ownership) VALUES ('https://example.com/p/1', 'basspro', 'own')"
+        )
+        product_id = conn.execute("SELECT id FROM products").fetchone()[0]
+        conn.execute(
+            "INSERT INTO reviews (product_id, author, headline, body, body_hash) VALUES (?, 'a', 'h', 'b', 'hash')",
+            (product_id,),
+        )
+        review_id = conn.execute("SELECT id FROM reviews").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        models.replace_review_issue_labels(
+            review_id,
+            [
+                {
+                    "label_code": "quality_stability",
+                    "label_polarity": "negative",
+                    "severity": "high",
+                    "confidence": 0.9,
+                    "source": "rule",
+                    "taxonomy_version": "v1",
+                }
+            ],
+        )
+        labels = models.list_review_issue_labels([review_id])
+        assert labels[review_id][0]["label_code"] == "quality_stability"
+
+        models.replace_review_issue_labels(
+            review_id,
+            [
+                {
+                    "label_code": "easy_to_use",
+                    "label_polarity": "positive",
+                    "severity": "low",
+                    "confidence": 0.7,
+                    "source": "rule",
+                    "taxonomy_version": "v1",
+                }
+            ],
+        )
+        labels = models.list_review_issue_labels([review_id])
+        assert [item["label_code"] for item in labels[review_id]] == ["easy_to_use"]
 
 
 class _StubSubmitter:
