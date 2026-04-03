@@ -599,6 +599,104 @@ def test_generate_report_email_keeps_legacy_subject_and_body(tmp_path, monkeypat
     assert captured["attachment_path"] == str(excel_path)
 
 
+def test_build_daily_deep_report_email_renders_incremental_summary():
+    from qbu_crawler.server import report
+
+    snapshot = {
+        "logical_date": "2026-04-03",
+        "data_until": "2026-04-03T23:59:59+08:00",
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {
+            "product_count": 12,
+            "own_product_count": 5,
+            "competitor_product_count": 7,
+            "ingested_review_rows": 186,
+            "own_review_rows": 73,
+            "competitor_review_rows": 113,
+            "image_review_rows": 14,
+            "low_rating_review_rows": 21,
+            "translated_count": 180,
+            "untranslated_count": 6,
+        },
+        "self": {
+            "risk_products": [
+                {
+                    "product_name": "Own Grinder",
+                    "product_sku": "OWN-1",
+                    "negative_review_rows": 11,
+                    "image_review_rows": 3,
+                    "top_labels": [
+                        {"label_code": "quality_stability", "count": 5},
+                        {"label_code": "material_finish", "count": 3},
+                    ],
+                }
+            ],
+            "top_negative_clusters": [
+                {
+                    "label_code": "quality_stability",
+                    "review_count": 9,
+                    "image_review_count": 2,
+                    "severity": "high",
+                }
+            ],
+            "recommendations": [
+                {
+                    "label_code": "quality_stability",
+                    "priority": "high",
+                    "possible_cause_boundary": "可能与核心部件耐久性有关",
+                    "improvement_direction": "优先复核高频失效部件寿命",
+                    "evidence_count": 9,
+                }
+            ],
+        },
+        "competitor": {
+            "top_positive_themes": [
+                {
+                    "label_code": "solid_build",
+                    "review_count": 18,
+                    "image_review_count": 2,
+                },
+                {
+                    "label_code": "strong_performance",
+                    "review_count": 12,
+                    "image_review_count": 0,
+                }
+            ],
+            "benchmark_examples": [
+                {
+                    "product_name": "Competitor Grinder",
+                    "product_sku": "COMP-1",
+                    "label_codes": ["solid_build", "strong_performance"],
+                    "headline_cn": "结实耐用",
+                    "body_cn": "机器做工扎实而且动力强。",
+                    "headline": "Solid and strong",
+                    "body": "Built well and performs great.",
+                }
+            ],
+            "negative_opportunities": [
+                {
+                    "product_name": "Competitor Grinder",
+                    "product_sku": "COMP-2",
+                    "label_codes": ["service_fulfillment"],
+                }
+            ],
+        },
+    }
+
+    subject, body = report.build_daily_deep_report_email(snapshot, analytics)
+
+    assert subject == "【产品评论深度日报】2026-04-03 自有产品风险与竞品卖点监测"
+    assert "截至 2026-04-03T23:59:59+08:00 的最新抓取与评论数据生成" in body
+    assert "Own Grinder（SKU: OWN-1）" in body
+    assert "质量稳定性(5)、材料与做工(3)" in body
+    assert "做工扎实：18 条" in body
+    assert "\n- 做工扎实：18 条，图片评论 2 条\n- 性能强：12 条\n" in body
+    assert "主题：做工扎实、性能强" in body
+    assert "Competitor Grinder（SKU: COMP-2）：售后与履约" in body
+
+
 def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
     """Email is skipped gracefully when no recipients configured."""
     monkeypatch.setattr(config, "DB_PATH", patch_db)

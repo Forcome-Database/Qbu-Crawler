@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from qbu_crawler import config, models
-from qbu_crawler.server import report, report_analytics, report_pdf
+from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
 
 
 class FullReportGenerationError(RuntimeError):
@@ -129,6 +129,9 @@ def generate_full_report_from_snapshot(
     try:
         report_analytics.sync_review_labels(snapshot)
         analytics = report_analytics.build_report_analytics(snapshot)
+        llm_result = report_llm.run_llm_report_analysis(snapshot, analytics)
+        validated_result = report_llm.validate_findings(snapshot, analytics, llm_result)
+        analytics = report_llm.merge_final_analytics(analytics, llm_result, validated_result)
         Path(analytics_path).write_text(
             json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -153,13 +156,7 @@ def generate_full_report_from_snapshot(
 
     email_result = None
     if send_email:
-        subject, body = report.build_legacy_report_email(
-            products=snapshot["products"],
-            reviews=snapshot["reviews"],
-            since_str=snapshot["logical_date"],
-            translated_count=snapshot["translated_count"],
-            untranslated_count=snapshot["untranslated_count"],
-        )
+        subject, body = report.build_daily_deep_report_email(snapshot, analytics)
         try:
             email_result = report.send_email(
                 recipients=config.EMAIL_RECIPIENTS,

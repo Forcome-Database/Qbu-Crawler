@@ -17,6 +17,14 @@ def _analytics():
         "taxonomy_version": "v1",
         "label_mode": "rule",
         "generated_at": "2026-04-02T10:00:00+08:00",
+        "report_copy": {
+            "hero_headline": "Own Grinder 的可靠性问题需要优先处理",
+            "executive_bullets": [
+                "自有产品差评集中在可靠性问题。",
+                "竞品高频卖点集中在易用与做工。",
+                "图片证据可以直接支撑质量判断。",
+            ],
+        },
         "kpis": {
             "product_count": 2,
             "ingested_review_rows": 5,
@@ -56,8 +64,8 @@ def _analytics():
                             "rating": 1,
                             "headline": "Motor failed",
                             "body": "The motor broke after two uses.",
-                            "headline_cn": "",
-                            "body_cn": "",
+                            "headline_cn": "电机故障",
+                            "body_cn": "只用了两次电机就坏了。",
                             "images": ["https://img.example.com/1.jpg"],
                         }
                     ],
@@ -92,8 +100,8 @@ def _analytics():
                     "rating": 5,
                     "headline": "Simple and easy",
                     "body": "Easy to use every day.",
-                    "headline_cn": "",
-                    "body_cn": "",
+                    "headline_cn": "简单好用",
+                    "body_cn": "每天使用都很顺手。",
                     "label_codes": ["easy_to_use"],
                 }
             ],
@@ -117,6 +125,7 @@ def _analytics():
                     "rating": 1,
                     "headline": "Motor failed",
                     "body": "The motor broke after two uses.",
+                    "label_codes": ["quality_stability"],
                     "images": ["https://img.example.com/1.jpg"],
                 }
             ],
@@ -135,13 +144,15 @@ def test_render_report_html_contains_required_sections(tmp_path):
 
     html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
 
-    assert "执行摘要" in html
-    assert "自有产品差评总览" in html
-    assert "自有产品问题簇深挖" in html
-    assert "改良建议与优先级" in html
-    assert "竞品好评 benchmark" in html
-    assert "竞品差评与机会窗口" in html
-    assert "附录与口径" in html
+    assert "每日深度分析报告" in html
+    assert "主结论" in html
+    assert "自有产品风险总览" in html
+    assert "重点产品深挖" in html
+    assert "问题簇与改良建议" in html
+    assert "竞品好评 Benchmark" in html
+    assert "证据附录" in html
+    assert "执行摘要" not in html
+    assert "class=\"report-page" in html
 
 
 def test_build_chart_assets_outputs_svg_files(tmp_path):
@@ -153,18 +164,51 @@ def test_build_chart_assets_outputs_svg_files(tmp_path):
         "self_risk_products",
         "self_negative_clusters",
         "competitor_positive_themes",
-        "coverage_summary",
     }
     assert all(Path(path).suffix == ".svg" for path in chart_paths.values())
 
 
-def test_render_report_html_uses_only_local_assets(tmp_path):
+def test_resolve_chart_font_family_prefers_installed_cjk_font():
+    from qbu_crawler.server.report_pdf import _resolve_chart_font_family
+
+    family = _resolve_chart_font_family({"Microsoft YaHei", "DejaVu Sans"})
+
+    assert family == "Microsoft YaHei"
+
+
+def test_render_report_html_inlines_styles_and_svg_assets(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
     html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
 
-    assert "https://" not in html
-    assert "http://" not in html
+    assert "<style>" in html
+    assert "report-shell" in html
+    assert "<svg" in html
+    assert 'rel="stylesheet"' not in html
+    assert "file:///" not in html
+
+
+def test_render_report_html_uses_readable_labels_and_mode_copy(tmp_path):
+    from qbu_crawler.server.report_pdf import render_report_html
+
+    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+
+    assert "首日全量基线版" in html
+    assert "质量稳定性" in html
+    assert "易上手" in html
+    assert "quality_stability" not in html
+
+
+def test_render_report_html_renders_evidence_image_cards(tmp_path):
+    from qbu_crawler.server.report_pdf import render_report_html
+
+    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+
+    assert "https://img.example.com/1.jpg" in html
+    assert "evidence-media" in html
+    assert "E1" in html
+    assert "支撑结论" in html
+    assert "质量稳定性" in html
 
 
 def test_write_report_html_preview_creates_file(tmp_path):
