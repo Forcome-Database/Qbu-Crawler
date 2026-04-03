@@ -52,7 +52,7 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
 
         review_rows = conn.execute(
             """
-            SELECT p.name AS product_name, p.sku AS product_sku,
+            SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.images, p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status
@@ -522,7 +522,7 @@ def query_report_data(
 
         review_rows = conn.execute(
             """
-            SELECT p.name AS product_name, p.sku AS product_sku,
+            SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.images, p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status

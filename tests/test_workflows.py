@@ -860,7 +860,17 @@ class TestWorkflowReconcile:
         monkeypatch.setattr(workflows_module, "freeze_report_snapshot", lambda run_id, now=None: models.update_workflow_run(run_id, snapshot_path=snapshot_path, snapshot_hash="hash-1", snapshot_at=now))
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"run_id": run["id"], "logical_date": "2026-03-29", "snapshot_hash": "hash-1", "products_count": 1, "reviews_count": 2, "translated_count": 1, "untranslated_count": 1})
         monkeypatch.setattr(workflows_module, "build_fast_report", lambda snapshot: dict(snapshot))
-        monkeypatch.setattr(workflows_module, "generate_full_report_from_snapshot", lambda snapshot, send_email=True: {"snapshot_hash": snapshot["snapshot_hash"], "excel_path": str(tmp_path / "full.xlsx"), "email": {"success": True}})
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: {
+                "snapshot_hash": snapshot["snapshot_hash"],
+                "excel_path": str(tmp_path / "full.xlsx"),
+                "analytics_path": str(tmp_path / "analytics.json"),
+                "pdf_path": str(tmp_path / "full.pdf"),
+                "email": {"success": True},
+            },
+        )
 
         worker = WorkflowWorker(task_stale_seconds=60)
         assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
@@ -872,10 +882,15 @@ class TestWorkflowReconcile:
         assert refreshed["report_phase"] == "full_sent"
         assert refreshed["snapshot_hash"] == "hash-1"
         assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
+        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
+        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
         assert [item["kind"] for item in notifications if item["kind"].startswith("workflow_")] == [
             "workflow_fast_report",
             "workflow_full_report",
         ]
+        full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
+        assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
+        assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
 
     def test_reconcile_waits_for_translation_before_freezing_snapshot(self, workflow_db, monkeypatch):
         from qbu_crawler.server import workflows as workflows_module
@@ -1008,6 +1023,7 @@ class TestWorkflowReconcile:
 
     def test_full_report_failure_leaves_fast_sent_snapshot_intact(self, workflow_db, monkeypatch, tmp_path):
         from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.report_snapshot import FullReportGenerationError
         from qbu_crawler.server.workflows import WorkflowWorker
 
         _save_task(
@@ -1038,7 +1054,17 @@ class TestWorkflowReconcile:
 
         monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"snapshot_hash": "hash-fast", "logical_date": "2026-03-29", "run_id": run["id"]})
-        monkeypatch.setattr(workflows_module, "generate_full_report_from_snapshot", lambda snapshot, send_email=True: (_ for _ in ()).throw(RuntimeError("smtp exploded")))
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: (_ for _ in ()).throw(
+                FullReportGenerationError(
+                    "pdf exploded",
+                    analytics_path=str(tmp_path / "analytics.json"),
+                    excel_path=str(tmp_path / "full.xlsx"),
+                )
+            ),
+        )
 
         worker = WorkflowWorker(task_stale_seconds=60)
         assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
@@ -1049,3 +1075,70 @@ class TestWorkflowReconcile:
         assert refreshed["report_phase"] == "fast_sent"
         assert refreshed["snapshot_path"] == snapshot_path
         assert refreshed["snapshot_hash"] == "hash-fast"
+        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
+        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
+
+    def test_smtp_failure_keeps_generated_pdf_artifact(self, workflow_db, monkeypatch, tmp_path):
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.report_snapshot import FullReportGenerationError
+        from qbu_crawler.server.workflows import WorkflowWorker
+
+        _save_task(
+            "task-pdf-artifact",
+            status="completed",
+            last_progress_at="2026-03-29T08:05:00+08:00",
+            finished_at="2026-03-29T08:05:00+08:00",
+        )
+        snapshot_path = str(tmp_path / "snapshot.json")
+        Path(snapshot_path).write_text('{"snapshot_hash":"hash-pdf"}', encoding="utf-8")
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "reporting",
+                "report_phase": "full_pending",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:smtp-fail",
+                "data_since": "2026-03-29T00:00:00+08:00",
+                "data_until": "2026-03-30T00:00:00+08:00",
+                "snapshot_at": "2026-03-29T08:06:00+08:00",
+                "snapshot_path": snapshot_path,
+                "snapshot_hash": "hash-pdf",
+                "requested_by": "systemd",
+                "service_version": "test",
+            }
+        )
+        models.attach_task_to_workflow(
+            run_id=run["id"],
+            task_id="task-pdf-artifact",
+            task_type="scrape",
+            site="basspro",
+            ownership="own",
+        )
+
+        monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
+        monkeypatch.setattr(
+            workflows_module,
+            "load_report_snapshot",
+            lambda path: {"snapshot_hash": "hash-pdf", "logical_date": "2026-03-29", "run_id": run["id"]},
+        )
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True: (_ for _ in ()).throw(
+                FullReportGenerationError(
+                    "smtp exploded",
+                    analytics_path=str(tmp_path / "analytics.json"),
+                    excel_path=str(tmp_path / "full.xlsx"),
+                    pdf_path=str(tmp_path / "full.pdf"),
+                )
+            ),
+        )
+
+        worker = WorkflowWorker(task_stale_seconds=60)
+        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+
+        refreshed = models.get_workflow_run(run["id"])
+
+        assert refreshed["status"] == "needs_attention"
+        assert refreshed["report_phase"] == "fast_sent"
+        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")

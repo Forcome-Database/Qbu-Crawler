@@ -142,6 +142,7 @@ def test_snapshot_artifact_content_is_stable_after_db_mutation(snapshot_db):
 
 def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
     from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import (
         build_fast_report,
         freeze_report_snapshot,
@@ -150,6 +151,11 @@ def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
     )
 
     monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(snapshot_db["tmp_path"] / "full.pdf"),
+    )
 
     frozen = freeze_report_snapshot(snapshot_db["run"]["id"], now="2026-03-29T12:00:00+08:00")
     snapshot = load_report_snapshot(frozen["snapshot_path"])
@@ -165,6 +171,7 @@ def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
 
 def test_generate_full_report_from_snapshot_keeps_legacy_email_template(tmp_path, monkeypatch):
     from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
 
     monkeypatch.setattr(
@@ -180,14 +187,27 @@ def test_generate_full_report_from_snapshot_keeps_legacy_email_template(tmp_path
         "generate_excel",
         lambda products, reviews, report_date=None, output_path=None: str(excel_path),
     )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
 
     captured = {}
 
-    def fake_send_email(recipients, subject, body_text, attachment_path=None):
+    def fake_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
         captured["recipients"] = recipients
         captured["subject"] = subject
         captured["body_text"] = body_text
         captured["attachment_path"] = attachment_path
+        captured["attachment_paths"] = attachment_paths
         return {"success": True, "error": None, "recipients": len(recipients)}
 
     monkeypatch.setattr(report, "send_email", fake_send_email)
@@ -226,4 +246,106 @@ def test_generate_full_report_from_snapshot_keeps_legacy_email_template(tmp_path
         "详细数据见附件 Excel（产品 + 评论两个 Sheet）。\n"
         "如有疑问请随时沟通，谢谢！\n"
     )
-    assert captured["attachment_path"] == str(excel_path)
+    assert captured["attachment_path"] is None
+    assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
+
+
+def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_path, monkeypatch):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    excel_path = tmp_path / "workflow-run-1-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-03-27",
+        "data_since": "2026-03-27T00:00:00+08:00",
+        "snapshot_hash": "hash-analytics",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"rating": 1, "translate_status": "done"}],
+    }
+
+    result = generate_full_report_from_snapshot(snapshot, send_email=False, output_path=str(excel_path))
+
+    assert result["analytics_path"].endswith(".json")
+    assert result["pdf_path"] == str(pdf_path)
+    assert Path(result["analytics_path"]).is_file()
+
+
+def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp_path):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
+
+    excel_path = tmp_path / "workflow-run-2-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    pdf_path = tmp_path / "workflow-run-2-full-report.pdf"
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
+
+    captured = {}
+
+    def fake_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
+        captured["attachment_path"] = attachment_path
+        captured["attachment_paths"] = attachment_paths
+        return {"success": True, "error": None, "recipients": len(recipients)}
+
+    monkeypatch.setattr(report, "send_email", fake_send_email)
+
+    snapshot = {
+        "run_id": 2,
+        "logical_date": "2026-03-28",
+        "data_since": "2026-03-28T00:00:00+08:00",
+        "snapshot_hash": "hash-email",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"rating": 1, "translate_status": "done"}],
+    }
+
+    result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+
+    assert result["pdf_path"] == str(pdf_path)
+    assert captured["attachment_path"] is None
+    assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
