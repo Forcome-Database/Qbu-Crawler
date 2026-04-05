@@ -185,6 +185,7 @@ def main():
                 sys.exit(1)
 
         print("初始化数据库...")
+        logical_date = logical_date or config.now_shanghai().date().isoformat()
         init_db()
         result = submit_daily_run(
             submitter=LocalHttpTaskSubmitter(),

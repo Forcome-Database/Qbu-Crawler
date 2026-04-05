@@ -192,6 +192,12 @@ def _save_task(
     )
 
 
+def test_report_db_ts_converts_aware_utc_to_shanghai():
+    from qbu_crawler.server.workflows import _report_db_ts
+
+    assert _report_db_ts("2026-03-27T00:00:00+00:00") == "2026-03-27 08:00:00"
+
+
 class TestTaskLiveness:
     def test_task_liveness_columns_exist(self, workflow_db):
         conn = workflow_db()
@@ -654,6 +660,100 @@ class TestDailySubmit:
         assert len(submitter.scrape_calls) == 1
         assert submitter.scrape_calls[0]["ownership"] == "own"
 
+    def test_daily_submit_returns_existing_run_when_create_workflow_run_reports_not_created(
+        self,
+        workflow_db,
+        monkeypatch,
+        tmp_path,
+    ):
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.workflows import submit_daily_run
+
+        source_csv = _write_csv(
+            tmp_path / "source.csv",
+            [
+                "url,ownership",
+                "https://www.basspro.com/shop/en/camping,own",
+            ],
+        )
+        detail_csv = _write_csv(
+            tmp_path / "detail.csv",
+            [
+                "url,ownership",
+                "https://www.basspro.com/shop/en/example-product-1,own",
+            ],
+        )
+        existing_run = {
+            "id": 42,
+            "workflow_type": "daily",
+            "status": "submitted",
+            "report_phase": "none",
+            "logical_date": "2026-03-29",
+            "trigger_key": "daily:2026-03-29",
+            "created": False,
+        }
+        submitter = _StubSubmitter()
+        enqueue_calls = []
+
+        monkeypatch.setattr(workflows_module.models, "get_workflow_run_by_trigger_key", lambda trigger_key: None)
+        monkeypatch.setattr(workflows_module.models, "create_workflow_run", lambda payload: dict(existing_run))
+        monkeypatch.setattr(workflows_module.models, "enqueue_notification", lambda payload: enqueue_calls.append(payload))
+
+        result = submit_daily_run(
+            submitter=submitter,
+            source_csv=source_csv,
+            detail_csv=detail_csv,
+            logical_date="2026-03-29",
+            requested_by="systemd",
+        )
+
+        assert result == {
+            "created": False,
+            "run": existing_run,
+            "trigger_key": "daily:2026-03-29",
+        }
+        assert submitter.collect_calls == []
+        assert submitter.scrape_calls == []
+        assert enqueue_calls == []
+
+    def test_daily_submit_defaults_logical_date_to_shanghai_now(self, workflow_db, monkeypatch, tmp_path):
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.workflows import submit_daily_run
+
+        source_csv = _write_csv(
+            tmp_path / "source.csv",
+            [
+                "url,ownership",
+                "https://www.basspro.com/shop/en/camping,own",
+            ],
+        )
+        detail_csv = _write_csv(
+            tmp_path / "detail.csv",
+            [
+                "url,ownership",
+                "https://www.basspro.com/shop/en/example-product-1,own",
+            ],
+        )
+        submitter = _StubSubmitter()
+
+        monkeypatch.setattr(
+            workflows_module.config,
+            "now_shanghai",
+            lambda: datetime.fromisoformat("2026-03-30T00:30:00+08:00"),
+        )
+
+        result = submit_daily_run(
+            submitter=submitter,
+            source_csv=source_csv,
+            detail_csv=detail_csv,
+            logical_date=None,
+            requested_by="systemd",
+        )
+
+        assert result["created"] is True
+        assert result["trigger_key"] == "daily:2026-03-30"
+        assert result["run"]["logical_date"] == "2026-03-30"
+
 
 class TestDailyScheduler:
     def test_scheduler_waits_until_schedule_time(self, workflow_db, tmp_path):
@@ -797,6 +897,14 @@ class TestReviewLimitBehavior:
 
 
 class TestWorkflowReconcile:
+    def test_workflow_email_status_distinguishes_skipped_failed_and_success(self):
+        from qbu_crawler.server.workflows import _workflow_email_status
+
+        assert _workflow_email_status(None, 0) == "skipped"
+        assert _workflow_email_status(False, 0) == "failed"
+        assert _workflow_email_status(True, 2) == "已发送（2 条评论仍在翻译中）"
+        assert _workflow_email_status(True, 0) == "success"
+
     def test_reconcile_marks_stale_running_task_and_run_needs_attention(self, workflow_db):
         from qbu_crawler.server.workflows import WorkflowWorker
 
@@ -1080,7 +1188,6 @@ class TestWorkflowReconcile:
 
     def test_smtp_failure_keeps_generated_pdf_artifact(self, workflow_db, monkeypatch, tmp_path):
         from qbu_crawler.server import workflows as workflows_module
-        from qbu_crawler.server.report_snapshot import FullReportGenerationError
         from qbu_crawler.server.workflows import WorkflowWorker
 
         _save_task(
@@ -1124,21 +1231,64 @@ class TestWorkflowReconcile:
         monkeypatch.setattr(
             workflows_module,
             "generate_full_report_from_snapshot",
-            lambda snapshot, send_email=True: (_ for _ in ()).throw(
-                FullReportGenerationError(
-                    "smtp exploded",
-                    analytics_path=str(tmp_path / "analytics.json"),
-                    excel_path=str(tmp_path / "full.xlsx"),
-                    pdf_path=str(tmp_path / "full.pdf"),
-                )
-            ),
+            lambda snapshot, send_email=True: {
+                "snapshot_hash": "hash-pdf",
+                "analytics_path": str(tmp_path / "analytics.json"),
+                "excel_path": str(tmp_path / "full.xlsx"),
+                "pdf_path": str(tmp_path / "full.pdf"),
+                "email": {"success": False, "error": "smtp exploded", "recipients": 0},
+            },
         )
 
         worker = WorkflowWorker(task_stale_seconds=60)
         assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
 
         refreshed = models.get_workflow_run(run["id"])
+        notifications = models.list_notifications(statuses=["pending"])
 
         assert refreshed["status"] == "needs_attention"
-        assert refreshed["report_phase"] == "fast_sent"
+        assert refreshed["report_phase"] == "full_sent"
+        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
+        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
         assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
+        assert refreshed["error"] == "smtp exploded"
+        assert [item["kind"] for item in notifications if item["kind"].startswith("workflow_")] == [
+            "workflow_attention",
+        ]
+
+
+def test_cli_daily_submit_defaults_logical_date_to_shanghai_now(monkeypatch, capsys):
+    import qbu_crawler.cli as cli_module
+    import qbu_crawler.config as config_module
+    import qbu_crawler.models as models_module
+    from qbu_crawler.server import workflows as workflows_module
+
+    captured = {}
+
+    monkeypatch.setattr(cli_module, "load_env_config", lambda: None)
+    monkeypatch.setattr(config_module, "DAILY_SOURCE_CSV_PATH", "source.csv")
+    monkeypatch.setattr(config_module, "DAILY_PRODUCT_CSV_PATH", "detail.csv")
+    monkeypatch.setattr(config_module, "DAILY_SOURCE_CSV_URL", "")
+    monkeypatch.setattr(config_module, "DAILY_PRODUCT_CSV_URL", "")
+    monkeypatch.setattr(
+        config_module,
+        "now_shanghai",
+        lambda: datetime.fromisoformat("2026-03-30T00:30:00+08:00"),
+    )
+    monkeypatch.setattr(models_module, "init_db", lambda: None)
+    monkeypatch.setattr(workflows_module, "LocalHttpTaskSubmitter", lambda: "submitter")
+    monkeypatch.setattr(
+        workflows_module,
+        "submit_daily_run",
+        lambda **kwargs: captured.update(kwargs) or {"created": False, "run": {"id": 1}},
+    )
+    monkeypatch.setattr(
+        cli_module.sys,
+        "argv",
+        ["qbu-crawler", "workflow", "daily-submit"],
+    )
+
+    cli_module.main()
+
+    capsys.readouterr()
+    assert captured["logical_date"] == "2026-03-30"

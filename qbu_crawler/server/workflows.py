@@ -131,7 +131,7 @@ def submit_daily_run(
     notification_target: str | None = None,
 ) -> dict:
     """Create or reuse a daily workflow run, then submit tasks deterministically."""
-    logical_date = logical_date or date.today().isoformat()
+    logical_date = logical_date or config.now_shanghai().date().isoformat()
     trigger_key = build_daily_trigger_key(logical_date)
     notification_target = notification_target or config.WORKFLOW_NOTIFICATION_TARGET
 
@@ -167,6 +167,8 @@ def submit_daily_run(
             "service_version": __version__,
         }
     )
+    if not run.get("created", True):
+        return {"created": False, "run": run, "trigger_key": trigger_key}
 
     collect_task_ids: list[str] = []
     scrape_task_ids: list[str] = []
@@ -264,7 +266,7 @@ def _count_pending_translations_for_window(since: str, until: str) -> int:
 def _report_db_ts(value: str) -> str:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is not None:
-        dt = dt.replace(tzinfo=None)
+        dt = dt.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -598,6 +600,26 @@ class WorkflowWorker:
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
 
+            excel_path = full_report["excel_path"]
+            analytics_path = full_report.get("analytics_path")
+            pdf_path = full_report.get("pdf_path")
+            email = full_report.get("email")
+            email_ok = (email or {}).get("success")
+            models.update_workflow_run(
+                run_id,
+                excel_path=excel_path,
+                analytics_path=analytics_path,
+                pdf_path=pdf_path,
+            )
+            if not email_ok:
+                self._move_run_to_attention(
+                    run,
+                    now,
+                    (email or {}).get("error") or "send_email failed",
+                    report_phase="full_sent",
+                )
+                return True
+
             _enqueue_workflow_notification(
                 kind="workflow_full_report",
                 target=config.WORKFLOW_NOTIFICATION_TARGET,
@@ -605,11 +627,11 @@ class WorkflowWorker:
                     "run_id": run_id,
                     "logical_date": run["logical_date"],
                     "snapshot_hash": full_report["snapshot_hash"],
-                    "excel_path": full_report["excel_path"],
-                    "analytics_path": full_report.get("analytics_path"),
-                    "pdf_path": full_report.get("pdf_path"),
+                    "excel_path": excel_path,
+                    "analytics_path": analytics_path,
+                    "pdf_path": pdf_path,
                     "email_status": _workflow_email_status(
-                        email_success=(full_report.get("email") or {}).get("success"),
+                        email_success=email_ok,
                         untranslated_count=snapshot.get("untranslated_count", 0),
                     ),
                 },
@@ -619,9 +641,9 @@ class WorkflowWorker:
                 run_id,
                 status="completed",
                 report_phase="full_sent",
-                excel_path=full_report["excel_path"],
-                analytics_path=full_report.get("analytics_path"),
-                pdf_path=full_report.get("pdf_path"),
+                excel_path=excel_path,
+                analytics_path=analytics_path,
+                pdf_path=pdf_path,
                 finished_at=now,
                 error=None,
             )
@@ -673,7 +695,9 @@ def _enqueue_workflow_notification(kind: str, target: str, payload: dict, dedupe
 
 
 def _workflow_email_status(email_success: bool | None, untranslated_count: int) -> str:
-    if not email_success:
+    if email_success is None:
+        return "skipped"
+    if email_success is False:
         return "failed"
     if untranslated_count > 0:
         return f"已发送（{untranslated_count} 条评论仍在翻译中）"

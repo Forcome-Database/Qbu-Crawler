@@ -1,6 +1,10 @@
+import base64
+import logging
+import mimetypes
 from pathlib import Path
 
 import matplotlib
+import requests
 
 matplotlib.use("Agg")
 
@@ -10,33 +14,25 @@ from matplotlib import font_manager
 from matplotlib import pyplot as plt
 
 from qbu_crawler import config
-from qbu_crawler.server import report_analytics
+from qbu_crawler.server import report
+from qbu_crawler.server.report import (
+    _LABEL_DISPLAY,
+    _PRIORITY_DISPLAY,
+    _SEVERITY_DISPLAY,
+    _derive_review_label_codes,
+    _join_label_codes,
+    _join_label_counts,
+    _label_display,
+    _summary_text,
+)
+
+logger = logging.getLogger(__name__)
 
 try:
     from playwright.sync_api import sync_playwright
 except ModuleNotFoundError:
     sync_playwright = None
 
-
-_LABEL_DISPLAY = {
-    "quality_stability": "质量稳定性",
-    "structure_design": "结构设计",
-    "assembly_installation": "安装装配",
-    "material_finish": "材料与做工",
-    "cleaning_maintenance": "清洁维护",
-    "noise_power": "噪音与动力",
-    "packaging_shipping": "包装运输",
-    "service_fulfillment": "售后与履约",
-    "easy_to_use": "易上手",
-    "solid_build": "做工扎实",
-    "good_value": "性价比高",
-    "easy_to_clean": "易清洗",
-    "strong_performance": "性能强",
-    "good_packaging": "包装到位",
-}
-
-_SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
-_PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 
 _FONT_FAMILY_CANDIDATES = (
     config.REPORT_PDF_FONT_FAMILY,
@@ -81,6 +77,10 @@ def _resolve_chart_font_family(available=None):
     for family in _font_candidates():
         if family in available:
             return family
+    logger.warning(
+        "No CJK font found for chart rendering; Chinese text will display as boxes. "
+        "Install a CJK font (e.g., 'apt install fonts-noto-cjk' or set REPORT_PDF_FONT_FAMILY)."
+    )
     return "DejaVu Sans"
 
 
@@ -145,46 +145,6 @@ def build_chart_assets(analytics, output_dir):
     return chart_specs
 
 
-def _label_display(label_code):
-    return _LABEL_DISPLAY.get(label_code or "", label_code or "")
-
-
-def _join_label_counts(items):
-    values = []
-    for item in items or []:
-        label_code = item.get("label_code")
-        if not label_code:
-            continue
-        values.append(f"{_label_display(label_code)}({item.get('count') or 0})")
-    return "、".join(values) or "暂无"
-
-
-def _join_label_codes(label_codes):
-    values = [_label_display(label_code) for label_code in label_codes or [] if label_code]
-    return "、".join(values) or "暂无"
-
-
-def _summary_text(item):
-    title = (item.get("headline_cn") or item.get("headline") or "").strip()
-    body = (item.get("body_cn") or item.get("body") or "").strip()
-    if title and body:
-        return f"{title}：{body}"
-    return title or body or "暂无摘要"
-
-
-def _derive_review_label_codes(review):
-    label_codes = [item for item in (review.get("label_codes") or []) if item]
-    if label_codes:
-        return label_codes
-    labels = report_analytics.classify_review_labels(review)
-    ownership = review.get("ownership") or ""
-    preferred = "negative" if ownership == "own" else "positive"
-    preferred_codes = [item["label_code"] for item in labels if item.get("label_polarity") == preferred]
-    if preferred_codes:
-        return preferred_codes[:3]
-    return [item["label_code"] for item in labels[:3]]
-
-
 def _fallback_hero_headline(normalized):
     top_product = (normalized["self"]["risk_products"] or [None])[0]
     top_cluster = (normalized["self"]["top_negative_clusters"] or [None])[0]
@@ -218,181 +178,27 @@ def _fallback_executive_bullets(normalized):
 
 
 def _normalized_analytics(analytics):
-    analytics = analytics or {}
-    normalized = {
-        "mode": analytics.get("mode", "baseline"),
-        "mode_display": "首日全量基线版" if analytics.get("mode", "baseline") == "baseline" else "增量监控版",
-        "baseline_sample_days": analytics.get("baseline_sample_days", 0),
-        "metric_semantics": {
-            "ingested_review_rows": "reviews 实际入库行数",
-            "site_reported_review_total_current": "products.review_count 当前站点展示总评论数",
-            **(analytics.get("metric_semantics") or {}),
-        },
-        "report_copy": {
-            "hero_headline": "",
-            "executive_bullets": [],
-            **(analytics.get("report_copy") or {}),
-        },
-        "kpis": {
-            "product_count": 0,
-            "ingested_review_rows": 0,
-            "site_reported_review_total_current": 0,
-            "translated_count": 0,
-            "untranslated_count": 0,
-            "own_product_count": 0,
-            "competitor_product_count": 0,
-            "own_review_rows": 0,
-            "competitor_review_rows": 0,
-            "image_review_rows": 0,
-            "low_rating_review_rows": 0,
-            **(analytics.get("kpis") or {}),
-        },
-        "self": {
-            "risk_products": [],
-            "top_negative_clusters": [],
-            "recommendations": [],
-            **(analytics.get("self") or {}),
-        },
-        "competitor": {
-            "top_positive_themes": [],
-            "benchmark_examples": [],
-            "negative_opportunities": [],
-            **(analytics.get("competitor") or {}),
-        },
-        "appendix": {
-            "image_reviews": [],
-            "coverage": {
-                "own_products": 0,
-                "competitor_products": 0,
-                "own_reviews": 0,
-                "competitor_reviews": 0,
-                **((analytics.get("appendix") or {}).get("coverage") or {}),
-            },
-            **{
-                key: value
-                for key, value in (analytics.get("appendix") or {}).items()
-                if key != "coverage"
-            },
-        },
-        **{
-            key: value
-            for key, value in analytics.items()
-            if key not in {"metric_semantics", "report_copy", "kpis", "self", "competitor", "appendix"}
-        },
-    }
+    return report.normalize_deep_report_analytics(analytics)
 
-    negative_clusters = []
-    for item in normalized["self"]["top_negative_clusters"]:
-        cluster = dict(item)
-        cluster["label_display"] = _label_display(cluster.get("label_code"))
-        cluster["severity_display"] = _SEVERITY_DISPLAY.get(cluster.get("severity"), cluster.get("severity") or "")
-        examples = []
-        for example in cluster.get("example_reviews") or []:
-            record = dict(example)
-            record["summary_text"] = _summary_text(record)
-            record["primary_image"] = (record.get("images") or [None])[0]
-            examples.append(record)
-        cluster["example_reviews"] = examples
-        negative_clusters.append(cluster)
-    normalized["self"]["top_negative_clusters"] = negative_clusters
 
-    recommendations = []
-    for item in normalized["self"]["recommendations"]:
-        recommendation = dict(item)
-        recommendation["label_display"] = _label_display(recommendation.get("label_code"))
-        recommendation["priority_display"] = _PRIORITY_DISPLAY.get(
-            recommendation.get("priority"),
-            recommendation.get("priority") or "",
-        )
-        recommendations.append(recommendation)
-    normalized["self"]["recommendations"] = recommendations
-
-    positive_themes = []
-    for item in normalized["competitor"]["top_positive_themes"]:
-        theme = dict(item)
-        theme["label_display"] = _label_display(theme.get("label_code"))
-        positive_themes.append(theme)
-    normalized["competitor"]["top_positive_themes"] = positive_themes
-
-    benchmark_examples = []
-    for item in normalized["competitor"]["benchmark_examples"]:
-        example = dict(item)
-        example["label_display_list"] = _join_label_codes(example.get("label_codes") or [])
-        example["summary_text"] = _summary_text(example)
-        benchmark_examples.append(example)
-    normalized["competitor"]["benchmark_examples"] = benchmark_examples
-
-    opportunities = []
-    for item in normalized["competitor"]["negative_opportunities"]:
-        opportunity = dict(item)
-        opportunity["label_display_list"] = _join_label_codes(opportunity.get("label_codes") or [])
-        opportunity["summary_text"] = _summary_text(opportunity)
-        opportunities.append(opportunity)
-    normalized["competitor"]["negative_opportunities"] = opportunities
-
-    image_reviews = []
-    evidence_refs_by_sku = {}
-    evidence_refs_by_label = {}
-    for index, item in enumerate(normalized["appendix"]["image_reviews"][:4], start=1):
-        review = dict(item)
-        images = review.get("images") or []
-        label_codes = _derive_review_label_codes(review)
-        review["label_codes"] = label_codes
-        review["label_display_list"] = _join_label_codes(label_codes)
-        review["primary_image"] = images[0] if images else None
-        review["headline_display"] = review.get("headline_cn") or review.get("headline") or "图片证据"
-        review["body_display"] = review.get("body_cn") or review.get("body") or ""
-        review["evidence_id"] = f"E{index}"
-        review["supports_text"] = (
-            f"支撑结论：{review['label_display_list']}" if label_codes else "支撑结论：自有产品差评判断"
-        )
-        product_key = review.get("product_sku") or review.get("product_name") or ""
-        if product_key:
-            evidence_refs_by_sku.setdefault(product_key, []).append(review["evidence_id"])
-        for label_code in label_codes:
-            evidence_refs_by_label.setdefault(label_code, []).append(review["evidence_id"])
-        image_reviews.append(review)
-    normalized["appendix"]["image_reviews"] = image_reviews
-
-    risk_products = []
-    for item in normalized["self"]["risk_products"]:
-        product = dict(item)
-        product["top_labels_display"] = _join_label_counts(product.get("top_labels") or [])
-        evidence_refs = evidence_refs_by_sku.get(product.get("product_sku") or product.get("product_name") or "", [])
-        product["evidence_refs"] = evidence_refs
-        product["evidence_refs_display"] = "、".join(evidence_refs) or "暂无图片证据"
-        product["focus_summary"] = ""
-        for cluster in normalized["self"]["top_negative_clusters"]:
-            for example in cluster.get("example_reviews") or []:
-                if example.get("product_sku") == product.get("product_sku"):
-                    product["focus_summary"] = example.get("summary_text") or ""
-                    break
-            if product["focus_summary"]:
-                break
-        risk_products.append(product)
-    normalized["self"]["risk_products"] = risk_products
-
-    for item in normalized["self"]["top_negative_clusters"]:
-        evidence_refs = evidence_refs_by_label.get(item.get("label_code"), [])
-        item["evidence_refs"] = evidence_refs
-        item["evidence_refs_display"] = "、".join(evidence_refs) or "暂无图片证据"
-
-    for item in normalized["self"]["recommendations"]:
-        evidence_refs = evidence_refs_by_label.get(item.get("label_code"), [])
-        item["evidence_refs"] = evidence_refs
-        item["evidence_refs_display"] = "、".join(evidence_refs) or "暂无图片证据"
-
-    normalized["competitor"]["benchmark_takeaways"] = [
-        f"用户持续认可{item.get('label_display')}体验。"
-        for item in normalized["competitor"]["top_positive_themes"][:3]
-    ]
-
-    if not normalized["report_copy"]["hero_headline"]:
-        normalized["report_copy"]["hero_headline"] = _fallback_hero_headline(normalized)
-    if not normalized["report_copy"]["executive_bullets"]:
-        normalized["report_copy"]["executive_bullets"] = _fallback_executive_bullets(normalized)
-
-    return normalized
+def _inline_image_data_uri(url):
+    if not url:
+        return None
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        logger.warning("Skipping non-HTTP image URL: %s", str(url)[:100])
+        return None
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+    except Exception:
+        logger.warning("Image download failed, omitting from PDF: %s", url[:100])
+        return None
+    if len(response.content) > 2 * 1024 * 1024:
+        logger.warning("Image too large (%d bytes), omitting: %s", len(response.content), url[:100])
+        return None
+    content_type = response.headers.get("Content-Type") or mimetypes.guess_type(url)[0] or "application/octet-stream"
+    payload = base64.b64encode(response.content).decode("ascii")
+    return f"data:{content_type};base64,{payload}"
 
 
 def _inline_chart_svgs(chart_paths):
@@ -404,6 +210,8 @@ def _inline_chart_svgs(chart_paths):
 
 def render_report_html(snapshot, analytics, asset_dir):
     analytics = _normalized_analytics(analytics)
+    for item in analytics["appendix"]["image_reviews"]:
+        item["primary_image_data_uri"] = _inline_image_data_uri(item.get("primary_image"))
     chart_paths = build_chart_assets(analytics, asset_dir)
     template = _template_env().get_template("daily_report.html.j2")
     css_text = (_template_dir() / "daily_report.css").read_text(encoding="utf-8")
@@ -437,23 +245,25 @@ def generate_pdf_report(snapshot, analytics, output_path):
 
     with runtime_sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_default_timeout(config.REPORT_PDF_TIMEOUT_SECONDS * 1000)
-        page.set_content(html, wait_until="load")
-        if hasattr(page, "wait_for_function"):
-            page.wait_for_function(
-                "() => document.fonts ? document.fonts.status === 'loaded' : true"
+        try:
+            page = browser.new_page()
+            page.set_default_timeout(config.REPORT_PDF_TIMEOUT_SECONDS * 1000)
+            page.set_content(html, wait_until="load")
+            if hasattr(page, "wait_for_function"):
+                page.wait_for_function(
+                    "() => document.fonts ? document.fonts.status === 'loaded' : true"
+                )
+                page.wait_for_function(
+                    "() => Array.from(document.images).every((img) => img.complete)"
+                )
+            page.emulate_media(media="print")
+            page.pdf(
+                path=str(output_file),
+                format="A4",
+                print_background=True,
+                prefer_css_page_size=True,
             )
-            page.wait_for_function(
-                "() => Array.from(document.images).every((img) => img.complete)"
-            )
-        page.emulate_media(media="print")
-        page.pdf(
-            path=str(output_file),
-            format="A4",
-            print_background=True,
-            prefer_css_page_size=True,
-        )
-        browser.close()
+        finally:
+            browser.close()
 
     return str(output_file)

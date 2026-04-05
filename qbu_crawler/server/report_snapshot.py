@@ -165,19 +165,7 @@ def generate_full_report_from_snapshot(
                 attachment_paths=[excel_path, pdf_path],
             )
         except Exception as exc:
-            raise FullReportGenerationError(
-                str(exc),
-                analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
-                excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
-                pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
-            ) from exc
-        if not (email_result or {}).get("success"):
-            raise FullReportGenerationError(
-                (email_result or {}).get("error") or "send_email failed",
-                analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
-                excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
-                pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
-            )
+            email_result = {"success": False, "error": str(exc), "recipients": 0}
 
     return {
         "run_id": snapshot["run_id"],

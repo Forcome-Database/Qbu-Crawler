@@ -555,16 +555,13 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
 
 
-def test_generate_full_report_from_snapshot_raises_on_email_failure_with_partial_artifacts(
+def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_artifacts(
     monkeypatch,
     tmp_path,
 ):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
-    from qbu_crawler.server.report_snapshot import (
-        FullReportGenerationError,
-        generate_full_report_from_snapshot,
-    )
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
 
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
@@ -612,10 +609,120 @@ def test_generate_full_report_from_snapshot_raises_on_email_failure_with_partial
         "reviews": [{"rating": 1, "translate_status": "done"}],
     }
 
-    with pytest.raises(FullReportGenerationError, match="smtp failed") as exc_info:
-        generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+    result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
-    exc = exc_info.value
-    assert exc.excel_path == str(excel_path)
-    assert exc.pdf_path == str(pdf_path)
-    assert exc.analytics_path.endswith(".json")
+    assert result["email"] == {"success": False, "error": "smtp failed", "recipients": 0}
+    assert result["excel_path"] == str(excel_path)
+    assert result["pdf_path"] == str(pdf_path)
+    assert result["analytics_path"].endswith(".json")
+
+
+def test_generate_full_report_from_snapshot_captures_email_exception_with_partial_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
+
+    excel_path = tmp_path / "workflow-run-4-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    pdf_path = tmp_path / "workflow-run-4-full-report.pdf"
+    pdf_path.write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
+
+    def _raise_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
+        raise RuntimeError("smtp exploded")
+
+    monkeypatch.setattr(report, "send_email", _raise_send_email)
+
+    snapshot = {
+        "run_id": 4,
+        "logical_date": "2026-03-29",
+        "data_since": "2026-03-29T00:00:00+08:00",
+        "snapshot_hash": "hash-email-exception",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"rating": 1, "translate_status": "done"}],
+    }
+
+    result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+
+    assert result["email"] == {"success": False, "error": "smtp exploded", "recipients": 0}
+    assert result["excel_path"] == str(excel_path)
+    assert result["pdf_path"] == str(pdf_path)
+
+
+def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch, tmp_path):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
+
+    excel_path = tmp_path / "workflow-run-5-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    pdf_path = tmp_path / "workflow-run-5-full-report.pdf"
+    pdf_path.write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_pdf,
+        "generate_pdf_report",
+        lambda snapshot, analytics, output_path: str(pdf_path),
+    )
+    monkeypatch.setattr(
+        report,
+        "send_email",
+        lambda recipients, subject, body_text, attachment_path=None, attachment_paths=None: None,
+    )
+
+    snapshot = {
+        "run_id": 5,
+        "logical_date": "2026-03-29",
+        "data_since": "2026-03-29T00:00:00+08:00",
+        "snapshot_hash": "hash-email-none",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"rating": 1, "translate_status": "done"}],
+    }
+
+    result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+
+    assert result["email"] is None
+    assert result["excel_path"] == str(excel_path)
+    assert result["pdf_path"] == str(pdf_path)

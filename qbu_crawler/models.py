@@ -1,7 +1,7 @@
 import hashlib
 import json as _json
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from qbu_crawler.config import DB_PATH, now_shanghai
 from qbu_crawler.server.scope import Scope
@@ -236,6 +236,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_outbox_status_created_at
         ON notification_outbox (status, created_at)
     """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_sku
+        ON products (sku)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_site
+        ON products (site)
+    """)
     conn.close()
 
 
@@ -456,7 +464,7 @@ def create_workflow_run(run_dict: dict) -> dict:
     """Create a workflow run or return the existing row for the same trigger key."""
     conn = get_conn()
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO workflow_runs (
                 workflow_type, status, report_phase, logical_date, trigger_key,
@@ -495,11 +503,21 @@ def create_workflow_run(run_dict: dict) -> dict:
             },
         )
         conn.commit()
+        if cursor.rowcount == 0:
+            row = conn.execute(
+                "SELECT * FROM workflow_runs WHERE trigger_key = ?",
+                (run_dict["trigger_key"],),
+            ).fetchone()
+            data = dict(row)
+            data["created"] = False
+            return data
         row = conn.execute(
             "SELECT * FROM workflow_runs WHERE trigger_key = ?",
             (run_dict["trigger_key"],),
         ).fetchone()
-        return dict(row)
+        data = dict(row)
+        data["created"] = True
+        return data
     finally:
         conn.close()
 
@@ -1628,5 +1646,23 @@ def mark_notification_failure(
         )
         conn.commit()
         return next_status
+    finally:
+        conn.close()
+
+
+def cleanup_old_notifications(retention_days: int = 30) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            """
+            DELETE FROM notification_outbox
+            WHERE status IN ('delivered', 'deadletter')
+              AND updated_at < ?
+            """,
+            (cutoff,),
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
