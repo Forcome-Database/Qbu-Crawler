@@ -3,6 +3,7 @@
 import json
 import os
 
+from qbu_crawler import config
 from qbu_crawler.server import report_analytics
 
 # ── Display-name mappings ─────────────────────────────────────────────────────
@@ -152,12 +153,21 @@ def _compute_alert_level(normalized):
     top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
     high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
     delta = normalized.get("kpis", {}).get("negative_review_rows_delta", 0) or 0
+    health = normalized.get("kpis", {}).get("health_index")
+
+    # Red conditions
     if high_sev or delta >= 10:
         return "red", "存在高严重度问题簇，建议今日跟进"
-    elif delta > 0:
+    if health is not None and health < config.HEALTH_RED:
+        return "red", f"健康指数 {health} 低于警戒线 {config.HEALTH_RED}，建议今日跟进"
+
+    # Yellow conditions
+    if delta > 0:
         return "yellow", "差评数较上期有所上升，请持续关注"
-    else:
-        return "green", "无新增高风险信号"
+    if health is not None and health < config.HEALTH_YELLOW:
+        return "yellow", f"健康指数 {health} 偏低，请持续关注"
+
+    return "green", "无新增高风险信号"
 
 
 def _humanize_bullets(normalized):
@@ -205,6 +215,39 @@ def _humanize_bullets(normalized):
             f"本期覆盖 {kpis.get('product_count', 0)} 个产品、{kpis.get('ingested_review_rows', 0)} 条评论"
         )
     return bullets[:3]
+
+
+# ── Health & competitive gap indices ─────────────────────────────────────────
+
+
+def compute_health_index(analytics: dict) -> float:
+    """Compute 0-100 health index. Higher = healthier."""
+    kpis = analytics.get("kpis", {})
+    own_count = kpis.get("own_product_count", 0) or 1
+
+    avg_rating = kpis.get("own_avg_rating", 0) or 0
+    rating_score = min(avg_rating / 5.0, 1.0)
+
+    neg_rate = kpis.get("negative_review_rate", 0) or 0
+    neg_score = 1.0 - min(neg_rate, 1.0)
+
+    high_risk_count = sum(
+        1 for p in analytics.get("self", {}).get("risk_products", [])
+        if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
+    )
+    risk_ratio = high_risk_count / max(own_count, 1)
+    risk_score = 1.0 - min(risk_ratio, 1.0)
+
+    index = (rating_score * 0.40 + neg_score * 0.35 + risk_score * 0.25) * 100
+    return round(max(0, min(100, index)), 1)
+
+
+def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:
+    """Scalar competitive gap index: sum of all dimension gaps."""
+    return sum(
+        (g.get("competitor_positive_count", 0) + g.get("own_negative_count", 0))
+        for g in gap_analysis
+    )
 
 
 # ── Previous analytics loader ───────────────────────────────────────────────
@@ -469,6 +512,69 @@ def normalize_deep_report_analytics(analytics):
         f"用户持续认可{item.get('label_display')}体验。"
         for item in normalized["competitor"]["top_positive_themes"][:3]
     ]
+
+    # ── Compute gap analysis ──────────────────────────────────────────────
+    if "gap_analysis" not in normalized.get("competitor", {}):
+        normalized["competitor"]["gap_analysis"] = _competitor_gap_analysis(normalized)
+
+    # ── Compute health_index, competitive_gap_index, high_risk_count ─────
+    normalized["kpis"]["health_index"] = compute_health_index(normalized)
+    normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
+        normalized.get("competitor", {}).get("gap_analysis") or []
+    )
+    normalized["kpis"]["high_risk_count"] = sum(
+        1 for p in normalized.get("self", {}).get("risk_products", [])
+        if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
+    )
+
+    # ── Build kpi_cards for template ─────────────────────────────────────
+    kpis = normalized["kpis"]
+    kpi_cards = [
+        {
+            "label": "健康指数",
+            "value": kpis.get("health_index", "—"),
+            "delta_display": kpis.get("health_index_delta_display", ""),
+            "delta_class": "neutral",
+        },
+        {
+            "label": "差评率",
+            "value": kpis.get("negative_review_rate_display", "—"),
+            "delta_display": kpis.get("negative_review_rows_delta_display", ""),
+            "delta_class": "up" if (kpis.get("negative_review_rows_delta", 0) or 0) > 0 else "neutral",
+        },
+        {
+            "label": "评论总数",
+            "value": kpis.get("ingested_review_rows", 0),
+            "delta_display": kpis.get("ingested_review_rows_delta_display", ""),
+            "delta_class": "neutral",
+        },
+        {
+            "label": "高风险产品",
+            "value": kpis.get("high_risk_count", 0),
+            "delta_display": "",
+            "delta_class": "up" if kpis.get("high_risk_count", 0) > 0 else "neutral",
+        },
+        {
+            "label": "竞品差距指数",
+            "value": kpis.get("competitive_gap_index", "—"),
+            "delta_display": kpis.get("competitive_gap_index_delta_display", ""),
+            "delta_class": "neutral",
+        },
+    ]
+    normalized["kpi_cards"] = kpi_cards
+
+    # ── Build issue_cards from top_negative_clusters ─────────────────────
+    issue_cards = []
+    for cluster in normalized["self"]["top_negative_clusters"]:
+        issue_cards.append({
+            "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
+            "label_display": cluster.get("label_display", ""),
+            "review_count": cluster.get("review_count", 0),
+            "severity": cluster.get("severity", "low"),
+            "severity_display": cluster.get("severity_display", ""),
+            "affected_product_count": cluster.get("affected_product_count", 0),
+        })
+    normalized["self"]["issue_cards"] = issue_cards
 
     if not normalized["report_copy"]["hero_headline"]:
         normalized["report_copy"]["hero_headline"] = _fallback_hero_headline(normalized)

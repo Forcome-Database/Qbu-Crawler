@@ -270,3 +270,118 @@ def test_humanize_bullets_low_translation():
     }
     bullets = _humanize_bullets(normalized)
     assert any("翻译未完成" in b for b in bullets)
+
+
+# ---------------------------------------------------------------------------
+# Tests for compute_health_index and compute_competitive_gap_index
+# ---------------------------------------------------------------------------
+
+from qbu_crawler.server import report_common
+
+
+def test_compute_health_index_perfect():
+    analytics = {
+        "kpis": {"own_avg_rating": 5.0, "negative_review_rate": 0, "own_product_count": 3},
+        "self": {"risk_products": []},
+    }
+    assert report_common.compute_health_index(analytics) == 100.0
+
+
+def test_compute_health_index_worst():
+    from qbu_crawler import config
+    analytics = {
+        "kpis": {"own_avg_rating": 1.0, "negative_review_rate": 1.0, "own_product_count": 1},
+        "self": {"risk_products": [{"risk_score": config.HIGH_RISK_THRESHOLD + 1}]},
+    }
+    assert report_common.compute_health_index(analytics) == 8.0  # 0.2*40 + 0*35 + 0*25 = 8
+
+
+def test_compute_competitive_gap_index():
+    gaps = [
+        {"competitor_positive_count": 10, "own_negative_count": 5},
+        {"competitor_positive_count": 8, "own_negative_count": 3},
+    ]
+    assert report_common.compute_competitive_gap_index(gaps) == 26
+
+
+def test_compute_competitive_gap_index_empty():
+    assert report_common.compute_competitive_gap_index([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for normalize injecting health_index, kpi_cards, issue_cards
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_injects_health_index():
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "negative_review_rows": 10,
+            "translated_count": 90,
+            "own_product_count": 2,
+            "own_avg_rating": 4.5,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert "health_index" in result["kpis"]
+    assert isinstance(result["kpis"]["health_index"], float)
+    assert result["kpis"]["health_index"] > 0
+
+
+def test_normalize_injects_kpi_cards():
+    analytics = {
+        "kpis": {"ingested_review_rows": 50, "negative_review_rows": 5, "translated_count": 50},
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert "kpi_cards" in result
+    assert len(result["kpi_cards"]) == 5
+    labels = [c["label"] for c in result["kpi_cards"]]
+    assert "健康指数" in labels
+    assert "竞品差距指数" in labels
+
+
+def test_normalize_injects_issue_cards():
+    analytics = {
+        "kpis": {"ingested_review_rows": 10, "translated_count": 10},
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [
+                {"label_code": "quality_stability", "severity": "high", "review_count": 5, "example_reviews": []},
+            ],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert "issue_cards" in result["self"]
+    assert result["self"]["issue_cards"][0]["label_display"] == "质量稳定性"
+
+
+def test_alert_level_red_on_low_health(monkeypatch):
+    from qbu_crawler import config as _config
+    monkeypatch.setattr(_config, "HEALTH_RED", 60)
+    normalized = {
+        "self": {"top_negative_clusters": []},
+        "kpis": {"negative_review_rows_delta": 0, "health_index": 50},
+    }
+    level, text = _compute_alert_level(normalized)
+    assert level == "red"
+    assert "健康指数" in text
+
+
+def test_alert_level_yellow_on_moderate_health(monkeypatch):
+    from qbu_crawler import config as _config
+    monkeypatch.setattr(_config, "HEALTH_YELLOW", 80)
+    monkeypatch.setattr(_config, "HEALTH_RED", 60)
+    normalized = {
+        "self": {"top_negative_clusters": []},
+        "kpis": {"negative_review_rows_delta": 0, "health_index": 70},
+    }
+    level, text = _compute_alert_level(normalized)
+    assert level == "yellow"
+    assert "健康指数" in text
