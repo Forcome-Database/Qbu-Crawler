@@ -3,90 +3,211 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!--[if mso]>
-  <style>table { border-collapse: collapse; } td { font-family: Arial, sans-serif; }</style>
-  <![endif]-->
+  <!--[if mso]><style>table{border-collapse:collapse;}td{font-family:Arial,sans-serif;}</style><![endif]-->
 </head>
-<body style="margin:0;padding:20px;background-color:#f5f0e8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
-<table role="presentation" style="width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #d9ccb9;border-radius:8px;">
-  <!-- Header -->
+<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Microsoft YaHei',Arial,sans-serif;">
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;">
+<tr><td align="center" style="padding:20px 10px;">
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fffaf3;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+  <!-- ===== 1. HEADER BAR ===== -->
   <tr>
-    <td style="padding:20px 24px;background:#93543f;color:#ffffff;border-radius:8px 8px 0 0;">
-      <p style="margin:0;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;opacity:0.8;">Daily Product Intelligence</p>
-      <h1 style="margin:8px 0 0;font-size:18px;font-weight:700;">产品评论日报 {{ snapshot.logical_date }}</h1>
-    </td>
-  </tr>
-  <!-- KPI -->
-  <tr>
-    <td style="padding:16px 24px;">
-      <table role="presentation" style="width:100%;table-layout:fixed;">
+    <td style="background:#93543f;padding:16px 24px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <td style="padding:10px;text-align:center;border:1px solid #d9ccb9;border-radius:8px;">
-            <div style="font-size:10px;color:#766d62;">产品数</div>
-            <div style="font-size:24px;font-weight:700;color:#93543f;margin-top:4px;">{{ analytics.kpis.product_count }}</div>
-          </td>
-          <td style="width:8px;"></td>
-          <td style="padding:10px;text-align:center;border:1px solid #d9ccb9;border-radius:8px;">
-            <div style="font-size:10px;color:#766d62;">新增评论</div>
-            <div style="font-size:24px;font-weight:700;color:#93543f;margin-top:4px;">{{ analytics.kpis.ingested_review_rows }}</div>
-          </td>
-        </tr>
-        <tr><td colspan="3" style="height:8px;"></td></tr>
-        <tr>
-          <td style="padding:10px;text-align:center;border:1px solid #d9ccb9;border-radius:8px;">
-            <div style="font-size:10px;color:#766d62;">差评数</div>
-            <div style="font-size:24px;font-weight:700;color:#93543f;margin-top:4px;">{{ analytics.kpis.negative_review_rows }}</div>
-          </td>
-          <td style="width:8px;"></td>
-          <td style="padding:10px;text-align:center;border:1px solid #d9ccb9;border-radius:8px;">
-            <div style="font-size:10px;color:#766d62;">差评率</div>
-            <div style="font-size:24px;font-weight:700;color:#93543f;margin-top:4px;">{{ analytics.kpis.negative_review_rate_display }}</div>
-          </td>
+          <td style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Daily Product Intelligence</td>
+          <td style="color:rgba(255,255,255,0.7);font-size:12px;text-align:right;white-space:nowrap;">{{ snapshot.logical_date }}</td>
         </tr>
       </table>
     </td>
   </tr>
-  <!-- Bullets -->
+
+  <!-- ===== 2. HEALTH INDEX HERO ===== -->
+  {% if analytics.alert_level == 'red' %}
+  {% set hero_bg = '#f2d9d0' %}
+  {% set hero_color = '#93543f' %}
+  {% elif analytics.alert_level == 'yellow' %}
+  {% set hero_bg = '#f5ecd4' %}
+  {% set hero_color = '#b0823a' %}
+  {% else %}
+  {% set hero_bg = '#dce9e3' %}
+  {% set hero_color = '#345f57' %}
+  {% endif %}
   <tr>
-    <td style="padding:0 24px 16px;">
-      <p style="margin:0 0 8px;font-size:10px;color:#766d62;letter-spacing:1px;text-transform:uppercase;">今日要点</p>
-      <ol style="margin:0;padding-left:18px;font-size:13px;line-height:1.8;color:#201b16;">
-        {% for item in analytics.report_copy.executive_bullets_human[:3] %}
-        <li style="margin-bottom:6px;">{{ item }}</li>
-        {% else %}
-        <li>当前暂无足够样本形成明确判断。</li>
-        {% endfor %}
-      </ol>
+    <td style="background:{{ hero_bg }};padding:28px 24px 20px;text-align:center;">
+      <div style="font-size:10px;color:{{ hero_color }};letter-spacing:0.15em;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">产品健康指数</div>
+      <div style="font-size:56px;font-weight:900;color:{{ hero_color }};line-height:1;margin-bottom:6px;">{{ analytics.kpis.health_index | default('—') }}</div>
+      <div style="font-size:13px;color:{{ hero_color }};opacity:0.7;">/ 100 &nbsp;·&nbsp; {{ analytics.mode_display | default('深度日报') }}</div>
     </td>
   </tr>
-  <!-- TOP3 Risk Products -->
+
+  <!-- ===== 3. ALERT SIGNAL ===== -->
+  {% if analytics.alert_level and analytics.alert_text %}
+  {% if analytics.alert_level == 'red' %}
+  {% set alert_bg = '#93543f' %}
+  {% set alert_color = '#ffffff' %}
+  {% set alert_icon = '⚠' %}
+  {% elif analytics.alert_level == 'yellow' %}
+  {% set alert_bg = '#b0823a' %}
+  {% set alert_color = '#ffffff' %}
+  {% set alert_icon = '●' %}
+  {% else %}
+  {% set alert_bg = '#345f57' %}
+  {% set alert_color = '#ffffff' %}
+  {% set alert_icon = '✓' %}
+  {% endif %}
+  <tr>
+    <td style="background:{{ alert_bg }};padding:10px 24px;text-align:center;">
+      <span style="color:{{ alert_color }};font-size:13px;font-weight:600;">{{ alert_icon }}&nbsp;&nbsp;{{ analytics.alert_text }}</span>
+    </td>
+  </tr>
+  {% endif %}
+
+  <!-- ===== 4. KPI CARDS ===== -->
+  <tr>
+    <td style="padding:20px 24px 8px;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">关键指标</div>
+
+      <!-- Row 1: 3 cards -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <!-- Card: 新增评论 -->
+          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">新增评论</div>
+            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.ingested_review_rows | default(0) }}</div>
+            {% if analytics.kpis.ingested_review_rows_delta_display is defined and analytics.kpis.ingested_review_rows_delta_display %}
+            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.ingested_review_rows_delta_display }}</div>
+            {% endif %}
+          </td>
+          <td width="2%"></td>
+          <!-- Card: 差评数 -->
+          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">差评数</div>
+            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.negative_review_rows | default(0) }}</div>
+            {% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %}
+            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rows_delta_display }}</div>
+            {% endif %}
+          </td>
+          <td width="2%"></td>
+          <!-- Card: 差评率 -->
+          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">差评率</div>
+            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.negative_review_rate_display | default('—') }}</div>
+            {% if analytics.kpis.negative_review_rate_delta_display is defined and analytics.kpis.negative_review_rate_delta_display %}
+            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rate_delta_display }}</div>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+
+      <!-- Spacer -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:8px;"></td></tr></table>
+
+      <!-- Row 2: 2 cards -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <!-- Card: 高风险产品 -->
+          <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">高风险产品</div>
+            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.high_risk_count | default(0) }}</div>
+            <div style="font-size:10px;color:#766d62;margin-top:4px;">自有 {{ analytics.kpis.own_product_count | default(0) }} / 竞品 {{ analytics.kpis.competitor_product_count | default(0) }}</div>
+          </td>
+          <td width="2%"></td>
+          <!-- Card: 竞品差距 -->
+          <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">竞品差距指数</div>
+            <div style="font-size:26px;font-weight:800;color:#345f57;line-height:1;">{{ analytics.kpis.competitive_gap_index | default('—') }}</div>
+            {% if analytics.kpis.competitive_gap_index_delta_display is defined and analytics.kpis.competitive_gap_index_delta_display %}
+            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.competitive_gap_index_delta_display }}</div>
+            {% endif %}
+          </td>
+        </tr>
+      </table>
+
+    </td>
+  </tr>
+
+  <!-- ===== 5. ACTION ITEMS ===== -->
+  <tr>
+    <td style="padding:20px 24px 8px;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:14px;">需要关注</div>
+      {% for item in analytics.report_copy.executive_bullets[:3] %}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
+        <tr>
+          <td width="28" valign="top" style="padding-top:1px;">
+            <div style="width:22px;height:22px;background:#93543f;border-radius:50%;text-align:center;line-height:22px;font-size:12px;font-weight:700;color:#ffffff;">{{ loop.index }}</div>
+          </td>
+          <td style="padding-left:10px;font-size:13px;color:#201b16;line-height:1.65;">{{ item }}</td>
+        </tr>
+      </table>
+      {% else %}
+      <p style="font-size:13px;color:#766d62;margin:0;">当前暂无足够样本形成明确判断。</p>
+      {% endfor %}
+    </td>
+  </tr>
+
+  <!-- ===== RISK PRODUCTS TABLE (optional) ===== -->
   {% if analytics.self.risk_products %}
   <tr>
-    <td style="padding:0 24px 16px;">
-      <p style="margin:0 0 8px;font-size:10px;color:#766d62;letter-spacing:1px;text-transform:uppercase;">风险产品 TOP 3</p>
-      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:12px;">
+    <td style="padding:8px 24px 16px;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">风险产品 TOP 3</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
         <tr>
-          <td style="padding:8px;font-weight:700;background:#93543f;color:#fff;border-radius:4px 0 0 0;">产品名称</td>
-          <td style="padding:8px;font-weight:700;background:#93543f;color:#fff;text-align:center;">主要问题</td>
-          <td style="padding:8px;font-weight:700;background:#93543f;color:#fff;text-align:center;border-radius:0 4px 0 0;">差评数</td>
+          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;border-radius:4px 0 0 0;">产品名称</td>
+          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;">主要问题</td>
+          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;border-radius:0 4px 0 0;white-space:nowrap;">差评数</td>
         </tr>
         {% for item in analytics.self.risk_products[:3] %}
-        <tr>
-          <td style="padding:8px;border-bottom:1px solid #d9ccb9;">{{ item.product_name }}</td>
-          <td style="padding:8px;border-bottom:1px solid #d9ccb9;text-align:center;">{{ item.top_labels_display or '' }}</td>
-          <td style="padding:8px;border-bottom:1px solid #d9ccb9;text-align:center;">{{ item.negative_review_rows }}</td>
+        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
+          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ item.product_name }}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ item.top_labels_display or '—' }}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;color:#93543f;">{{ item.negative_review_rows }}</td>
         </tr>
         {% endfor %}
       </table>
     </td>
   </tr>
   {% endif %}
-  <!-- Footer -->
+
+  <!-- ===== 6. ATTACHMENT GUIDE ===== -->
   <tr>
-    <td style="padding:16px 24px;font-size:11px;color:#766d62;text-align:center;border-top:1px solid #d9ccb9;">
-      详见附件 PDF（分析版）和 Excel（明细版）。此邮件由自动化系统生成，请勿直接回复。
+    <td style="padding:16px 24px;background:#f0ebe2;border-top:1px solid #e8dfd4;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">附件说明</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="50%" style="padding-right:8px;">
+            <div style="padding:10px 14px;background:#ffffff;border:1px solid #e8dfd4;border-radius:6px;font-size:12px;color:#201b16;">
+              &#128196;&nbsp; <strong>PDF 分析报告</strong><br>
+              <span style="font-size:11px;color:#766d62;">研发深度诊断</span>
+            </div>
+          </td>
+          <td width="50%" style="padding-left:8px;">
+            <div style="padding:10px 14px;background:#ffffff;border:1px solid #e8dfd4;border-radius:6px;font-size:12px;color:#201b16;">
+              &#128202;&nbsp; <strong>Excel 数据明细</strong><br>
+              <span style="font-size:11px;color:#766d62;">可筛选原始数据</span>
+            </div>
+          </td>
+        </tr>
+      </table>
     </td>
   </tr>
+
+  <!-- ===== 7. FOOTER ===== -->
+  <tr>
+    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e8dfd4;">
+      <p style="margin:0;font-size:10px;color:#a89e94;line-height:1.6;">
+        产品评论智能监控系统 &nbsp;·&nbsp; 差评定义：≤{{ threshold }}星 &nbsp;·&nbsp; 内部资料<br>
+        此邮件由自动化系统生成，请勿直接回复。
+      </p>
+    </td>
+  </tr>
+
 </table>
+
+</td></tr>
+</table>
+
 </body>
 </html>

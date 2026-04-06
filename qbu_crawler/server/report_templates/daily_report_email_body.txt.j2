@@ -1,12 +1,14 @@
-各位好，
+{{ snapshot.logical_date }} 产品评论{{ "基线建档" if analytics.mode == "baseline" else "深度日报" }}
 
-附件为 {{ snapshot.logical_date }} 产品评论深度日报，数据覆盖截至 {{ snapshot.data_until }}。
+健康指数: {{ analytics.kpis.health_index | default('N/A') }}/100
+差评数: {{ analytics.kpis.negative_review_rows }}{% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %} ({{ analytics.kpis.negative_review_rows_delta_display }}){% endif %}
 
-今日要点：
-{% for item in analytics.report_copy.executive_bullets_human[:3] %}
+差评率: {{ analytics.kpis.negative_review_rate_display }}
+
+需要关注:
+{% for item in analytics.report_copy.executive_bullets[:3] %}
 {{ loop.index }}. {{ item }}
-{% else %}
-- 当前暂无足够样本形成明确判断。
 {% endfor %}
 
-详见附件 PDF（分析版）和 Excel（明细版）。
+详见附件 PDF（分析报告）和 Excel（数据明细）。
+差评定义: ≤{{ threshold }}星 | 内部资料
