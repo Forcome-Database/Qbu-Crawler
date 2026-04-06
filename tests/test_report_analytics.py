@@ -312,3 +312,141 @@ def test_hybrid_label_mode_can_replace_source_with_llm(monkeypatch, analytics_db
     stored = report_analytics.sync_review_labels(snapshot)
 
     assert stored[review_id][0]["source"] == "llm"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _build_feature_clusters (feature-based clustering)
+# ---------------------------------------------------------------------------
+
+
+def test_build_feature_clusters_basic():
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_features": '["手柄松动", "做工粗糙"]',
+            "analysis_labels": '[{"severity": "high"}]',
+            "product_sku": "SKU1",
+            "rating": 1,
+            "date_published": "2026-01-01",
+        },
+        {
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_features": '["手柄松动"]',
+            "analysis_labels": '[{"severity": "medium"}]',
+            "product_sku": "SKU2",
+            "rating": 2,
+            "date_published": "2026-02-01",
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, "own", "negative")
+    assert clusters[0]["feature_display"] == "手柄松动"
+    assert clusters[0]["review_count"] == 2
+    assert clusters[0]["affected_product_count"] == 2
+    assert clusters[0]["severity"] == "high"
+
+
+def test_build_feature_clusters_positive_polarity():
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "competitor",
+            "sentiment": "positive",
+            "analysis_features": '["易操作", "外观好"]',
+            "analysis_labels": '[{"severity": "low"}]',
+            "product_sku": "COMP-1",
+            "rating": 5,
+            "date_published": "2026-03-01",
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, "competitor", "positive")
+    assert len(clusters) == 2
+    feature_names = [c["feature_display"] for c in clusters]
+    assert "易操作" in feature_names
+    assert "外观好" in feature_names
+
+
+def test_build_feature_clusters_ignores_wrong_ownership():
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "competitor",
+            "sentiment": "negative",
+            "analysis_features": '["问题A"]',
+            "analysis_labels": '[{"severity": "high"}]',
+            "product_sku": "COMP-1",
+            "rating": 1,
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, "own", "negative")
+    assert clusters == []
+
+
+def test_build_feature_clusters_empty_features():
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_features": "[]",
+            "analysis_labels": "[]",
+            "product_sku": "SKU1",
+            "rating": 1,
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, "own", "negative")
+    assert clusters == []
+
+
+def test_build_feature_clusters_timeline():
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_features": '["问题X"]',
+            "analysis_labels": '[]',
+            "product_sku": "SKU1",
+            "rating": 2,
+            "date_published": "2026-01-15",
+        },
+        {
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_features": '["问题X"]',
+            "analysis_labels": '[]',
+            "product_sku": "SKU1",
+            "rating": 1,
+            "date_published": "2026-03-20",
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, "own", "negative")
+    assert clusters[0]["first_seen"] == "2026-01-15"
+    assert clusters[0]["last_seen"] == "2026-03-20"
+
+
+def test_has_review_analysis_data():
+    from qbu_crawler.server.report_analytics import _has_review_analysis_data
+
+    assert _has_review_analysis_data([]) is False
+    assert _has_review_analysis_data([{"analysis_features": "[]"}]) is False
+    assert _has_review_analysis_data([{"analysis_features": '["手柄松动"]'}]) is True
+    assert _has_review_analysis_data([{"features": '["问题A"]'}]) is True
+
+
+def test_build_report_analytics_includes_own_avg_rating(analytics_db):
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    analytics = build_report_analytics(_build_snapshot(run["id"], "2026-03-29"))
+
+    assert "own_avg_rating" in analytics["kpis"]
+    # Own Grinder has rating 3.7
+    assert analytics["kpis"]["own_avg_rating"] == 3.7

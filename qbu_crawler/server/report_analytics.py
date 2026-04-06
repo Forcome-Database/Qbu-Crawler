@@ -640,11 +640,95 @@ def _negative_opportunities(labeled_reviews):
     return items[:5]
 
 
+def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="negative"):
+    """Aggregate review_analysis.features into issue clusters.
+
+    Uses the LLM-enriched ``analysis_features`` / ``analysis_labels`` fields
+    from the ``review_analysis`` table (joined via ``get_reviews_with_analysis``).
+    Falls back gracefully when fields are missing or empty.
+    """
+    from collections import defaultdict
+
+    clusters = defaultdict(lambda: {"reviews": [], "products": set(), "severities": []})
+
+    for r in reviews_with_analysis:
+        if r.get("ownership") != ownership:
+            continue
+        sentiment = r.get("sentiment") or ""
+        if polarity == "negative" and sentiment not in ("negative", "mixed"):
+            continue
+        if polarity == "positive" and sentiment not in ("positive", "mixed"):
+            continue
+
+        raw_features = r.get("analysis_features") or r.get("features") or "[]"
+        raw_labels = r.get("analysis_labels") or r.get("labels") or "[]"
+        features = json.loads(raw_features) if isinstance(raw_features, str) else raw_features
+        labels = json.loads(raw_labels) if isinstance(raw_labels, str) else raw_labels
+
+        max_severity = "low"
+        for label in labels:
+            sev = label.get("severity", "low") if isinstance(label, dict) else "low"
+            if _SEVERITY_SCORE.get(sev, 0) > _SEVERITY_SCORE.get(max_severity, 0):
+                max_severity = sev
+
+        for feat in features:
+            feat = feat.strip() if isinstance(feat, str) else str(feat)
+            if not feat:
+                continue
+            clusters[feat]["reviews"].append(r)
+            clusters[feat]["products"].add(r.get("product_sku") or r.get("product_name", ""))
+            clusters[feat]["severities"].append(max_severity)
+
+    result = []
+    for feat, data in clusters.items():
+        reviews = data["reviews"]
+        dates = [r.get("date_published") for r in reviews if r.get("date_published")]
+        max_sev = max(data["severities"], key=lambda s: _SEVERITY_SCORE.get(s, 0), default="low")
+
+        result.append({
+            "feature_display": feat,
+            "label_display": feat,  # backward compat with label-based templates
+            "review_count": len(reviews),
+            "affected_product_count": len(data["products"]),
+            "severity": max_sev,
+            "severity_display": {"high": "高", "medium": "中", "low": "低"}.get(max_sev, max_sev),
+            "first_seen": min(dates) if dates else None,
+            "last_seen": max(dates) if dates else None,
+            "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
+            "image_review_count": sum(1 for r in reviews if r.get("images")),
+        })
+
+    result.sort(key=lambda c: (
+        -c["review_count"],
+        -_SEVERITY_SCORE.get(c["severity"], 0),
+        -c["image_review_count"],
+    ))
+    return result
+
+
+def _has_review_analysis_data(reviews):
+    """Check if any review in the snapshot has analysis_features populated."""
+    for r in reviews:
+        features = r.get("analysis_features") or r.get("features")
+        if features and features != "[]":
+            return True
+    return False
+
+
 def build_report_analytics(snapshot):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot)
-    top_negative_clusters = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
-    top_positive_themes = _cluster_summary_items(labeled_reviews, ownership="competitor", polarity="positive")
+
+    # Determine if review_analysis data is available for feature-based clustering
+    snapshot_reviews = snapshot.get("reviews") or []
+    use_feature_clusters = _has_review_analysis_data(snapshot_reviews)
+
+    if use_feature_clusters:
+        top_negative_clusters = _build_feature_clusters(snapshot_reviews, ownership="own", polarity="negative")
+        top_positive_themes = _build_feature_clusters(snapshot_reviews, ownership="competitor", polarity="positive")
+    else:
+        top_negative_clusters = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
+        top_positive_themes = _cluster_summary_items(labeled_reviews, ownership="competitor", polarity="positive")
     image_reviews = []
     for item in labeled_reviews:
         if item["images"]:
@@ -667,6 +751,13 @@ def build_report_analytics(snapshot):
     ]
     own_reviews = [item for item in labeled_reviews if item["review"].get("ownership") == "own"]
     competitor_reviews = [item for item in labeled_reviews if item["review"].get("ownership") == "competitor"]
+
+    # Compute own_avg_rating from own products
+    own_ratings = [p.get("rating") for p in own_products if p.get("rating")]
+    own_avg_rating = round(sum(own_ratings) / len(own_ratings), 2) if own_ratings else 0
+
+    # Use config.NEGATIVE_THRESHOLD for negative review counting
+    negative_threshold = config.NEGATIVE_THRESHOLD
 
     return {
         "run_id": snapshot.get("run_id"),
@@ -693,11 +784,12 @@ def build_report_analytics(snapshot):
             "own_review_rows": len(own_reviews),
             "competitor_review_rows": len(competitor_reviews),
             "image_review_rows": len(image_reviews),
+            "own_avg_rating": own_avg_rating,
             "negative_review_rows": sum(
-                1 for review in snapshot.get("reviews") or [] if (review.get("rating") or 0) <= 2
+                1 for review in snapshot_reviews if (review.get("rating") or 0) <= negative_threshold
             ),
             "low_rating_review_rows": sum(
-                1 for review in snapshot.get("reviews") or [] if (review.get("rating") or 0) <= 3
+                1 for review in snapshot_reviews if (review.get("rating") or 0) <= config.LOW_RATING_THRESHOLD
             ),
         },
         "self": {
