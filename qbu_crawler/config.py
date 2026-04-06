@@ -154,6 +154,12 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 REPORT_LABEL_MODE = _enum_env("REPORT_LABEL_MODE", "rule", ("rule", "hybrid"))
 REPORT_PDF_TIMEOUT_SECONDS = int(os.getenv("REPORT_PDF_TIMEOUT_SECONDS", "60"))
 REPORT_PDF_FONT_FAMILY = os.getenv("REPORT_PDF_FONT_FAMILY", "Noto Sans CJK SC").strip()
+# ── Report Thresholds ─────────────────────────────
+NEGATIVE_THRESHOLD = int(os.getenv("REPORT_NEGATIVE_THRESHOLD", "2"))
+LOW_RATING_THRESHOLD = int(os.getenv("REPORT_LOW_RATING_THRESHOLD", "3"))
+HEALTH_RED = int(os.getenv("REPORT_HEALTH_RED", "60"))
+HEALTH_YELLOW = int(os.getenv("REPORT_HEALTH_YELLOW", "80"))
+HIGH_RISK_THRESHOLD = int(os.getenv("REPORT_HIGH_RISK_THRESHOLD", "8"))
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 OPENCLAW_WORKSPACE_DIR = os.getenv("OPENCLAW_WORKSPACE_DIR", "") or os.path.join(
