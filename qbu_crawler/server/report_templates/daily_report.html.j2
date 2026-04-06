@@ -2,61 +2,58 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>每日深度分析报告 {{ snapshot.logical_date }}</title>
-  <style>
-{{ css_text | safe }}
-  </style>
-  <style>
-    :root {
-      --report-font-family: "{{ report_font_family }}", sans-serif;
-    }
-  </style>
+  <title>产品评论深度分析报告 {{ snapshot.logical_date }}</title>
+  <style>{{ css_text | safe }}</style>
+  <style>:root { --report-font-family: "{{ report_font_family }}", sans-serif; }</style>
+  <script>{{ plotly_js | safe }}</script>
 </head>
 <body class="report-shell">
+
+  {# ═══════════════════════════════════════════════════════════════════════════
+     P1 — Executive Dashboard
+     ═══════════════════════════════════════════════════════════════════════════ #}
   <section class="report-page report-page-hero">
     <div class="page-frame hero-frame">
       <div class="hero-topline">Daily Product Intelligence</div>
-      <div class="hero-grid">
+
+      {# Health gauge left + title/headline/meta right #}
+      <div class="health-gauge-wrap">
+        {% if charts.health_gauge is defined %}
+        <div class="chart-container">
+          {{ charts.health_gauge | safe }}
+        </div>
+        {% endif %}
         <div class="hero-main">
           <p class="section-kicker">主结论</p>
-          <h1>每日深度分析报告</h1>
+          <h1>产品评论深度分析报告</h1>
           <p class="hero-headline">{{ analytics.report_copy.hero_headline }}</p>
           <p class="hero-meta">Run #{{ snapshot.run_id }} ｜ {{ snapshot.logical_date }} ｜ {{ analytics.mode_display }}</p>
         </div>
-        <div class="hero-metrics">
-          <div class="metric-card">
-            <span>产品数</span>
-            <strong>{{ analytics.kpis.product_count }}</strong>
-            {% if analytics.kpis.product_count_delta is defined and analytics.kpis.product_count_delta != 0 %}
-            <span class="delta {{ 'delta-up' if analytics.kpis.product_count_delta > 0 else 'delta-down' }}">
-              {{ analytics.kpis.product_count_delta_display }} vs 上期
-            </span>
-            {% endif %}
-          </div>
-          <div class="metric-card">
-            <span>新增评论</span>
-            <strong>{{ analytics.kpis.ingested_review_rows }}</strong>
-            {% if analytics.kpis.ingested_review_rows_delta is defined and analytics.kpis.ingested_review_rows_delta != 0 %}
-            <span class="delta {{ 'delta-up' if analytics.kpis.ingested_review_rows_delta > 0 else 'delta-down' }}">
-              {{ analytics.kpis.ingested_review_rows_delta_display }} vs 上期
-            </span>
-            {% endif %}
-          </div>
-          <div class="metric-card">
-            <span>差评数</span>
-            <strong>{{ analytics.kpis.negative_review_rows }}</strong>
-            {% if analytics.kpis.negative_review_rows_delta is defined and analytics.kpis.negative_review_rows_delta != 0 %}
-            <span class="delta {{ 'delta-up' if analytics.kpis.negative_review_rows_delta > 0 else 'delta-down' }}">
-              {{ analytics.kpis.negative_review_rows_delta_display }} vs 上期
-            </span>
-            {% endif %}
-          </div>
-          <div class="metric-card">
-            <span>差评率</span>
-            <strong>{{ analytics.kpis.negative_review_rate_display }}</strong>
-          </div>
-        </div>
       </div>
+
+      {# KPI metric cards grid #}
+      {% if analytics.kpi_cards %}
+      <div class="kpi-grid">
+        {% for card in analytics.kpi_cards %}
+        <div class="metric-card">
+          <span class="metric-label">{{ card.label }}</span>
+          <strong class="metric-value">{{ card.value }}</strong>
+          {% if card.delta_display %}
+          <span class="delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Alert signal #}
+      {% if analytics.alert_level is defined and analytics.alert_level %}
+      <div class="alert-signal alert-{{ analytics.alert_level }}">
+        {{ analytics.alert_text }}
+      </div>
+      {% endif %}
+
+      {# Hero support: key judgments + report calibration #}
       <div class="hero-support">
         <article class="hero-block">
           <p class="section-kicker">关键判断</p>
@@ -69,222 +66,284 @@
         <article class="hero-block hero-block-mode">
           <p class="section-kicker">报告口径</p>
           <p class="mode-copy">当前模式：{{ analytics.mode_display }}</p>
+          <p class="mode-copy">差评阈值：{{ threshold }} 星及以下</p>
           <p class="mode-copy">自有产品 {{ analytics.kpis.own_product_count }} 个，竞品 {{ analytics.kpis.competitor_product_count }} 个。</p>
           <p class="mode-copy">自有评论 {{ analytics.kpis.own_review_rows }} 条，竞品评论 {{ analytics.kpis.competitor_review_rows }} 条。</p>
         </article>
       </div>
-      {% if analytics.alert_level is defined %}
-      <div class="alert-signal alert-{{ analytics.alert_level }}">
-        {{ analytics.alert_text }}
+    </div>
+  </section>
+
+  {# ═══════════════════════════════════════════════════════════════════════════
+     P2 — Product Health Matrix
+     ═══════════════════════════════════════════════════════════════════════════ #}
+  <section class="report-page report-section">
+    <div class="page-frame">
+      <div class="page-head">
+        <p class="section-kicker">产品健康矩阵</p>
+        <h2>产品健康度排名</h2>
+        <p class="page-note">按风险分降序排列，帮助快速锁定需要优先排查的产品。</p>
+      </div>
+
+      {# Product health data table #}
+      {% if analytics.self.risk_products %}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>产品</th>
+            <th>SKU</th>
+            <th>评分</th>
+            <th>差评率</th>
+            <th>风险分</th>
+            <th>主要问题</th>
+            <th>趋势</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in analytics.self.risk_products %}
+          <tr class="{% if item.risk_score is defined and item.risk_score >= 80 %}severity-high{% elif item.risk_score is defined and item.risk_score >= 50 %}severity-medium{% else %}severity-low{% endif %}">
+            <td>{{ item.product_name }}</td>
+            <td>{{ item.product_sku }}</td>
+            <td>{% if item.rating_avg is defined and item.rating_avg is not none %}{{ "%.1f" | format(item.rating_avg) }}{% else %}—{% endif %}</td>
+            <td>{% if item.negative_rate is defined and item.negative_rate is not none %}{{ "%.0f%%" | format(item.negative_rate * 100) }}{% else %}—{% endif %}</td>
+            <td class="fw-bold {% if item.risk_score is defined and item.risk_score >= 80 %}severity-high{% elif item.risk_score is defined and item.risk_score >= 50 %}severity-medium{% else %}severity-low{% endif %}">{{ item.risk_score }}</td>
+            <td>{{ item.top_features_display or '—' }}</td>
+            <td>{{ item.trend_display or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {# Charts: Price-Rating Quadrant + Rating Trend #}
+      {% if charts.price_rating_quadrant is defined or charts.rating_trend is defined %}
+      <div class="grid-2 mt-lg">
+        {% if charts.price_rating_quadrant is defined %}
+        <div class="chart-container">
+          {{ charts.price_rating_quadrant | safe }}
+        </div>
+        {% endif %}
+        {% if charts.rating_trend is defined %}
+        <div class="chart-container">
+          {{ charts.rating_trend | safe }}
+        </div>
+        {% endif %}
       </div>
       {% endif %}
     </div>
   </section>
 
+  {# ═══════════════════════════════════════════════════════════════════════════
+     P3 — Issue Deep Dive
+     ═══════════════════════════════════════════════════════════════════════════ #}
   <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
-        <p class="section-kicker">自有产品</p>
-        <h2>自有产品风险总览</h2>
-        <p class="page-note">先看优先排查对象，再看问题簇分布，避免日报被总量信息稀释。</p>
+        <p class="section-kicker">问题深度诊断</p>
+        <h2>按影响规模排序</h2>
+        <p class="page-note">每个问题簇附带证据引用和改良建议，便于研发快速定位根因。</p>
       </div>
-      <div class="two-up">
-        <article class="analysis-block">
-          <div class="block-head">
-            <h3>高风险产品排序</h3>
-            <p>用于确定排查顺序，不等同于最终质量定性。</p>
-          </div>
-          <div class="chart-wrap">{{ chart_svgs.self_risk_products }}</div>
-          <div class="stack-list">
-            {% for item in analytics.self.risk_products[:4] %}
-            <div class="stack-row">
-              <div>
-                <p class="row-title">{{ item.product_name }}</p>
-                <p class="row-meta">SKU: {{ item.product_sku }}</p>
-              </div>
-              <div class="row-stats">
-                <span>风险分 {{ item.risk_score }}</span>
-                <span>差评 {{ item.negative_review_rows }}</span>
-                <span>{{ item.evidence_refs_display }}</span>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-        </article>
-        <article class="analysis-block">
-          <div class="block-head">
-            <h3>问题簇排序</h3>
-            <p>只展示自有产品负向问题簇，便于研发抓主线。</p>
-          </div>
-          <div class="chart-wrap">{{ chart_svgs.self_negative_clusters }}</div>
-          <div class="stack-list">
-            {% for item in analytics.self.top_negative_clusters[:4] %}
-            <div class="stack-row">
-              <div class="row-inline">
-                <p class="row-title">{{ item.label_display }}</p>
-                <span class="tag">{{ item.severity_display }}</span>
-              </div>
-              <div class="row-stats">
-                <span>证据 {{ item.review_count }}</span>
-                <span>{{ item.evidence_refs_display }}</span>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-        </article>
-      </div>
-      {% if chart_svgs.self_risk_matrix is defined %}
-      <div class="chart-wrap">{{ chart_svgs.self_risk_matrix }}</div>
-      {% endif %}
-    </div>
-  </section>
 
-  <section class="report-page report-section">
-    <div class="page-frame">
-      <div class="page-head">
-        <p class="section-kicker">重点产品</p>
-        <h2>重点产品深挖</h2>
-        <p class="page-note">只展开当前最值得研发先看的 1 到 2 个产品，并直接引用证据编号。</p>
-      </div>
-      <div class="focus-grid">
-        {% for item in analytics.self.risk_products[:2] %}
-        <article class="focus-card">
-          <div class="focus-head">
-            <div>
-              <p class="section-kicker">重点产品 {{ loop.index }}</p>
-              <h3>{{ item.product_name }}</h3>
-              <p class="row-meta">SKU: {{ item.product_sku }}</p>
-            </div>
-            <div class="focus-stats">
-              <span>风险分 {{ item.risk_score }}</span>
-              <span>差评 {{ item.negative_review_rows }}</span>
-              <span>图片 {{ item.image_review_rows }}</span>
-            </div>
-          </div>
-          <div class="focus-body">
-            <div class="focus-panel">
-              <p class="panel-label">主要问题</p>
-              <p>{{ item.top_labels_display }}</p>
-            </div>
-            <div class="focus-panel">
-              <p class="panel-label">证据编号</p>
-              <p>{{ item.evidence_refs_display }}</p>
-            </div>
-            <div class="focus-panel focus-quote">
-              <p class="panel-label">代表性评论</p>
-              <p>{{ item.focus_summary or "当前缺少可直接展示的代表性评论。" }}</p>
-            </div>
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-    </div>
-  </section>
+      {% for item in analytics.self.issue_cards[:4] %}
+      <article class="issue-card">
+        {# Issue header: feature_display + severity badge #}
+        <div class="issue-header">
+          <h3>{{ item.feature_display }}</h3>
+          {% if item.severity_display is defined %}
+          <span class="badge severity-{{ item.severity or 'medium' }}">{{ item.severity_display }}</span>
+          {% endif %}
+        </div>
 
-  <section class="report-page report-section">
-    <div class="page-frame">
-      <div class="page-head">
-        <p class="section-kicker">问题簇</p>
-        <h2>问题簇与改良建议</h2>
-        <p class="page-note">每个建议都必须能回到证据量和图片编号，避免沦为空泛套话。</p>
-      </div>
-      <div class="issue-grid">
-        {% for item in analytics.self.top_negative_clusters[:4] %}
-        <article class="issue-card">
-          <div class="issue-top">
-            <div>
-              <h3>{{ item.label_display }}</h3>
-              <p class="row-meta">证据量 {{ item.evidence_count }} ｜ {{ item.evidence_refs_display }}</p>
-            </div>
-            <span class="priority-tag">{{ item.priority_display }}</span>
-          </div>
-          <div class="issue-facts">
-            <p>差评 {{ item.evidence_count }} 条
-              {% if item.affected_product_count is defined %} | 涉及 {{ item.affected_product_count }} 个产品{% endif %}
-              {% if item.image_review_count is defined %} | 图片证据 {{ item.image_review_count }} 条{% endif %}
-            </p>
-            {% if item.first_seen %}
-            <p class="issue-timeline">首次出现：{{ item.first_seen }} ｜ 最近一条：{{ item.last_seen }}</p>
+        {# Stats row #}
+        <div class="issue-stats">
+          <span>评论 {{ item.review_count }} 条</span>
+          {% if item.affected_product_count is defined %}
+          <span>涉及 {{ item.affected_product_count }} 个产品</span>
+          {% endif %}
+        </div>
+
+        {# Timeline #}
+        {% if item.first_seen %}
+        <p class="issue-timeline">
+          {{ item.first_seen }} → {{ item.last_seen }}
+          {% if item.duration_display %}，持续 {{ item.duration_display }}{% endif %}
+        </p>
+        {% endif %}
+
+        {# Example review quotes (up to 2) #}
+        {% if item.example_reviews %}
+        <div class="quote-stack mt-md">
+          {% for ex in item.example_reviews[:2] %}
+          <div class="quote-block">
+            {% if ex.insight_cn %}
+            <p class="quote-cn">"{{ ex.insight_cn }}"</p>
+            {% elif ex.summary_text %}
+            <p class="quote-cn">"{{ ex.summary_text }}"</p>
             {% endif %}
-          </div>
-          {% if item.example_reviews %}
-          <div class="issue-quotes">
-            {% set ex = item.example_reviews[0] %}
-            <blockquote>
-              <p class="quote-cn">"{{ ex.summary_text }}"</p>
-              {% if ex.headline_en or ex.body_en %}
-              <p class="quote-en">"{{ ex.headline_en }}{% if ex.body_en %}: {{ ex.body_en[:80] }}{% endif %}"</p>
+            {% if ex.headline_en or ex.body_en %}
+            <p class="quote-en">"{{ ex.headline_en or '' }}{% if ex.headline_en and ex.body_en %}: {% endif %}{{ (ex.body_en or '')[:100] }}"</p>
+            {% endif %}
+            <p class="quote-meta">
+              <span>评分 {{ ex.rating }}</span>
+              <span>{{ ex.author or '匿名' }}</span>
+              {% if ex.date_published %}
+              <span>{{ ex.date_published }}</span>
               {% endif %}
-              <cite>— 评分 {{ ex.rating }} · {{ ex.author or '匿名' }}{% if ex.date_published %} · {{ ex.date_published }}{% endif %}</cite>
-            </blockquote>
+            </p>
           </div>
-          {% endif %}
-          {% if item.image_evidence %}
-          <div class="issue-evidence-strip">
-            {% for img in item.image_evidence[:3] %}
-            <div class="evidence-thumb">
-              <img src="{{ img.primary_image_data_uri or img.primary_image }}" alt="{{ img.evidence_id }}">
-              <span class="evidence-label">{{ img.evidence_id }}</span>
-            </div>
-            {% endfor %}
-            {% if item.image_evidence | length > 3 %}
-            <div class="evidence-more">+{{ item.image_evidence | length - 3 }}</div>
-            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {# Image evidence strip (up to 3 thumbnails) #}
+        {% if item.image_evidence %}
+        <div class="evidence-strip">
+          {% for img in item.image_evidence[:3] %}
+          <div class="evidence-thumb">
+            <img src="{{ img.data_uri or img.url }}" alt="{{ img.evidence_id }}">
+            <span class="evidence-label">{{ img.evidence_id }}</span>
           </div>
+          {% endfor %}
+          {% if item.image_evidence | length > 3 %}
+          <div class="evidence-more">+{{ item.image_evidence | length - 3 }}</div>
           {% endif %}
-          <p class="issue-xref">详见 Excel →「评论」页 → 筛选 SKU 列</p>
-        </article>
-        {% endfor %}
-      </div>
+        </div>
+        {% endif %}
+
+        {# LLM recommendation #}
+        {% if item.recommendation %}
+        <div class="recommendation-box">
+          {{ item.recommendation }}
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
     </div>
   </section>
 
+  {# ═══════════════════════════════════════════════════════════════════════════
+     P4 — Competitive Intelligence
+     ═══════════════════════════════════════════════════════════════════════════ #}
   <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
-        <p class="section-kicker">竞品借鉴</p>
-        <h2>竞品好评 Benchmark</h2>
+        <p class="section-kicker">竞品情报</p>
+        <h2>竞品差距分析与机会</h2>
         <p class="page-note">竞品只看正向借鉴，不抢自有产品主篇幅。</p>
       </div>
+
+      {# Gap analysis table #}
       {% if analytics.competitor.gap_analysis %}
-      <div class="gap-callout">
-        <p class="section-kicker">竞品优势 vs 自有短板</p>
-        {% for gap in analytics.competitor.gap_analysis %}
-        <p>{{ gap.label_display }}：竞品好评 {{ gap.competitor_positive_count }} 条，自有差评 {{ gap.own_negative_count }} 条</p>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>竞品好评</th>
+            <th>自有差评</th>
+            <th>差距</th>
+            <th>优先级</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for gap in analytics.competitor.gap_analysis %}
+          <tr>
+            <td>{{ gap.label_display }}</td>
+            <td>{{ gap.competitor_positive_count }}</td>
+            <td>{{ gap.own_negative_count }}</td>
+            <td>{{ gap.gap }}</td>
+            <td><span class="badge severity-{{ gap.priority or 'medium' }}">{{ gap.priority_display }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {# Competitive insight recommendation #}
+      {% if analytics.report_copy.competitive_insight %}
+      <div class="recommendation-box mt-md">
+        {{ analytics.report_copy.competitive_insight }}
+      </div>
+      {% endif %}
+
+      {# Charts: Competitive Radar + Competitor Positive Themes #}
+      {% if charts.competitive_radar is defined or charts.competitor_positive_themes is defined %}
+      <div class="grid-2 mt-lg">
+        {% if charts.competitive_radar is defined %}
+        <div class="chart-container">
+          {{ charts.competitive_radar | safe }}
+        </div>
+        {% endif %}
+        {% if charts.competitor_positive_themes is defined %}
+        <div class="chart-container">
+          {{ charts.competitor_positive_themes | safe }}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {# Benchmark examples #}
+      {% if analytics.competitor.benchmark_examples %}
+      <div class="block-head mt-lg">
+        <h3>高价值样本</h3>
+        <p>少量高纯度好评样本，用于产品对标参考。</p>
+      </div>
+      <div class="quote-stack">
+        {% for item in analytics.competitor.benchmark_examples[:2] %}
+        <article class="quote-block">
+          <p class="row-title">{{ item.product_name }}</p>
+          <p class="row-meta">SKU: {{ item.product_sku }} ｜ {{ item.label_display_list }}</p>
+          <p>{{ item.summary_text }}</p>
+        </article>
         {% endfor %}
       </div>
       {% endif %}
-      <div class="two-up benchmark-layout">
-        <article class="analysis-block">
-          <div class="block-head">
-            <h3>正向主题 Top 5</h3>
-            <p>用于识别用户明确认可的稳定体验点。</p>
-          </div>
-          <div class="chart-wrap">{{ chart_svgs.competitor_positive_themes }}</div>
-          <ul class="takeaway-list">
-            {% for item in analytics.competitor.benchmark_takeaways[:3] %}
-            <li>{{ item }}</li>
-            {% endfor %}
-          </ul>
-        </article>
-        <article class="analysis-block">
-          <div class="block-head">
-            <h3>高价值样本</h3>
-            <p>只保留少量高纯度好评样本，避免 benchmark 被样本噪音带偏。</p>
-          </div>
-          <div class="quote-stack">
-            {% for item in analytics.competitor.benchmark_examples[:2] %}
-            <article class="quote-block">
-              <p class="row-title">{{ item.product_name }}</p>
-              <p class="row-meta">SKU: {{ item.product_sku }} ｜ {{ item.label_display_list }}</p>
-              <p>{{ item.summary_text }}</p>
-            </article>
-            {% endfor %}
-          </div>
-        </article>
-      </div>
+
+      {# Benchmark takeaways #}
+      {% if analytics.competitor.benchmark_takeaways %}
+      <ul class="takeaway-list mt-md">
+        {% for item in analytics.competitor.benchmark_takeaways[:3] %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     </div>
   </section>
+
+  {# ═══════════════════════════════════════════════════════════════════════════
+     P5 — Feature Sentiment Panorama (conditional)
+     ═══════════════════════════════════════════════════════════════════════════ #}
+  {% if charts.feature_heatmap is defined %}
+  <section class="report-page report-section">
+    <div class="page-frame">
+      <div class="page-head">
+        <p class="section-kicker">特征情感全景</p>
+        <h2>产品×特征 情感矩阵</h2>
+        <p class="page-note">行为产品，列为特征维度，色值表示情感倾向（绿=正面，红=负面）。</p>
+      </div>
+
+      {# Feature heatmap — full width #}
+      <div class="chart-container">
+        {{ charts.feature_heatmap | safe }}
+      </div>
+
+      {# Sentiment distribution + Rating trend side-by-side #}
+      {% if charts.sentiment_distribution is defined or charts.rating_trend is defined %}
+      <div class="grid-2 mt-lg">
+        {% if charts.sentiment_distribution is defined %}
+        <div class="chart-container">
+          {{ charts.sentiment_distribution | safe }}
+        </div>
+        {% endif %}
+        {% if charts.rating_trend is defined %}
+        <div class="chart-container">
+          {{ charts.rating_trend | safe }}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
 
 </body>
 </html>
