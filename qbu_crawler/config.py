@@ -185,6 +185,7 @@ EMAIL_RECIPIENTS = [
     for addr in os.getenv("EMAIL_RECIPIENTS", "").split(",")
     if addr.strip()
 ]
+EMAIL_BCC_MODE = os.getenv("EMAIL_BCC_MODE", "false").lower() == "true"
 
 # ── Timezone ──────────────────────────────────────────
 SHANGHAI_TZ = timezone(timedelta(hours=8))

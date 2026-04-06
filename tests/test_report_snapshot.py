@@ -314,7 +314,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
 
     captured = {}
 
-    def fake_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
+    def fake_send_email(recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None):
         captured["recipients"] = recipients
         captured["subject"] = subject
         captured["body_text"] = body_text
@@ -345,12 +345,11 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["email"] == {"success": True, "error": None, "recipients": 3}
-    assert captured["subject"] == "【产品评论基线建档】2026-03-27 自有产品风险与竞品卖点全量分析"
-    assert "本次为首日全量基线版" in captured["body_text"]
-    assert "Own Stuffer（SKU: OWN-1）" in captured["body_text"]
-    assert "质量稳定性(11)、结构设计(7)" in captured["body_text"]
-    assert "易上手：33 条" in captured["body_text"]
-    assert "Competitor Grinder（SKU: COMP-2）：包装运输" in captured["body_text"]
+    assert "产品评论日报" in captured["subject"]
+    assert "2026-03-27" in captured["subject"]
+    assert "Own Stuffer" in captured["subject"]
+    assert "今日要点：" in captured["body_text"]
+    assert "详见附件 PDF" in captured["body_text"]
     assert captured["attachment_path"] is None
     assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
 
@@ -470,7 +469,7 @@ def test_generate_full_report_from_snapshot_uses_merged_analytics_from_report_ll
     monkeypatch.setattr(
         report,
         "send_email",
-        lambda recipients, subject, body_text, attachment_path=None, attachment_paths=None: {
+        lambda recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None: {
             "success": True,
             "error": None,
             "recipients": len(recipients),
@@ -528,7 +527,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
 
     captured = {}
 
-    def fake_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
+    def fake_send_email(recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None):
         captured["attachment_path"] = attachment_path
         captured["attachment_paths"] = attachment_paths
         return {"success": True, "error": None, "recipients": len(recipients)}
@@ -589,7 +588,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     monkeypatch.setattr(
         report,
         "send_email",
-        lambda recipients, subject, body_text, attachment_path=None, attachment_paths=None: {
+        lambda recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None: {
             "success": False,
             "error": "smtp failed",
             "recipients": 0,
@@ -649,7 +648,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
         lambda snapshot, analytics, output_path: str(pdf_path),
     )
 
-    def _raise_send_email(recipients, subject, body_text, attachment_path=None, attachment_paths=None):
+    def _raise_send_email(recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None):
         raise RuntimeError("smtp exploded")
 
     monkeypatch.setattr(report, "send_email", _raise_send_email)
@@ -705,7 +704,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     monkeypatch.setattr(
         report,
         "send_email",
-        lambda recipients, subject, body_text, attachment_path=None, attachment_paths=None: None,
+        lambda recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None: None,
     )
 
     snapshot = {

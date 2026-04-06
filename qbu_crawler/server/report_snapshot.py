@@ -157,11 +157,13 @@ def generate_full_report_from_snapshot(
     email_result = None
     if send_email:
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
+        body_html = report.render_daily_email_html(snapshot, analytics)
         try:
             email_result = report.send_email(
                 recipients=config.EMAIL_RECIPIENTS,
                 subject=subject,
                 body_text=body,
+                body_html=body_html,
                 attachment_paths=[excel_path, pdf_path],
             )
         except Exception as exc:

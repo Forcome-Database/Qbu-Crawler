@@ -1,107 +1,12 @@
 各位好，
 
-附件为 {{ snapshot.logical_date }} 产品评论深度分析日报（PDF）及评论明细（Excel），请查收。
+附件为 {{ snapshot.logical_date }} 产品评论深度日报，数据覆盖截至 {{ snapshot.data_until }}。
 
-{% if analytics.mode == "baseline" %}
-本次为首日全量基线版，重点用于建立当前产品评论全貌、识别自有产品核心风险、提炼竞品高频卖点，并为后续日增量监测提供参考基线。
+今日要点：
+{% for item in analytics.report_copy.executive_bullets_human[:3] %}
+{{ loop.index }}. {{ item }}
 {% else %}
-本日报基于截至 {{ snapshot.data_until }} 的最新抓取与评论数据生成，重点面向产品研发，同时兼顾产品运营、售后与管理层决策使用。
-{% endif %}
-
-一、核心概览
-1. 当前纳入分析产品 {{ analytics.kpis.product_count }} 个，其中自有产品 {{ analytics.kpis.own_product_count }} 个，竞品 {{ analytics.kpis.competitor_product_count }} 个。
-2. 当前纳入分析评论 {{ analytics.kpis.ingested_review_rows }} 条，其中自有产品评论 {{ analytics.kpis.own_review_rows }} 条，竞品评论 {{ analytics.kpis.competitor_review_rows }} 条。
-3. 图片评论 {{ analytics.kpis.image_review_rows }} 条，低分评论 {{ analytics.kpis.low_rating_review_rows }} 条。
-4. 评论翻译完成 {{ analytics.kpis.translated_count }} 条，未完成 {{ analytics.kpis.untranslated_count }} 条。
-
-二、今日核心判断
-{% if analytics.self.risk_products %}
-1. 当前最需要优先关注的自有产品为：
-{% for product in analytics.self.risk_products[:3] %}
-- {{ product.product_name }}{{ "（SKU: %s）"|format(product.product_sku) if product.product_sku else "" }}：低分相关评论 {{ product.negative_review_rows }} 条，图片评论 {{ product.image_review_rows }} 条，主要问题为 {{ product.top_labels_display }}
+- 当前暂无足够样本形成明确判断。
 {% endfor %}
-{% else %}
-1. 当前未识别出高风险自有产品。
-{% endif %}
 
-{% if analytics.self.top_negative_clusters %}
-2. 自有产品高频问题主要集中在：
-{% for cluster in analytics.self.top_negative_clusters[:3] %}
-- {{ cluster.label_display }}：{{ cluster.review_count }} 条{{ "，其中图片评论 %s 条"|format(cluster.image_review_count) if cluster.image_review_count else "" }}，严重度 {{ cluster.severity_display }}
-{% endfor %}
-{% else %}
-2. 当前未识别出显著的自有产品负向问题簇。
-{% endif %}
-
-{% if analytics.competitor.top_positive_themes %}
-3. 竞品用户高频认可的方向主要为：
-{% for theme in analytics.competitor.top_positive_themes[:3] %}
-- {{ theme.label_display }}：{{ theme.review_count }} 条
-{% endfor %}
-{% else %}
-3. 当前未识别出显著的竞品正向主题。
-{% endif %}
-
-三、自有产品重点风险
-{% if analytics.self.risk_products %}
-{% for product in analytics.self.risk_products[:3] %}
-{{ loop.index }}. {{ product.product_name }}{{ "（SKU: %s）"|format(product.product_sku) if product.product_sku else "" }}
-- 低分相关评论 {{ product.negative_review_rows }} 条，图片评论 {{ product.image_review_rows }} 条
-- 主要问题：{{ product.top_labels_display }}
-
-{% endfor %}
-{% else %}
-当前无重点风险产品。
-{% endif %}
-
-四、自有产品问题簇与改良方向
-{% if analytics.self.recommendations %}
-{% for item in analytics.self.recommendations[:4] %}
-{{ loop.index }}. {{ item.label_display }}
-- 证据量：{{ item.evidence_count }} 条
-- 优先级：{{ item.priority_display }}
-- 可能原因边界：{{ item.possible_cause_boundary }}
-- 建议改良方向：{{ item.improvement_direction }}
-
-{% endfor %}
-{% else %}
-当前无可输出的改良建议。
-{% endif %}
-
-五、竞品正向借鉴
-{% if analytics.competitor.top_positive_themes %}
-竞品好评高频集中在以下方向：
-{% for theme in analytics.competitor.top_positive_themes[:5] %}
-- {{ theme.label_display }}：{{ theme.review_count }} 条{{ "，图片评论 %s 条"|format(theme.image_review_count) if theme.image_review_count else "" }}
-{% endfor %}
-{% endif %}
-
-{% if analytics.competitor.benchmark_examples %}
-值得重点借鉴的代表性评价包括：
-{% for item in analytics.competitor.benchmark_examples[:2] %}
-{{ loop.index }}. {{ item.product_name }}{{ "（SKU: %s）"|format(item.product_sku) if item.product_sku else "" }}
-- 主题：{{ item.label_display_list }}
-- 原文摘要：{{ item.summary_text }}
-
-{% endfor %}
-{% endif %}
-
-六、竞品机会窗口
-{% if analytics.competitor.negative_opportunities %}
-以下竞品短板可作为我方机会窗口：
-{% for item in analytics.competitor.negative_opportunities[:2] %}
-- {{ item.product_name }}{{ "（SKU: %s）"|format(item.product_sku) if item.product_sku else "" }}：{{ item.label_display_list }}
-{% endfor %}
-{% else %}
-当前未识别出显著竞品负向机会窗口。
-{% endif %}
-
-七、附件说明
-1. PDF：深度分析阅读版，适合管理层与研发快速浏览重点结论。
-2. Excel：产品与评论明细版，适合运营、售后和研发继续下钻核查。
-
-{% if analytics.mode == "baseline" %}
-当前版本为首日基线版，后续日常邮件将重点展示新增变化和基线偏离情况。
-{% endif %}
-
-谢谢。
+详见附件 PDF（分析版）和 Excel（明细版）。

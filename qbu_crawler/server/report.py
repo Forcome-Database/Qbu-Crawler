@@ -323,6 +323,7 @@ def send_email(
     recipients: list[str],
     subject: str,
     body_text: str,
+    body_html: str | None = None,
     attachment_path: str | None = None,
     attachment_paths: list[str] | None = None,
 ) -> dict:
@@ -347,11 +348,20 @@ def send_email(
     for attempt in range(_SMTP_RETRY_ATTEMPTS):
         smtp = None
         try:
-            msg = MIMEMultipart()
+            msg = MIMEMultipart("mixed")
             msg["From"] = config.SMTP_FROM or config.SMTP_USER
-            msg["To"] = ", ".join(recipients)
+            if config.EMAIL_BCC_MODE:
+                msg["To"] = config.SMTP_FROM or config.SMTP_USER
+                msg["Bcc"] = ", ".join(recipients)
+            else:
+                msg["To"] = ", ".join(recipients)
             msg["Subject"] = subject
-            msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+            body_part = MIMEMultipart("alternative")
+            body_part.attach(MIMEText(body_text, "plain", "utf-8"))
+            if body_html:
+                body_part.attach(MIMEText(body_html, "html", "utf-8"))
+            msg.attach(body_part)
 
             for path in attachments:
                 if not os.path.isfile(path):
@@ -417,16 +427,42 @@ def _report_template_env():
     )
 
 
+def render_daily_email_html(snapshot, analytics):
+    """Render the HTML email template."""
+    normalized = normalize_deep_report_analytics(analytics)
+    _ensure_humanized_bullets(normalized)
+    env = _report_template_env()
+    template = env.get_template("daily_report_email.html.j2")
+    return template.render(snapshot=snapshot, analytics=normalized)
+
+
+def _build_email_subject(normalized, logical_date):
+    """Generate a dynamic email subject line with alert level prefix."""
+    from qbu_crawler.server.report_common import _compute_alert_level
+    alert_level, _ = _compute_alert_level(normalized)
+    prefix = {"red": "[需关注] ", "yellow": "[注意] ", "green": ""}[alert_level]
+    top = (normalized.get("self", {}).get("risk_products") or [None])[0]
+    top_name = top["product_name"] if top else ""
+    count = normalized.get("kpis", {}).get("product_count", 0)
+    return f"{prefix}产品评论日报 {logical_date} — {top_name} 等 {count} 个产品"
+
+
+def _ensure_humanized_bullets(normalized):
+    """Ensure executive_bullets_human exists in normalized analytics."""
+    from qbu_crawler.server.report_common import _humanize_bullets
+    report_copy = normalized.setdefault("report_copy", {})
+    if not report_copy.get("executive_bullets_human"):
+        report_copy["executive_bullets_human"] = _humanize_bullets(normalized)
+
+
 def build_daily_deep_report_email(snapshot, analytics):
-    analytics = normalize_deep_report_analytics(analytics)
+    normalized = normalize_deep_report_analytics(analytics)
+    _ensure_humanized_bullets(normalized)
+    subject = _build_email_subject(normalized, snapshot["logical_date"])
     template_env = _report_template_env()
-    subject = template_env.get_template("daily_report_email_subject.txt.j2").render(
-        snapshot=snapshot,
-        analytics=analytics,
-    ).strip()
     body = template_env.get_template("daily_report_email_body.txt.j2").render(
         snapshot=snapshot,
-        analytics=analytics,
+        analytics=normalized,
     ).strip()
     return subject, f"{body}\n"
 

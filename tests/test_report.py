@@ -126,26 +126,87 @@ def test_query_report_data_future_cutoff(patch_db, monkeypatch):
     assert reviews == []
 
 
-def test_query_report_data_respects_until(patch_db, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", patch_db)
+def test_query_report_data_respects_until(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "bounded-window.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+    models.init_db()
 
-    conn = _get_test_conn(patch_db)
+    conn = _get_test_conn(db_file)
     conn.execute(
         """
         INSERT INTO products (url, site, name, sku, price, stock_status,
                               review_count, rating, ownership, scraped_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+2 hours'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            "https://example.com/product/2",
+            "https://example.com/product/in-window",
+            "basspro",
+            "Window Product",
+            "SKU-001",
+            49.99,
+            "in_stock",
+            1,
+            4.5,
+            "own",
+            "2026-03-27 08:30:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "https://example.com/product/out-window",
             "basspro",
             "Future Product",
             "SKU-002",
             59.99,
             "in_stock",
-            0,
-            0,
+            1,
+            4.0,
             "competitor",
+            "2026-03-27 10:30:00",
+        ),
+    )
+    product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-001'").fetchone()["id"]
+    future_product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-002'").fetchone()["id"]
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            product_id,
+            "Alice",
+            "Included",
+            "Inside window",
+            "hash-included",
+            5.0,
+            "2026-03-27",
+            "[]",
+            "2026-03-27 08:35:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            future_product_id,
+            "Bob",
+            "Excluded",
+            "Outside window",
+            "hash-excluded",
+            5.0,
+            "2026-03-27",
+            "[]",
+            "2026-03-27 10:35:00",
         ),
     )
     conn.commit()
@@ -153,13 +214,110 @@ def test_query_report_data_respects_until(patch_db, monkeypatch):
 
     from qbu_crawler.server.report import query_report_data
 
-    since = datetime.now(timezone.utc) - timedelta(hours=1)
-    until = datetime.now(timezone.utc) + timedelta(minutes=30)
-    products, reviews = query_report_data(since, until=until)
+    products, reviews = query_report_data(
+        "2026-03-27T00:00:00+00:00",
+        until="2026-03-27T02:00:00+00:00",
+    )
 
-    assert len(products) == 1
-    assert products[0]["sku"] == "SKU-001"
-    assert len(reviews) == 1
+    assert [item["sku"] for item in products] == ["SKU-001"]
+    assert [item["author"] for item in reviews] == ["Alice"]
+
+
+def test_query_report_data_converts_aware_window_to_shanghai_time(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "aware-window.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+    models.init_db()
+
+    conn = _get_test_conn(db_file)
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "https://example.com/product/early",
+            "basspro",
+            "Early Product",
+            "SKU-EARLY",
+            39.99,
+            "in_stock",
+            1,
+            4.0,
+            "own",
+            "2026-03-27 07:30:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "https://example.com/product/late",
+            "basspro",
+            "Late Product",
+            "SKU-LATE",
+            49.99,
+            "in_stock",
+            1,
+            4.0,
+            "own",
+            "2026-03-27 08:30:00",
+        ),
+    )
+    early_product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-EARLY'").fetchone()["id"]
+    late_product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-LATE'").fetchone()["id"]
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            early_product_id,
+            "Alice",
+            "Too early",
+            "Should be excluded",
+            "hash-early",
+            5.0,
+            "2026-03-27",
+            "[]",
+            "2026-03-27 07:35:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            late_product_id,
+            "Bob",
+            "In window",
+            "Should be included",
+            "hash-late",
+            5.0,
+            "2026-03-27",
+            "[]",
+            "2026-03-27 08:35:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    from qbu_crawler.server.report import query_report_data
+
+    products, reviews = query_report_data(
+        "2026-03-27T00:00:00+00:00",
+        until="2026-03-28T00:00:00+00:00",
+    )
+
+    assert [item["sku"] for item in products] == ["SKU-LATE"]
+    assert [item["author"] for item in reviews] == ["Bob"]
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +509,34 @@ def test_send_email_supports_multiple_attachments(monkeypatch, tmp_path):
     assert filenames == ["a.xlsx", "b.pdf"]
 
 
+def test_send_email_encodes_non_ascii_attachment_filename(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_PORT", 587)
+    monkeypatch.setattr(config, "SMTP_USER", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(config, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+
+    attachment = tmp_path / "日报分析.pdf"
+    attachment.write_text("pdf", encoding="utf-8")
+
+    mock_smtp_instance = MagicMock()
+
+    with patch("smtplib.SMTP", return_value=mock_smtp_instance):
+        from qbu_crawler.server.report import send_email
+
+        result = send_email(
+            recipients=["recipient@example.com"],
+            subject="Test",
+            body_text="Body",
+            attachment_path=str(attachment),
+        )
+
+    assert result["success"] is True
+    raw_message = mock_smtp_instance.sendmail.call_args.args[2]
+    assert "filename*=" in raw_message
+
+
 def test_send_email_attachment_path_still_works(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
     monkeypatch.setattr(config, "SMTP_PORT", 587)
@@ -430,6 +616,96 @@ def test_send_email_smtp_error(monkeypatch):
     assert result["recipients"] == 0
 
 
+def test_send_email_retries_transient_send_failure(monkeypatch):
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_PORT", 587)
+    monkeypatch.setattr(config, "SMTP_USER", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(config, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+
+    smtp_instances = []
+
+    class FakeSMTP:
+        def __init__(self, host, port):
+            assert host == "smtp.example.com"
+            assert port == 587
+            self.quit_calls = 0
+            self.sendmail_calls = 0
+            smtp_instances.append(self)
+
+        def starttls(self):
+            return None
+
+        def login(self, *_args):
+            return None
+
+        def sendmail(self, *_args):
+            self.sendmail_calls += 1
+            if len(smtp_instances) == 1:
+                raise smtplib.SMTPServerDisconnected("temporary drop")
+            return None
+
+        def quit(self):
+            self.quit_calls += 1
+
+    monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    from qbu_crawler.server.report import send_email
+
+    result = send_email(
+        recipients=["recipient@example.com"],
+        subject="Test",
+        body_text="Body",
+    )
+
+    assert result["success"] is True
+    assert len(smtp_instances) == 2
+    assert smtp_instances[0].quit_calls == 1
+    assert smtp_instances[1].quit_calls == 1
+
+
+def test_send_email_closes_connection_on_sendmail_error(monkeypatch):
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(config, "SMTP_PORT", 587)
+    monkeypatch.setattr(config, "SMTP_USER", "")
+    monkeypatch.setattr(config, "SMTP_PASSWORD", "")
+    monkeypatch.setattr(config, "SMTP_FROM", "sender@example.com")
+    monkeypatch.setattr(config, "SMTP_USE_SSL", False)
+
+    smtp_instances = []
+
+    class FakeSMTP:
+        def __init__(self, *_args):
+            self.quit_calls = 0
+            smtp_instances.append(self)
+
+        def starttls(self):
+            return None
+
+        def sendmail(self, *_args):
+            raise smtplib.SMTPException("send failed")
+
+        def quit(self):
+            self.quit_calls += 1
+
+    monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
+    from qbu_crawler.server.report import send_email
+
+    result = send_email(
+        recipients=["recipient@example.com"],
+        subject="Test",
+        body_text="Body",
+    )
+
+    assert result["success"] is False
+    assert len(smtp_instances) == 3
+    assert all(item.quit_calls == 1 for item in smtp_instances)
+
+
 # ---------------------------------------------------------------------------
 # load_email_recipients
 # ---------------------------------------------------------------------------
@@ -457,6 +733,42 @@ def test_load_email_recipients_missing_file():
 
     result = load_email_recipients("/nonexistent/path/recipients.txt")
     assert result == []
+
+
+def test_build_daily_deep_report_email_keeps_only_core_summary():
+    from qbu_crawler.server.report import build_daily_deep_report_email
+
+    subject, body = build_daily_deep_report_email(
+        {
+            "logical_date": "2026-04-03",
+            "data_until": "2026-04-04T00:00:00+08:00",
+        },
+        {
+            "mode": "incremental",
+            "report_copy": {
+                "executive_bullets": [
+                    "自有产品 Own Grinder 差评集中在质量稳定性。",
+                    "竞品 Competitor Grinder 的做工口碑持续稳定。",
+                    "图片证据已覆盖本期主要风险样本。",
+                ]
+            },
+            "kpis": {
+                "product_count": 12,
+                "ingested_review_rows": 186,
+                "translated_count": 180,
+                "untranslated_count": 6,
+            },
+        },
+    )
+
+    assert subject
+    assert "产品评论日报" in subject
+    assert "2026-04-03" in subject
+    assert "今日要点：" in body
+    assert "详见附件 PDF" in body
+    assert "自有产品重点风险" not in body
+    assert "问题簇与改良方向" not in body
+    assert "竞品机会窗口" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -687,14 +999,13 @@ def test_build_daily_deep_report_email_renders_incremental_summary():
 
     subject, body = report.build_daily_deep_report_email(snapshot, analytics)
 
-    assert subject == "【产品评论深度日报】2026-04-03 自有产品风险与竞品卖点监测"
-    assert "截至 2026-04-03T23:59:59+08:00 的最新抓取与评论数据生成" in body
-    assert "Own Grinder（SKU: OWN-1）" in body
-    assert "质量稳定性(5)、材料与做工(3)" in body
-    assert "做工扎实：18 条" in body
-    assert "\n- 做工扎实：18 条，图片评论 2 条\n- 性能强：12 条\n" in body
-    assert "主题：做工扎实、性能强" in body
-    assert "Competitor Grinder（SKU: COMP-2）：售后与履约" in body
+    assert "产品评论日报" in subject
+    assert "2026-04-03" in subject
+    assert "Own Grinder" in subject
+    assert "今日要点：" in body
+    assert "2026-04-03" in body
+    assert "详见附件 PDF" in body
+    assert "问题簇与改良方向" not in body
 
 
 def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
