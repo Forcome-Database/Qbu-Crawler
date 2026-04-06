@@ -134,7 +134,7 @@ def init_db():
             llm_model       TEXT,
             prompt_version  TEXT NOT NULL,
             token_usage     INTEGER,
-            analyzed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            analyzed_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(review_id, prompt_version)
         );
 
@@ -1727,16 +1727,22 @@ def save_review_analysis(
     llm_model: str | None = None,
     prompt_version: str = "v1",
     token_usage: int | None = None,
+    analyzed_at: str | None = None,
 ) -> None:
-    """UPSERT a review analysis row. Conflicts on (review_id, prompt_version) update all fields."""
+    """UPSERT a review analysis row. Conflicts on (review_id, prompt_version) update all fields.
+
+    analyzed_at: explicit timestamp string (e.g. "2026-01-01 00:00:00"). When omitted,
+    defaults to the current local time formatted as "%Y-%m-%d %H:%M:%S".
+    """
+    ts = analyzed_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_conn()
     try:
         conn.execute(
             """
             INSERT INTO review_analysis
                 (review_id, sentiment, sentiment_score, labels, features,
-                 insight_cn, insight_en, llm_model, prompt_version, token_usage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 insight_cn, insight_en, llm_model, prompt_version, token_usage, analyzed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(review_id, prompt_version) DO UPDATE SET
                 sentiment       = excluded.sentiment,
                 sentiment_score = excluded.sentiment_score,
@@ -1746,7 +1752,7 @@ def save_review_analysis(
                 insight_en      = excluded.insight_en,
                 llm_model       = excluded.llm_model,
                 token_usage     = excluded.token_usage,
-                analyzed_at     = CURRENT_TIMESTAMP
+                analyzed_at     = excluded.analyzed_at
             """,
             (
                 review_id,
@@ -1759,6 +1765,7 @@ def save_review_analysis(
                 llm_model,
                 prompt_version,
                 token_usage,
+                ts,
             ),
         )
         conn.commit()
@@ -1819,7 +1826,7 @@ def get_reviews_with_analysis(
             ra.sentiment,
             ra.sentiment_score,
             ra.labels   AS analysis_labels,
-            ra.features,
+            ra.features AS analysis_features,
             ra.insight_cn AS analysis_insight_cn,
             ra.insight_en AS analysis_insight_en
         FROM reviews r

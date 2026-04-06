@@ -184,14 +184,14 @@ class TestGetReviewAnalysisLatestVersion:
             sentiment="positive",
             insight_en="v1 result",
             prompt_version="v1",
+            analyzed_at="2026-01-01 00:00:00",
         )
-        # SQLite CURRENT_TIMESTAMP has 1-second granularity in tests; force a later analyzed_at
-        import time; time.sleep(1.1)
         models.save_review_analysis(
             review_id=review_id,
             sentiment="negative",
             insight_en="v2 result",
             prompt_version="v2",
+            analyzed_at="2026-01-02 00:00:00",
         )
 
         result = models.get_review_analysis(review_id)
