@@ -296,7 +296,16 @@ def test_generate_pdf_uses_playwright_print_contract(monkeypatch, tmp_path):
     assert calls["media"] == "print"
     assert calls["pdf"]["format"] == "A4"
     assert calls["pdf"]["print_background"] is True
-    assert calls["pdf"]["prefer_css_page_size"] is True
+    assert calls["pdf"]["prefer_css_page_size"] is False
+    assert calls["pdf"]["display_header_footer"] is True
+    assert calls["pdf"]["margin"] == {"top": "18mm", "bottom": "16mm", "left": "10mm", "right": "10mm"}
+    assert "header_template" in calls["pdf"]
+    assert "footer_template" in calls["pdf"]
+    assert "Daily Product Intelligence" in calls["pdf"]["header_template"]
+    assert "2026-04-02" in calls["pdf"]["header_template"]
+    assert "Run #1" in calls["pdf"]["footer_template"]
+    assert "pageNumber" in calls["pdf"]["footer_template"]
+    assert "totalPages" in calls["pdf"]["footer_template"]
     assert "timeout" not in calls["pdf"]
 
 

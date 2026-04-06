@@ -19,10 +19,16 @@ from qbu_crawler.server.report_common import (
     _LABEL_DISPLAY,
     _PRIORITY_DISPLAY,
     _SEVERITY_DISPLAY,
+    _competitor_gap_analysis,
+    _compute_alert_level,
+    _compute_kpi_deltas,
     _derive_review_label_codes,
+    _generate_hero_headline,
+    _humanize_bullets,
     _join_label_codes,
     _join_label_counts,
     _label_display,
+    _load_previous_analytics,
     _summary_text,
 )
 
@@ -275,9 +281,35 @@ def _inline_chart_svgs(chart_paths):
 
 def render_report_html(snapshot, analytics, asset_dir):
     analytics = _normalized_analytics(analytics)
-    for item in analytics["appendix"]["image_reviews"]:
+
+    # Delta 链路
+    prev_analytics = _load_previous_analytics(snapshot.get("run_id"))
+    kpi_deltas = _compute_kpi_deltas(analytics["kpis"], prev_analytics)
+    analytics["kpis"].update(kpi_deltas)
+
+    # Hero headline
+    if not analytics.get("report_copy", {}).get("hero_headline"):
+        analytics.setdefault("report_copy", {})["hero_headline"] = _generate_hero_headline(analytics)
+
+    # Alert level
+    alert_level, alert_text = _compute_alert_level(analytics)
+    analytics["alert_level"] = alert_level
+    analytics["alert_text"] = alert_text
+
+    # Humanized bullets
+    analytics.setdefault("report_copy", {})["executive_bullets_human"] = _humanize_bullets(analytics)
+
+    # Gap analysis
+    analytics.setdefault("competitor", {})["gap_analysis"] = _competitor_gap_analysis(analytics)
+
+    # 图片 data URI
+    for item in analytics.get("appendix", {}).get("image_reviews", []):
         item["primary_image_data_uri"] = _inline_image_data_uri(item.get("primary_image"))
+
+    # 图表
     chart_paths = build_chart_assets(analytics, asset_dir)
+
+    # 模板渲染
     template = _template_env().get_template("daily_report.html.j2")
     css_text = (_template_dir() / "daily_report.css").read_text(encoding="utf-8")
     return template.render(
@@ -296,6 +328,26 @@ def write_report_html_preview(snapshot, analytics, output_path):
     html = render_report_html(snapshot, analytics, str(asset_dir))
     output_file.write_text(html, encoding="utf-8")
     return str(output_file)
+
+
+def _build_header_template(snapshot):
+    date = snapshot.get("logical_date", "")
+    return (
+        '<div style="width:100%;font-size:8px;color:#766d62;overflow:hidden;">'
+        f'<span style="float:left;">Daily Product Intelligence · 内部资料</span>'
+        f'<span style="float:right;">{date}</span>'
+        '</div>'
+    )
+
+
+def _build_footer_template(snapshot):
+    run_id = snapshot.get("run_id", "")
+    return (
+        '<div style="width:100%;font-size:8px;color:#766d62;overflow:hidden;">'
+        f'<span style="float:left;">Run #{run_id}</span>'
+        '<span style="float:right;"><span class="pageNumber"></span> / <span class="totalPages"></span></span>'
+        '</div>'
+    )
 
 
 def generate_pdf_report(snapshot, analytics, output_path):
@@ -326,7 +378,11 @@ def generate_pdf_report(snapshot, analytics, output_path):
                 path=str(output_file),
                 format="A4",
                 print_background=True,
-                prefer_css_page_size=True,
+                prefer_css_page_size=False,
+                display_header_footer=True,
+                margin={"top": "18mm", "bottom": "16mm", "left": "10mm", "right": "10mm"},
+                header_template=_build_header_template(snapshot),
+                footer_template=_build_footer_template(snapshot),
             )
         finally:
             browser.close()
