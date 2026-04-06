@@ -228,7 +228,8 @@ def compute_health_index(analytics: dict) -> float:
     avg_rating = kpis.get("own_avg_rating", 0) or 0
     rating_score = min(avg_rating / 5.0, 1.0)
 
-    neg_rate = kpis.get("negative_review_rate", 0) or 0
+    # Use own-only negative rate (not polluted by competitor reviews)
+    neg_rate = kpis.get("own_negative_review_rate") or kpis.get("negative_review_rate", 0) or 0
     neg_score = 1.0 - min(neg_rate, 1.0)
 
     high_risk_count = sum(
