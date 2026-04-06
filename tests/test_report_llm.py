@@ -284,3 +284,179 @@ def test_merge_final_analytics_overrides_unvalidated_sections():
     assert final_analytics["competitor"]["benchmark_examples"][0]["review_id"] == 201
     assert final_analytics["validated_findings"]["own_image_evidence"][0]["id"] == 101
     assert final_analytics["report_copy"]["hero_headline"] == "聚焦可靠性"
+
+
+# ---------------------------------------------------------------------------
+# Tests for generate_report_insights (new pipeline)
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def _insights_analytics():
+    """Build a minimal analytics dict for insights testing."""
+    return {
+        "kpis": {
+            "own_product_count": 3,
+            "competitor_product_count": 2,
+            "ingested_review_rows": 100,
+            "negative_review_rows": 15,
+            "negative_review_rate": 0.15,
+            "health_index": 72.0,
+            "own_avg_rating": 3.8,
+        },
+        "self": {
+            "risk_products": [
+                {"product_name": "Own Grinder", "product_sku": "OWN-1", "risk_score": 10}
+            ],
+            "top_negative_clusters": [
+                {
+                    "feature_display": "手柄松动",
+                    "label_display": "手柄松动",
+                    "review_count": 8,
+                    "severity": "high",
+                    "severity_display": "高",
+                },
+                {
+                    "feature_display": "噪音大",
+                    "label_display": "噪音大",
+                    "review_count": 5,
+                    "severity": "medium",
+                    "severity_display": "中",
+                },
+            ],
+            "recommendations": [],
+        },
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"label_display": "做工", "competitor_positive_count": 12, "own_negative_count": 6},
+            ],
+        },
+        "appendix": {"image_reviews": []},
+    }
+
+
+def test_generate_report_insights_with_mock_llm(monkeypatch):
+    from qbu_crawler.server import report_llm
+
+    mock_response_json = json.dumps({
+        "hero_headline": "手柄问题需立即关注",
+        "executive_summary": "自有产品差评集中在手柄松动和噪音问题。",
+        "executive_bullets": ["手柄松动影响8条评论", "噪音问题5条", "竞品做工优势明显"],
+        "improvement_priorities": [
+            {"rank": 1, "target": "Own Grinder", "issue": "手柄松动", "action": "加固手柄连接", "evidence_count": 8}
+        ],
+        "competitive_insight": "竞品在做工方面获得大量好评。",
+    })
+
+    class MockMessage:
+        content = mock_response_json
+
+    class MockChoice:
+        message = MockMessage()
+
+    class MockResponse:
+        choices = [MockChoice()]
+
+    class MockClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    return MockResponse()
+
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_BASE", "http://fake")
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_KEY", "fake-key")
+
+    # Patch OpenAI import
+    import types
+    mock_openai = types.ModuleType("openai")
+    mock_openai.OpenAI = lambda **kwargs: MockClient()
+    monkeypatch.setitem(__import__("sys").modules, "openai", mock_openai)
+
+    result = report_llm.generate_report_insights(_insights_analytics())
+
+    assert result["hero_headline"] == "手柄问题需立即关注"
+    assert len(result["executive_bullets"]) == 3
+    assert len(result["improvement_priorities"]) == 1
+    assert result["competitive_insight"] != ""
+    # Check all required keys present
+    for key in report_llm._INSIGHTS_KEYS:
+        assert key in result
+
+
+def test_generate_report_insights_fallback_on_failure(monkeypatch):
+    from qbu_crawler.server import report_llm
+
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_BASE", "http://fake")
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_KEY", "fake-key")
+
+    # Patch OpenAI to raise
+    import types
+    mock_openai = types.ModuleType("openai")
+
+    def _raise(**kwargs):
+        raise RuntimeError("LLM unavailable")
+
+    mock_openai.OpenAI = _raise
+    monkeypatch.setitem(__import__("sys").modules, "openai", mock_openai)
+
+    result = report_llm.generate_report_insights(_insights_analytics())
+
+    # Should fall back gracefully
+    assert "hero_headline" in result
+    assert isinstance(result["executive_bullets"], list)
+    assert "improvement_priorities" in result
+
+
+def test_generate_report_insights_no_llm_configured(monkeypatch):
+    from qbu_crawler.server import report_llm
+
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_BASE", "")
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_KEY", "")
+
+    result = report_llm.generate_report_insights(_insights_analytics())
+
+    assert "hero_headline" in result
+    assert isinstance(result["executive_bullets"], list)
+
+
+def test_build_insights_prompt_includes_data():
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    prompt = _build_insights_prompt(_insights_analytics())
+    assert "自有产品 3 个" in prompt
+    assert "竞品 2 个" in prompt
+    assert "手柄松动" in prompt
+    assert "做工" in prompt
+
+
+def test_fallback_insights_has_required_keys():
+    from qbu_crawler.server.report_llm import _fallback_insights
+
+    result = _fallback_insights(_insights_analytics())
+    assert "hero_headline" in result
+    assert "executive_summary" in result
+    assert "executive_bullets" in result
+    assert "improvement_priorities" in result
+    assert "competitive_insight" in result
+    assert isinstance(result["executive_bullets"], list)
+
+
+def test_parse_llm_response_with_code_block():
+    from qbu_crawler.server.report_llm import _parse_llm_response
+
+    raw = '```json\n{"hero_headline": "test"}\n```'
+    result = _parse_llm_response(raw)
+    assert result["hero_headline"] == "test"
+
+
+def test_parse_llm_response_plain():
+    from qbu_crawler.server.report_llm import _parse_llm_response
+
+    raw = '{"hero_headline": "test"}'
+    result = _parse_llm_response(raw)
+    assert result["hero_headline"] == "test"

@@ -1,6 +1,11 @@
 import copy
+import json
+import logging
 
+from qbu_crawler import config
 from qbu_crawler.server import report_analytics
+
+logger = logging.getLogger(__name__)
 
 
 def _review_id(review):
@@ -188,6 +193,8 @@ def _recommendations(analytics, validated_clusters):
 
 
 def run_llm_report_analysis(snapshot, analytics):
+    # DEPRECATED: Superseded by generate_report_insights() which uses review_analysis table data.
+    # Kept for backward compatibility with existing code paths.
     candidate_pools = build_candidate_pools(snapshot, analytics)
     llm_findings = {"classified_reviews": classify_candidate_pools(candidate_pools)}
     return {
@@ -198,6 +205,8 @@ def run_llm_report_analysis(snapshot, analytics):
 
 
 def validate_findings(snapshot, analytics, llm_result):
+    # DEPRECATED: Superseded by generate_report_insights() which uses review_analysis table data.
+    # Kept for backward compatibility with existing code paths.
     candidate_pools = (llm_result or {}).get("candidate_pools") or build_candidate_pools(snapshot, analytics)
     own_negative_candidates = candidate_pools.get("own_negative_candidates") or []
     competitor_positive_candidates = candidate_pools.get("competitor_positive_candidates") or []
@@ -223,6 +232,8 @@ def validate_findings(snapshot, analytics, llm_result):
 
 
 def merge_final_analytics(analytics, llm_result, validated_result):
+    # DEPRECATED: Superseded by generate_report_insights() which uses review_analysis table data.
+    # Kept for backward compatibility with existing code paths.
     merged = copy.deepcopy(analytics)
     merged.setdefault("self", {})
     merged.setdefault("competitor", {})
@@ -239,3 +250,156 @@ def merge_final_analytics(analytics, llm_result, validated_result):
     merged["validated_findings"] = validated_result or {}
     merged["report_copy"] = (llm_result or {}).get("report_copy") or {}
     return merged
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# New pipeline: generate_report_insights() — single LLM call for executive
+# insights, replacing the deprecated candidate-pool workflow above.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+_INSIGHTS_KEYS = (
+    "hero_headline",
+    "executive_summary",
+    "executive_bullets",
+    "improvement_priorities",
+    "competitive_insight",
+)
+
+
+def _build_insights_prompt(analytics):
+    """Build a concise prompt summarizing analytics for LLM executive insights."""
+    kpis = analytics.get("kpis", {})
+    own_count = kpis.get("own_product_count", 0)
+    comp_count = kpis.get("competitor_product_count", 0)
+    total = kpis.get("ingested_review_rows", 0)
+    neg = kpis.get("negative_review_rows", 0)
+    rate = kpis.get("negative_review_rate", 0)
+    health = kpis.get("health_index", "N/A")
+
+    # Top issues
+    clusters = analytics.get("self", {}).get("top_negative_clusters", [])
+    issue_lines = []
+    for c in clusters[:8]:
+        display = c.get("feature_display") or c.get("label_display", "")
+        count = c.get("review_count", 0)
+        sev = c.get("severity_display") or c.get("severity", "")
+        issue_lines.append(f"  - {display}：{count} 条评论，严重度 {sev}")
+    issues_text = "\n".join(issue_lines) if issue_lines else "  暂无显著问题"
+
+    # Gap analysis
+    gaps = analytics.get("competitor", {}).get("gap_analysis", [])
+    gap_lines = []
+    for g in gaps[:5]:
+        gap_lines.append(
+            f"  - {g.get('label_display', '')}：竞品好评 {g.get('competitor_positive_count', 0)} 条，"
+            f"自有差评 {g.get('own_negative_count', 0)} 条"
+        )
+    gaps_text = "\n".join(gap_lines) if gap_lines else "  暂无明显差距"
+
+    return f"""你是一位高级产品分析师。基于以下产品评论分析数据，生成执行摘要和改良建议。
+
+数据概要：
+- 自有产品 {own_count} 个，竞品 {comp_count} 个
+- 总评论 {total} 条，差评 {neg} 条（差评率 {rate * 100:.1f}%）
+- 健康指数：{health}/100
+
+主要问题（按影响排序）：
+{issues_text}
+
+竞品差距（我方短板 vs 竞品优势）：
+{gaps_text}
+
+请返回 JSON（不要包含 markdown 代码块标记）：
+{{
+  "hero_headline": "一句话核心结论（不超过40字）",
+  "executive_summary": "3-5句执行摘要",
+  "executive_bullets": ["第一条要点", "第二条要点", "第三条要点"],
+  "improvement_priorities": [
+    {{"rank": 1, "target": "产品名", "issue": "具体问题", "action": "建议行动", "evidence_count": N}}
+  ],
+  "competitive_insight": "一段竞品洞察"
+}}"""
+
+
+def _fallback_insights(analytics):
+    """Generate mechanical insights when LLM is unavailable."""
+    from qbu_crawler.server.report_common import (
+        _fallback_executive_bullets,
+        _fallback_hero_headline,
+        _humanize_bullets,
+        normalize_deep_report_analytics,
+    )
+
+    # Ensure we have a normalized structure for the helper functions
+    normalized = normalize_deep_report_analytics(analytics)
+    return {
+        "hero_headline": _fallback_hero_headline(normalized),
+        "executive_summary": "",
+        "executive_bullets": _humanize_bullets(normalized),
+        "improvement_priorities": [],
+        "competitive_insight": "",
+    }
+
+
+def _parse_llm_response(text):
+    """Parse LLM response text into a dict, handling markdown code blocks."""
+    text = text.strip()
+    # Strip markdown code block if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return json.loads(text)
+
+
+def generate_report_insights(analytics):
+    """Generate executive summary, headline, and recommendations via LLM.
+
+    Makes a SINGLE LLM call to produce executive-level insights from the
+    already-computed analytics data (KPIs, issue clusters, gap analysis).
+
+    Returns dict with keys: executive_summary, hero_headline,
+    executive_bullets, improvement_priorities, competitive_insight.
+    """
+    if not config.LLM_API_BASE or not config.LLM_API_KEY:
+        logger.info("LLM not configured, using fallback insights")
+        return _fallback_insights(analytics)
+
+    prompt = _build_insights_prompt(analytics)
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=config.LLM_API_KEY,
+            base_url=config.LLM_API_BASE,
+        )
+        response = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1500,
+        )
+        raw = response.choices[0].message.content or ""
+        result = _parse_llm_response(raw)
+
+        # Validate required keys
+        for key in _INSIGHTS_KEYS:
+            if key not in result:
+                result[key] = "" if key != "executive_bullets" and key != "improvement_priorities" else []
+
+        # Ensure correct types
+        if not isinstance(result.get("executive_bullets"), list):
+            result["executive_bullets"] = []
+        if not isinstance(result.get("improvement_priorities"), list):
+            result["improvement_priorities"] = []
+
+        return result
+
+    except Exception:
+        logger.warning("LLM insights generation failed, using fallback", exc_info=True)
+        return _fallback_insights(analytics)
