@@ -45,24 +45,26 @@ def _strip_markdown_json(text: str) -> str:
 _VALID_SENTIMENTS = {"positive", "negative", "mixed", "neutral"}
 
 # Label taxonomy for combined translation + analysis prompt
-_LABEL_TAXONOMY = """\
-Negative labels (8):
-  QUALITY_DEFECT — 产品质量/做工/耐用性缺陷
-  PERFORMANCE_ISSUE — 功能/性能不达预期
-  SAFETY_CONCERN — 安全隐患或危险体验
-  DELIVERY_DAMAGE — 运输损坏/包装问题
-  MISSING_PARTS — 缺件/配件不全
-  SIZE_FIT_ISSUE — 尺寸/适配不符
-  MISLEADING_DESC — 描述/图片与实物不符
-  CUSTOMER_SERVICE — 售后/退换/客服体验差
-
-Positive labels (6):
-  HIGH_QUALITY — 做工精良/材质优异
-  GREAT_VALUE — 性价比高
-  EASY_USE — 易用/易组装/易清洁
-  FAST_DELIVERY — 物流快/包装好
-  EXCEEDED_EXPECT — 超出预期
-  RECOMMEND — 明确推荐/回购意愿"""
+_LABEL_TAXONOMY = {
+    "negative": [
+        "quality_stability",
+        "structure_design",
+        "assembly_installation",
+        "material_finish",
+        "cleaning_maintenance",
+        "noise_power",
+        "packaging_shipping",
+        "service_fulfillment",
+    ],
+    "positive": [
+        "easy_to_use",
+        "solid_build",
+        "good_value",
+        "easy_to_clean",
+        "strong_performance",
+        "good_packaging",
+    ],
+}
 
 
 class TranslationWorker:
@@ -220,7 +222,9 @@ class TranslationWorker:
             f"- rating <= {config.NEGATIVE_THRESHOLD} 通常倾向 negative\n"
             f"- rating >= 4 通常倾向 positive\n"
             f"- 但以实际评论内容为准，rating 仅作参考\n\n"
-            f"## 标签分类（Label Taxonomy）\n{_LABEL_TAXONOMY}\n\n"
+            "## 标签分类（Label Taxonomy）\n"
+            f"  负面: {', '.join(_LABEL_TAXONOMY['negative'])}\n"
+            f"  正面: {', '.join(_LABEL_TAXONOMY['positive'])}\n\n"
             "## 输出格式\n"
             "以 JSON 数组返回，每个元素包含以下字段：\n"
             "- index: 对应输入的序号\n"
@@ -292,6 +296,7 @@ class TranslationWorker:
                 try:
                     sentiment = (item.get("sentiment") or "").strip().lower()
                     if sentiment not in _VALID_SENTIMENTS:
+                        logger.debug("Invalid sentiment %r for review %d, skipping analysis", sentiment, review["id"])
                         continue  # skip analysis if sentiment invalid
                     sentiment_score = item.get("sentiment_score")
                     if sentiment_score is not None:

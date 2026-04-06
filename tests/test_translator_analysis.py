@@ -281,9 +281,9 @@ class TestAnalyzeAndTranslateBatch:
         items = [{"index": 0, "headline": "Test", "body": "Test body", "rating": 5, "product_name": "Widget"}]
         prompt = worker._build_analysis_prompt(items)
 
-        assert "QUALITY_DEFECT" in prompt
-        assert "HIGH_QUALITY" in prompt
-        assert "RECOMMEND" in prompt
+        assert "quality_stability" in prompt
+        assert "solid_build" in prompt
+        assert "good_packaging" in prompt
         assert "rating <= 2" in prompt
         assert "product_name" in prompt or "Widget" in prompt
 
