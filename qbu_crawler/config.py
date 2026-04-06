@@ -1,5 +1,6 @@
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -188,7 +189,7 @@ EMAIL_RECIPIENTS = [
 EMAIL_BCC_MODE = os.getenv("EMAIL_BCC_MODE", "false").lower() == "true"
 
 # ── Timezone ──────────────────────────────────────────
-SHANGHAI_TZ = timezone(timedelta(hours=8))
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def now_shanghai() -> datetime:
