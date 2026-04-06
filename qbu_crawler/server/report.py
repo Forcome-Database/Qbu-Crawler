@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import smtplib
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from email import encoders
@@ -23,29 +24,24 @@ from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
 from qbu_crawler import config, models
+from qbu_crawler.server.report_common import (  # noqa: F401 — re-export
+    _LABEL_DISPLAY,
+    _PRIORITY_DISPLAY,
+    _SEVERITY_DISPLAY,
+    _derive_review_label_codes,
+    _fallback_executive_bullets,
+    _fallback_hero_headline,
+    _join_label_codes,
+    _join_label_counts,
+    _label_display,
+    _summary_text,
+    normalize_deep_report_analytics,
+)
 from qbu_crawler.server.scope import Scope, normalize_scope
 
 logger = logging.getLogger(__name__)
 
-_LABEL_DISPLAY = {
-    "quality_stability": "质量稳定性",
-    "structure_design": "结构设计",
-    "assembly_installation": "安装装配",
-    "material_finish": "材料与做工",
-    "cleaning_maintenance": "清洁维护",
-    "noise_power": "噪音与动力",
-    "packaging_shipping": "包装运输",
-    "service_fulfillment": "售后与履约",
-    "easy_to_use": "易上手",
-    "solid_build": "做工扎实",
-    "good_value": "性价比高",
-    "easy_to_clean": "易清洗",
-    "strong_performance": "性能强",
-    "good_packaging": "包装到位",
-}
-
-_PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
-_SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
+_SMTP_RETRY_ATTEMPTS = 3
 
 # ── Data Query ──────────────────────────────────────────────────────────────
 
@@ -343,48 +339,69 @@ def send_email(
     if not config.SMTP_HOST:
         return {"success": False, "error": "SMTP_HOST not configured", "recipients": 0}
 
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = config.SMTP_FROM or config.SMTP_USER
-        msg["To"] = ", ".join(recipients)
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body_text, "plain", "utf-8"))
+    attachments = [path for path in (attachment_paths or []) if path]
+    if attachment_path:
+        attachments.insert(0, attachment_path)
 
-        attachments = [path for path in (attachment_paths or []) if path]
-        if attachment_path:
-            attachments.insert(0, attachment_path)
+    last_error = None
+    for attempt in range(_SMTP_RETRY_ATTEMPTS):
+        smtp = None
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = config.SMTP_FROM or config.SMTP_USER
+            msg["To"] = ", ".join(recipients)
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
-        for path in attachments:
-            if not os.path.isfile(path):
-                continue
-            with open(path, "rb") as f:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header(
-                "Content-Disposition",
-                f"attachment; filename={os.path.basename(path)}",
+            for path in attachments:
+                if not os.path.isfile(path):
+                    continue
+                with open(path, "rb") as f:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(f.read())
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=("utf-8", "", os.path.basename(path)),
+                )
+                msg.attach(part)
+
+            if config.SMTP_USE_SSL:
+                smtp = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT)
+            else:
+                smtp = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT)
+                smtp.starttls()
+
+            if config.SMTP_USER and config.SMTP_PASSWORD:
+                smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
+
+            smtp.sendmail(msg["From"], recipients, msg.as_string())
+            logger.info("send_email: sent to %d recipients — %s", len(recipients), subject)
+            return {"success": True, "error": None, "recipients": len(recipients)}
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "send_email: attempt %d/%d failed — %s",
+                attempt + 1,
+                _SMTP_RETRY_ATTEMPTS,
+                exc,
             )
-            msg.attach(part)
+            if attempt + 1 < _SMTP_RETRY_ATTEMPTS:
+                time.sleep(2**attempt)
+        finally:
+            if smtp is not None:
+                try:
+                    smtp.quit()
+                except Exception:
+                    close = getattr(smtp, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
 
-        if config.SMTP_USE_SSL:
-            smtp = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT)
-        else:
-            smtp = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT)
-            smtp.starttls()
-
-        if config.SMTP_USER and config.SMTP_PASSWORD:
-            smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
-
-        smtp.sendmail(msg["From"], recipients, msg.as_string())
-        smtp.quit()
-
-        logger.info("send_email: sent to %d recipients — %s", len(recipients), subject)
-        return {"success": True, "error": None, "recipients": len(recipients)}
-
-    except Exception as exc:
-        logger.warning("send_email: failed — %s", exc)
-        return {"success": False, "error": str(exc), "recipients": 0}
+    return {"success": False, "error": str(last_error), "recipients": 0}
 
 
 def _report_template_dir():
@@ -400,120 +417,8 @@ def _report_template_env():
     )
 
 
-def _label_display(label_code):
-    return _LABEL_DISPLAY.get(label_code or "", label_code or "")
-
-
-def _join_label_counts(items):
-    values = []
-    for item in items or []:
-        label_code = item.get("label_code")
-        if not label_code:
-            continue
-        values.append(f"{_label_display(label_code)}({item.get('count') or 0})")
-    return "、".join(values) or "无"
-
-
-def _join_label_codes(label_codes):
-    values = [_label_display(label_code) for label_code in label_codes or [] if label_code]
-    return "、".join(values) or "无"
-
-
-def _summary_text(item):
-    title = (item.get("headline_cn") or item.get("headline") or "").strip()
-    body = (item.get("body_cn") or item.get("body") or "").strip()
-    if title and body:
-        return f"{title}：{body}"
-    return title or body or "无代表性摘要"
-
-
-def _normalize_deep_report_analytics(analytics):
-    analytics = analytics or {}
-    normalized = {
-        "mode": analytics.get("mode", "baseline"),
-        "kpis": {
-            "product_count": 0,
-            "own_product_count": 0,
-            "competitor_product_count": 0,
-            "ingested_review_rows": 0,
-            "own_review_rows": 0,
-            "competitor_review_rows": 0,
-            "image_review_rows": 0,
-            "low_rating_review_rows": 0,
-            "translated_count": 0,
-            "untranslated_count": 0,
-            **(analytics.get("kpis") or {}),
-        },
-        "self": {
-            "risk_products": [],
-            "top_negative_clusters": [],
-            "recommendations": [],
-            **(analytics.get("self") or {}),
-        },
-        "competitor": {
-            "top_positive_themes": [],
-            "benchmark_examples": [],
-            "negative_opportunities": [],
-            **(analytics.get("competitor") or {}),
-        },
-        "appendix": {
-            **(analytics.get("appendix") or {}),
-        },
-    }
-
-    risk_products = []
-    for item in normalized["self"]["risk_products"]:
-        product = dict(item)
-        product["top_labels_display"] = _join_label_counts(product.get("top_labels") or [])
-        risk_products.append(product)
-    normalized["self"]["risk_products"] = risk_products
-
-    negative_clusters = []
-    for item in normalized["self"]["top_negative_clusters"]:
-        cluster = dict(item)
-        cluster["label_display"] = _label_display(cluster.get("label_code"))
-        cluster["severity_display"] = _SEVERITY_DISPLAY.get(cluster.get("severity"), cluster.get("severity") or "")
-        negative_clusters.append(cluster)
-    normalized["self"]["top_negative_clusters"] = negative_clusters
-
-    recommendations = []
-    for item in normalized["self"]["recommendations"]:
-        recommendation = dict(item)
-        recommendation["label_display"] = _label_display(recommendation.get("label_code"))
-        recommendation["priority_display"] = _PRIORITY_DISPLAY.get(
-            recommendation.get("priority"),
-            recommendation.get("priority") or "",
-        )
-        recommendations.append(recommendation)
-    normalized["self"]["recommendations"] = recommendations
-
-    positive_themes = []
-    for item in normalized["competitor"]["top_positive_themes"]:
-        theme = dict(item)
-        theme["label_display"] = _label_display(theme.get("label_code"))
-        positive_themes.append(theme)
-    normalized["competitor"]["top_positive_themes"] = positive_themes
-
-    benchmark_examples = []
-    for item in normalized["competitor"]["benchmark_examples"]:
-        example = dict(item)
-        example["label_display_list"] = _join_label_codes(example.get("label_codes") or [])
-        example["summary_text"] = _summary_text(example)
-        benchmark_examples.append(example)
-    normalized["competitor"]["benchmark_examples"] = benchmark_examples
-
-    opportunities = []
-    for item in normalized["competitor"]["negative_opportunities"]:
-        opportunity = dict(item)
-        opportunity["label_display_list"] = _join_label_codes(opportunity.get("label_codes") or [])
-        opportunities.append(opportunity)
-    normalized["competitor"]["negative_opportunities"] = opportunities
-
-    return normalized
-
-
 def build_daily_deep_report_email(snapshot, analytics):
-    analytics = _normalize_deep_report_analytics(analytics)
+    analytics = normalize_deep_report_analytics(analytics)
     template_env = _report_template_env()
     subject = template_env.get_template("daily_report_email_subject.txt.j2").render(
         snapshot=snapshot,
@@ -650,7 +555,7 @@ def _report_ts(value: datetime | str) -> str:
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
     if value.tzinfo is not None:
-        value = value.replace(tzinfo=None)
+        value = value.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 

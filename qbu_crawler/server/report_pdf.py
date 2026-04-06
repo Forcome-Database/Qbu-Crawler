@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 from qbu_crawler import config
 from qbu_crawler.server import report
-from qbu_crawler.server.report import (
+from qbu_crawler.server.report_common import (
     _LABEL_DISPLAY,
     _PRIORITY_DISPLAY,
     _SEVERITY_DISPLAY,
