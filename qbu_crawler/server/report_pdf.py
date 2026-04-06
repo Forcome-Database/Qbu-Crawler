@@ -98,7 +98,8 @@ def _chart_font():
 def _save_bar_chart(labels, values, output_path, title, color):
     _chart_font()
     figure, axis = plt.subplots(figsize=(7.0, 3.1))
-    axis.barh(labels, values, color=color, height=0.56)
+    bars = axis.barh(labels, values, color=color, height=0.56)
+    axis.bar_label(bars, fmt="%.0f", padding=4, fontsize=9, color="#4a4a4a")
     axis.set_title(title, loc="left", fontsize=12, fontweight="bold", pad=10)
     axis.invert_yaxis()
     axis.spines["top"].set_visible(False)
@@ -112,12 +113,44 @@ def _save_bar_chart(labels, values, output_path, title, color):
     plt.close(figure)
 
 
+def _truncate_label(label, max_visual_width=36):
+    """按视觉宽度截断：CJK 字符计 2，ASCII 计 1。"""
+    width = 0
+    for i, ch in enumerate(label):
+        width += 2 if ord(ch) > 127 else 1
+        if width > max_visual_width:
+            return label[:i] + "..."
+    return label
+
+
 def _chart_series(values, label_key, value_key):
     if not values:
         return ["暂无数据"], [0]
-    labels = [str(item.get(label_key) or "N/A") for item in values[:6]]
+    labels = [_truncate_label(str(item.get(label_key) or "N/A")) for item in values[:6]]
     numbers = [item.get(value_key) or 0 for item in values[:6]]
     return labels, numbers
+
+
+def _save_risk_matrix(products, output_path):
+    """散点图：X=差评数, Y=风险分, 气泡大小=总评论数"""
+    _chart_font()
+    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    x = [p.get("negative_review_rows", 0) for p in products]
+    y = [p.get("risk_score", 0) for p in products]
+    sizes = [max(p.get("total_reviews", 10), 10) * 2 for p in products]
+    skus = [p.get("product_sku", "N/A") for p in products]
+    ax.scatter(x, y, s=sizes, c="#8f4c38", alpha=0.7, edgecolors="#5a3020", linewidths=1)
+    for i, sku in enumerate(skus):
+        ax.annotate(sku, (x[i], y[i]), textcoords="offset points", xytext=(8, 4), fontsize=8, color="#4a4a4a")
+    ax.set_xlabel("差评数", fontsize=10)
+    ax.set_ylabel("风险分", fontsize=10)
+    ax.set_title("自有产品风险矩阵", loc="left", fontsize=12, fontweight="bold", pad=10)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, linestyle="--", alpha=0.15)
+    fig.tight_layout()
+    fig.savefig(output_path, format="svg", transparent=True)
+    plt.close(fig)
 
 
 def build_chart_assets(analytics, output_dir):
@@ -132,15 +165,31 @@ def build_chart_assets(analytics, output_dir):
     _save_bar_chart(labels, values, chart_file, "高风险产品排序", "#8f4c38")
     chart_specs["self_risk_products"] = str(chart_file)
 
-    labels, values = _chart_series(analytics["self"]["top_negative_clusters"], "label_display", "review_count")
+    severity_colors = {
+        "high": "#6b3328",
+        "medium": "#b7633f",
+        "low": "#a89070",
+    }
+    negative_clusters = analytics["self"]["top_negative_clusters"]
+    labels, values = _chart_series(negative_clusters, "label_display", "review_count")
+    cluster_colors = [
+        severity_colors.get((negative_clusters[i].get("severity") or "medium") if i < len(negative_clusters) else "medium", "#b7633f")
+        for i in range(len(labels))
+    ]
     chart_file = output_path / "self-negative-clusters.svg"
-    _save_bar_chart(labels, values, chart_file, "问题簇排序", "#b7633f")
+    _save_bar_chart(labels, values, chart_file, "问题簇排序", cluster_colors)
     chart_specs["self_negative_clusters"] = str(chart_file)
 
     labels, values = _chart_series(analytics["competitor"]["top_positive_themes"], "label_display", "review_count")
     chart_file = output_path / "competitor-positive-themes.svg"
     _save_bar_chart(labels, values, chart_file, "竞品正向主题", "#355f57")
     chart_specs["competitor_positive_themes"] = str(chart_file)
+
+    risk_products = analytics["self"]["risk_products"]
+    if len(risk_products) >= 6:
+        chart_file = output_path / "self-risk-matrix.svg"
+        _save_risk_matrix(risk_products, chart_file)
+        chart_specs["self_risk_matrix"] = str(chart_file)
 
     return chart_specs
 
@@ -181,7 +230,7 @@ def _normalized_analytics(analytics):
     return report.normalize_deep_report_analytics(analytics)
 
 
-def _inline_image_data_uri(url):
+def _inline_image_data_uri(url, max_size=(300, 240), quality=75):
     if not url:
         return None
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
@@ -196,9 +245,25 @@ def _inline_image_data_uri(url):
     if len(response.content) > 2 * 1024 * 1024:
         logger.warning("Image too large (%d bytes), omitting: %s", len(response.content), url[:100])
         return None
-    content_type = response.headers.get("Content-Type") or mimetypes.guess_type(url)[0] or "application/octet-stream"
-    payload = base64.b64encode(response.content).decode("ascii")
-    return f"data:{content_type};base64,{payload}"
+
+    # Pillow 缩放压缩
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(response.content))
+        img.thumbnail(max_size, Image.LANCZOS)
+        buf = _io.BytesIO()
+        # 转 RGB（处理 RGBA/P 模式）
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.save(buf, format="JPEG", quality=quality)
+        payload = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{payload}"
+    except Exception:
+        # Pillow 处理失败，退回原始编码
+        payload = base64.b64encode(response.content).decode("ascii")
+        content_type = response.headers.get("Content-Type") or mimetypes.guess_type(url)[0] or "application/octet-stream"
+        return f"data:{content_type};base64,{payload}"
 
 
 def _inline_chart_svgs(chart_paths):
