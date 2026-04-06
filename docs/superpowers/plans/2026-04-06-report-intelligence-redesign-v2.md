@@ -937,7 +937,7 @@ pio.templates["qbu"] = QBU_THEME
 pio.templates.default = "qbu"
 
 _CHART_HEIGHT = 240
-_CHART_CONFIG = {"displayModeBar": False, "staticPlot": True}
+_CHART_CONFIG = {"displayModeBar": False, "staticPlot": True, "responsive": True}
 
 
 def _to_html(fig: go.Figure) -> str:
@@ -1334,6 +1334,8 @@ Additional classes to add:
   vertical-align: top;
 }
 .data-table tr:last-child td { border-bottom: none; }
+.data-table tr { break-inside: avoid; }
+.data-table td:first-child { max-width: 160px; word-break: break-word; }
 
 /* ── Severity Badges ── */
 .severity-high { background: var(--accent-soft); color: var(--accent); }
@@ -1360,12 +1362,18 @@ Additional classes to add:
   width: 100% !important;
 }
 
-/* ── Two Column Grid ── */
-.grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-md);
+/* ── Two Column Layout (float-based for print safety) ── */
+/* NOTE: CSS Grid avoided in flow sections per D013 lesson —
+   Chromium break-inside:avoid is unreliable in grid children. */
+.grid-2 { overflow: hidden; }
+.grid-2 > * {
+  float: left;
+  width: calc(50% - 7px);
+  margin-right: 14px;
+  break-inside: avoid;
 }
+.grid-2 > *:nth-child(2n) { margin-right: 0; }
+.grid-2::after { content: ""; display: table; clear: both; }
 
 /* ── Issue Cards ── */
 .issue-card {
@@ -2103,3 +2111,52 @@ Plan review performed 2026-04-06. Verdict: Needs Revision (Minor). All fixes app
 
 - **S4**: Add a step to update `.env.example` with the 5 new `REPORT_*` threshold variables. Include in Task 1 commit.
 - **S5**: The `_build_analysis_prompt()` should include instruction text: "Product name and rating are provided per-review for context-aware analysis." Applied in Task 3 prompt.
+
+### Second Audit (二审) — 2026-04-06
+
+Verdict: **Approved with Conditions**. All conditions resolved below.
+
+**[C1-audit2] CSS Grid → Float in flow sections (CRITICAL, FIXED in-place)**
+- `.grid-2` changed from `display: grid` to `float:left; width:calc(50%-7px)` with clearfix
+- Rationale: D013 lesson — Chromium break-inside:avoid unreliable in grid children
+- Applied directly in Task 7 CSS code
+
+**[I1-audit2] Competitive Gap Index scalar computation**
+- Implementer must add `compute_competitive_gap_index(gap_analysis)` in report_common.py
+- Formula: `sum(g["competitor_positive_count"] + g["own_negative_count"] for g in gap_analysis)`
+- Wire into KPI dict as `kpis["competitive_gap_index"]`
+
+**[I2-audit2] New/Resolved issue markers for incremental mode**
+- In Task 10 `_build_feature_clusters()`, compare current clusters with previous analytics
+- Mark each cluster `status: "new" | "continuing" | "resolved"`
+- "resolved" = appeared in previous analytics but zero reviews in current data window
+- Template: add badge rendering `{% if issue.status == "new" %}<span class="badge severity-high">🆕 新增</span>{% endif %}`
+
+**[I3-audit2] Email template completeness**
+- Task 9 must produce complete HTML, not placeholder comments
+- Use table-cell layout with inline styles for 5 KPI cards (matching current template's pattern)
+- All styles must be inline (Gmail strips `<style>` tags)
+- Include MSO conditional comments for Outlook
+
+**[I4-audit2] Plotly responsive width (FIXED in-place)**
+- Added `"responsive": True` to `_CHART_CONFIG`
+- Ensures Plotly SVG scales to container width
+
+**[I5-audit2] Table row break-inside (FIXED in-place)**
+- Added `.data-table tr { break-inside: avoid; }` to CSS
+
+**[I6-audit2] Column width constraint (FIXED in-place)**
+- Added `.data-table td:first-child { max-width: 160px; word-break: break-word; }`
+
+**[I7-audit2] LLM insights caching**
+- In Task 12 report_snapshot.py wiring, add cache-hit check:
+  ```python
+  if analytics_path and Path(analytics_path).exists():
+      analytics = json.loads(Path(analytics_path).read_text())
+  else:
+      analytics = build_report_analytics(snapshot)
+      insights = generate_report_insights(analytics)
+      analytics["report_copy"] = insights
+  ```
+
+**All conditions resolved. Plan approved for implementation.**
