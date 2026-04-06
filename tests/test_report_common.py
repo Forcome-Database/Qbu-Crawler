@@ -121,3 +121,60 @@ def test_risk_products_no_snapshot():
     ]
     items = _risk_products(reviews)
     assert items[0]["total_reviews"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for _competitor_gap_analysis and _compute_kpi_deltas
+# ---------------------------------------------------------------------------
+
+from qbu_crawler.server.report_common import (
+    _competitor_gap_analysis,
+    _compute_kpi_deltas,
+)
+
+
+def test_competitor_gap_analysis_finds_intersection():
+    normalized = {
+        "self": {"top_negative_clusters": [
+            {"label_code": "quality_stability", "review_count": 13},
+            {"label_code": "material_finish", "review_count": 7},
+        ]},
+        "competitor": {"top_positive_themes": [
+            {"label_code": "solid_build", "review_count": 69},
+            {"label_code": "quality_stability", "review_count": 5},
+        ]},
+    }
+    gaps = _competitor_gap_analysis(normalized)
+    assert len(gaps) == 1
+    assert gaps[0]["label_code"] == "quality_stability"
+    assert gaps[0]["competitor_positive_count"] == 5
+    assert gaps[0]["own_negative_count"] == 13
+
+
+def test_competitor_gap_analysis_empty():
+    normalized = {
+        "self": {"top_negative_clusters": [{"label_code": "material_finish", "review_count": 7}]},
+        "competitor": {"top_positive_themes": [{"label_code": "solid_build", "review_count": 69}]},
+    }
+    gaps = _competitor_gap_analysis(normalized)
+    assert len(gaps) == 0
+
+
+def test_compute_kpi_deltas_normal():
+    current = {"negative_review_rows": 78, "ingested_review_rows": 636, "product_count": 9}
+    prev = {"kpis": {"negative_review_rows": 66, "ingested_review_rows": 500, "product_count": 9}}
+    deltas = _compute_kpi_deltas(current, prev)
+    assert deltas["negative_review_rows_delta"] == 12
+    assert deltas["negative_review_rows_delta_display"] == "+12"
+    assert deltas["product_count_delta"] == 0
+    assert deltas["product_count_delta_display"] == "—"
+
+
+def test_compute_kpi_deltas_no_prev():
+    deltas = _compute_kpi_deltas({"negative_review_rows": 78}, None)
+    assert deltas == {}
+
+
+def test_compute_kpi_deltas_missing_field():
+    deltas = _compute_kpi_deltas({"negative_review_rows": 10}, {"kpis": {}})
+    assert deltas["negative_review_rows_delta"] == 10

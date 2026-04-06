@@ -1,5 +1,8 @@
 """Shared constants and helper functions used by report.py and report_pdf.py."""
 
+import json
+import os
+
 from qbu_crawler.server import report_analytics
 
 # ── Display-name mappings ─────────────────────────────────────────────────────
@@ -66,6 +69,75 @@ def _derive_review_label_codes(review):
     if preferred_codes:
         return preferred_codes[:3]
     return [item["label_code"] for item in labels[:3]]
+
+
+# ── Competitor gap analysis ──────────────────────────────────────────────────
+
+
+def _competitor_gap_analysis(normalized):
+    """Find themes where competitors are praised but our products are criticised."""
+    comp_positive = {
+        t["label_code"]: t
+        for t in normalized.get("competitor", {}).get("top_positive_themes", [])
+    }
+    own_negative = {
+        c["label_code"]: c
+        for c in normalized.get("self", {}).get("top_negative_clusters", [])
+    }
+    gap_codes = set(comp_positive) & set(own_negative)
+    gaps = []
+    for code in gap_codes:
+        gaps.append({
+            "label_code": code,
+            "label_display": _LABEL_DISPLAY.get(code, code),
+            "competitor_positive_count": comp_positive[code].get("review_count", 0),
+            "own_negative_count": own_negative[code].get("review_count", 0),
+        })
+    return sorted(gaps, key=lambda g: g["own_negative_count"], reverse=True)
+
+
+# ── KPI delta computation ───────────────────────────────────────────────────
+
+
+def _compute_kpi_deltas(current_kpis, prev_analytics):
+    """Compute difference between current KPIs and those from a previous report."""
+    if not prev_analytics:
+        return {}
+    prev_kpis = prev_analytics.get("kpis", {})
+    deltas = {}
+    for key in ("negative_review_rows", "ingested_review_rows", "product_count"):
+        curr = current_kpis.get(key, 0) or 0
+        prev = prev_kpis.get(key, 0) or 0
+        diff = curr - prev
+        deltas[f"{key}_delta"] = diff
+        deltas[f"{key}_delta_display"] = (
+            f"+{diff}" if diff > 0 else str(diff)
+        ) if diff != 0 else "—"
+    return deltas
+
+
+# ── Previous analytics loader ───────────────────────────────────────────────
+
+
+def _load_previous_analytics(current_run_id):
+    """Load the analytics JSON from the most recent completed run before *current_run_id*."""
+    if not current_run_id:
+        return None
+    try:
+        from qbu_crawler import models
+        prev_run = models.get_previous_completed_run(current_run_id)
+    except Exception:
+        return None
+    if not prev_run or not prev_run.get("analytics_path"):
+        return None
+    path = prev_run["analytics_path"]
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 # ── normalize_deep_report_analytics ──────────────────────────────────────────

@@ -661,6 +661,27 @@ def list_review_issue_labels(review_ids: list[int]) -> dict[int, list[dict]]:
     return result
 
 
+def get_previous_completed_run(current_run_id: int) -> dict | None:
+    """Return the most recent completed daily workflow run before *current_run_id*."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM workflow_runs
+            WHERE workflow_type = 'daily'
+              AND status = 'completed'
+              AND analytics_path IS NOT NULL
+              AND analytics_path != ''
+              AND id < ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (current_run_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def list_workflow_runs(
     statuses: list[str] | tuple[str, ...] | None = None,
     limit: int = 100,
