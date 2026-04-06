@@ -122,6 +122,22 @@ def init_db():
             FOREIGN KEY (review_id) REFERENCES reviews(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS review_analysis (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id       INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+            sentiment       TEXT NOT NULL,
+            sentiment_score REAL,
+            labels          TEXT NOT NULL DEFAULT '[]',
+            features        TEXT NOT NULL DEFAULT '[]',
+            insight_cn      TEXT,
+            insight_en      TEXT,
+            llm_model       TEXT,
+            prompt_version  TEXT NOT NULL,
+            token_usage     INTEGER,
+            analyzed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(review_id, prompt_version)
+        );
+
         CREATE TABLE IF NOT EXISTS workflow_run_tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id INTEGER NOT NULL,
@@ -244,6 +260,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_products_site
         ON products (site)
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_review ON review_analysis(review_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_sentiment ON review_analysis(sentiment)")
     conn.close()
 
 
@@ -1327,16 +1345,21 @@ def execute_readonly_sql(sql: str, timeout: int = 5, max_rows: int = 500) -> dic
 # ---------------------------------------------------------------------------
 
 def get_pending_translations(limit: int = 20) -> list[dict]:
-    """Fetch reviews needing translation, newest first."""
+    """Fetch reviews needing translation, newest first.
+
+    Returns dicts with id, headline, body, rating, product_name, product_sku.
+    """
     from qbu_crawler import config as _cfg
     max_retries = _cfg.TRANSLATE_MAX_RETRIES
     conn = get_conn()
     try:
         rows = conn.execute(
-            """SELECT id, headline, body FROM reviews
-               WHERE translate_status IS NULL
-                  OR (translate_status = 'failed' AND translate_retries < ?)
-               ORDER BY scraped_at DESC
+            """SELECT r.id, r.headline, r.body, r.rating,
+                      p.name AS product_name, p.sku AS product_sku
+               FROM reviews r JOIN products p ON r.product_id = p.id
+               WHERE r.translate_status IS NULL
+                  OR (r.translate_status = 'failed' AND r.translate_retries < ?)
+               ORDER BY r.scraped_at DESC
                LIMIT ?""",
             (max_retries, limit),
         ).fetchall()
@@ -1685,5 +1708,134 @@ def cleanup_old_notifications(retention_days: int = 30) -> int:
         )
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Review analysis CRUD
+# ---------------------------------------------------------------------------
+
+def save_review_analysis(
+    review_id: int,
+    sentiment: str,
+    sentiment_score: float | None = None,
+    labels: list | None = None,
+    features: list | None = None,
+    insight_cn: str | None = None,
+    insight_en: str | None = None,
+    llm_model: str | None = None,
+    prompt_version: str = "v1",
+    token_usage: int | None = None,
+) -> None:
+    """UPSERT a review analysis row. Conflicts on (review_id, prompt_version) update all fields."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO review_analysis
+                (review_id, sentiment, sentiment_score, labels, features,
+                 insight_cn, insight_en, llm_model, prompt_version, token_usage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(review_id, prompt_version) DO UPDATE SET
+                sentiment       = excluded.sentiment,
+                sentiment_score = excluded.sentiment_score,
+                labels          = excluded.labels,
+                features        = excluded.features,
+                insight_cn      = excluded.insight_cn,
+                insight_en      = excluded.insight_en,
+                llm_model       = excluded.llm_model,
+                token_usage     = excluded.token_usage,
+                analyzed_at     = CURRENT_TIMESTAMP
+            """,
+            (
+                review_id,
+                sentiment,
+                sentiment_score,
+                _json.dumps(labels or [], ensure_ascii=False),
+                _json.dumps(features or [], ensure_ascii=False),
+                insight_cn,
+                insight_en,
+                llm_model,
+                prompt_version,
+                token_usage,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_review_analysis(review_id: int) -> dict | None:
+    """Return the latest analysis row for a review, or None."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM review_analysis WHERE review_id = ? ORDER BY analyzed_at DESC LIMIT 1",
+            (review_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_reviews_with_analysis(
+    review_ids: list[int] | None = None,
+    since: str | None = None,
+) -> list[dict]:
+    """Bulk query reviews joined with products and latest review_analysis.
+
+    Returns dicts with fields from reviews, products, and review_analysis tables.
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if review_ids:
+        placeholders = ",".join("?" for _ in review_ids)
+        conditions.append(f"r.id IN ({placeholders})")
+        params.extend(review_ids)
+
+    if since:
+        conditions.append("r.scraped_at >= ?")
+        params.append(since)
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    sql = f"""
+        SELECT
+            r.id,
+            r.headline,
+            r.body,
+            r.rating,
+            r.date_published,
+            r.images,
+            r.headline_cn,
+            r.body_cn,
+            p.name  AS product_name,
+            p.sku   AS product_sku,
+            p.site,
+            p.ownership,
+            p.price,
+            ra.sentiment,
+            ra.sentiment_score,
+            ra.labels   AS analysis_labels,
+            ra.features,
+            ra.insight_cn AS analysis_insight_cn,
+            ra.insight_en AS analysis_insight_en
+        FROM reviews r
+        JOIN products p ON r.product_id = p.id
+        LEFT JOIN review_analysis ra ON ra.review_id = r.id
+            AND ra.analyzed_at = (
+                SELECT MAX(ra2.analyzed_at)
+                FROM review_analysis ra2
+                WHERE ra2.review_id = r.id
+            )
+        {where_clause}
+        ORDER BY r.scraped_at DESC
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
