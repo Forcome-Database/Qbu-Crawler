@@ -42,6 +42,29 @@ def _strip_markdown_json(text: str) -> str:
     return text
 
 
+_VALID_SENTIMENTS = {"positive", "negative", "mixed", "neutral"}
+
+# Label taxonomy for combined translation + analysis prompt
+_LABEL_TAXONOMY = """\
+Negative labels (8):
+  QUALITY_DEFECT — 产品质量/做工/耐用性缺陷
+  PERFORMANCE_ISSUE — 功能/性能不达预期
+  SAFETY_CONCERN — 安全隐患或危险体验
+  DELIVERY_DAMAGE — 运输损坏/包装问题
+  MISSING_PARTS — 缺件/配件不全
+  SIZE_FIT_ISSUE — 尺寸/适配不符
+  MISLEADING_DESC — 描述/图片与实物不符
+  CUSTOMER_SERVICE — 售后/退换/客服体验差
+
+Positive labels (6):
+  HIGH_QUALITY — 做工精良/材质优异
+  GREAT_VALUE — 性价比高
+  EASY_USE — 易用/易组装/易清洁
+  FAST_DELIVERY — 物流快/包装好
+  EXCEEDED_EXPECT — 超出预期
+  RECOMMEND — 明确推荐/回购意愿"""
+
+
 class TranslationWorker:
     """Daemon thread that translates reviews in the background.
 
@@ -51,6 +74,8 @@ class TranslationWorker:
 
     # Backoff delays (seconds) for consecutive transient failures
     _BACKOFF_DELAYS = [30, 60, 120, 300]
+
+    _prompt_version = "v1"
 
     def __init__(self, interval: int = 60, batch_size: int = 20, concurrency: int = 1):
         self._interval = interval
@@ -175,21 +200,61 @@ class TranslationWorker:
         self._consecutive_failures = 0
         return len(pending) == fetch_limit
 
-    def _translate_batch(self, reviews: list) -> tuple[int, int] | None:
-        """Translate a single sub-batch.
-        Returns (translated_count, skipped_count) on success, None on transient error.
+    def _build_analysis_prompt(self, items_payload: list[dict]) -> str:
+        """Build a combined translation + structured analysis prompt.
+
+        Each item in *items_payload* must have: index, headline, body, rating, product_name.
+        Returns a single user-message string asking the LLM for JSON array output.
         """
-        items_payload = [
-            {"index": i, "headline": r.get("headline") or "", "body": r.get("body") or ""}
-            for i, r in enumerate(reviews)
-        ]
-        prompt = (
-            "请将以下英文产品评论的 headline 和 body 翻译为中文，"
-            "保持原意，语言自然流畅。\n"
-            "以 JSON 数组形式返回，每个元素包含 index、headline_cn、body_cn 三个字段。\n"
-            "不要返回其他内容。\n\n"
+        return (
+            "你是一个产品评论分析专家。请对以下英文产品评论同时完成【翻译】和【结构化分析】。\n\n"
+            "Product name and rating are provided per-review for context-aware analysis.\n\n"
+            "## 任务\n"
+            "1. 将 headline 和 body 翻译为中文（headline_cn, body_cn），保持原意，语言自然流畅。\n"
+            "2. 判断整体情感倾向 sentiment（必须为 positive / negative / mixed / neutral 之一）。\n"
+            "3. 给出情感强度 sentiment_score（0.0-1.0，1.0 表示极端正面/负面）。\n"
+            "4. 从下方标签分类中选择适用的标签（可多选，也可不选）。\n"
+            '5. 提取 2-5 个中文特征短语 features（如"做工精良"、"尺寸偏小"）。\n'
+            "6. 用一句话总结核心洞察（insight_cn 中文, insight_en 英文）。\n\n"
+            f"## 情感判断参考\n"
+            f"- rating <= {config.NEGATIVE_THRESHOLD} 通常倾向 negative\n"
+            f"- rating >= 4 通常倾向 positive\n"
+            f"- 但以实际评论内容为准，rating 仅作参考\n\n"
+            f"## 标签分类（Label Taxonomy）\n{_LABEL_TAXONOMY}\n\n"
+            "## 输出格式\n"
+            "以 JSON 数组返回，每个元素包含以下字段：\n"
+            "- index: 对应输入的序号\n"
+            "- headline_cn: 中文标题\n"
+            "- body_cn: 中文正文\n"
+            "- sentiment: positive / negative / mixed / neutral\n"
+            "- sentiment_score: 0.0-1.0\n"
+            "- labels: [{\"code\": \"LABEL_CODE\", \"polarity\": \"positive|negative\", "
+            "\"severity\": \"low|medium|high\", \"confidence\": 0.0-1.0}]\n"
+            "- features: [\"中文特征短语\", ...]\n"
+            "- insight_cn: 一句话中文洞察\n"
+            "- insight_en: 一句话英文洞察\n\n"
+            "不要返回其他内容，只返回 JSON 数组。\n\n"
             f"输入：\n{json.dumps(items_payload, ensure_ascii=False)}"
         )
+
+    def _analyze_and_translate_batch(self, reviews: list) -> tuple[int, int] | None:
+        """Translate and analyze a single sub-batch in one LLM call.
+
+        Returns (translated_count, skipped_count) on success, None on transient error.
+        This replaces the old _translate_batch with a combined translation + analysis prompt.
+        Translation saving always takes priority — analysis failure never blocks translation.
+        """
+        items_payload = [
+            {
+                "index": i,
+                "headline": r.get("headline") or "",
+                "body": r.get("body") or "",
+                "rating": r.get("rating"),
+                "product_name": r.get("product_name") or "",
+            }
+            for i, r in enumerate(reviews)
+        ]
+        prompt = self._build_analysis_prompt(items_payload)
 
         try:
             raw = self._call_llm(self._client, [{"role": "user", "content": prompt}])
@@ -202,7 +267,7 @@ class TranslationWorker:
                 idx = item.get("index")
                 if idx is None or idx >= len(reviews):
                     continue
-                # 兼容 LLM 返回 headline_cn/body_cn 或 headline/body 字段名
+                # --- Translation (priority) ---
                 headline_cn = (item.get("headline_cn") or "").strip()
                 body_cn = (item.get("body_cn") or "").strip()
                 if not headline_cn and not body_cn:
@@ -222,6 +287,37 @@ class TranslationWorker:
                     "done",
                 )
                 translated_count += 1
+
+                # --- Analysis (best-effort, never blocks translation) ---
+                try:
+                    sentiment = (item.get("sentiment") or "").strip().lower()
+                    if sentiment not in _VALID_SENTIMENTS:
+                        continue  # skip analysis if sentiment invalid
+                    sentiment_score = item.get("sentiment_score")
+                    if sentiment_score is not None:
+                        sentiment_score = float(sentiment_score)
+                    labels = item.get("labels") if isinstance(item.get("labels"), list) else None
+                    features = item.get("features") if isinstance(item.get("features"), list) else None
+                    insight_cn = (item.get("insight_cn") or "").strip() or None
+                    insight_en = (item.get("insight_en") or "").strip() or None
+
+                    models.save_review_analysis(
+                        review_id=review["id"],
+                        sentiment=sentiment,
+                        sentiment_score=sentiment_score,
+                        labels=labels,
+                        features=features,
+                        insight_cn=insight_cn,
+                        insight_en=insight_en,
+                        llm_model=config.LLM_MODEL,
+                        prompt_version=self._prompt_version,
+                    )
+                except Exception:
+                    logger.debug(
+                        "TranslationWorker: analysis save failed for review %d, skipping",
+                        review["id"],
+                        exc_info=True,
+                    )
 
             skipped = len(reviews) - translated_count
             if empty_indices:
@@ -253,6 +349,9 @@ class TranslationWorker:
                     max_retries=config.TRANSLATE_MAX_RETRIES,
                 )
             return (0, len(reviews))
+
+    # Backward compatibility alias
+    _translate_batch = _analyze_and_translate_batch
 
     def _call_llm(self, client: OpenAI | None, messages: list[dict]) -> str:
         """Call the LLM API. Separated for testability.
