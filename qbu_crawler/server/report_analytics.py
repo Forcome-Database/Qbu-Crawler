@@ -468,9 +468,14 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
                     "severity": label["severity"],
                     "severity_score": _SEVERITY_SCORE[label["severity"]],
                     "example_reviews": [],
+                    "affected_products": set(),
+                    "dates": [],
                 },
             )
             cluster["review_count"] += 1
+            cluster["affected_products"].add(review.get("product_sku") or review.get("product_name"))
+            if review.get("date_published"):
+                cluster["dates"].append(review["date_published"])
             if item["images"]:
                 cluster["image_review_count"] += 1
             cluster["severity_score"] = max(cluster["severity_score"], _SEVERITY_SCORE[label["severity"]])
@@ -487,6 +492,9 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
                         "body": review.get("body"),
                         "headline_cn": review.get("headline_cn"),
                         "body_cn": review.get("body_cn"),
+                        "headline_en": review.get("headline", ""),
+                        "body_en": review.get("body", ""),
+                        "date_published": review.get("date_published", ""),
                         "images": item["images"],
                     }
                 )
@@ -502,10 +510,19 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
     )
     for item in items:
         item.pop("severity_score")
+        item["affected_product_count"] = len(item.pop("affected_products"))
+        dates = item.pop("dates")
+        item["first_seen"] = min(dates) if dates else None
+        item["last_seen"] = max(dates) if dates else None
     return items
 
 
-def _risk_products(labeled_reviews):
+def _risk_products(labeled_reviews, snapshot_products=None):
+    sku_to_review_count = {}
+    for p in (snapshot_products or []):
+        sku = p.get("sku") or ""
+        sku_to_review_count[sku] = p.get("review_count") or 0
+
     grouped = {}
     for item in labeled_reviews:
         review = item["review"]
@@ -523,6 +540,7 @@ def _risk_products(labeled_reviews):
                 "negative_review_rows": 0,
                 "image_review_rows": 0,
                 "risk_score": 0,
+                "total_reviews": sku_to_review_count.get(review.get("product_sku", ""), 0),
                 "top_labels": {},
             },
         )
@@ -675,12 +693,15 @@ def build_report_analytics(snapshot):
             "own_review_rows": len(own_reviews),
             "competitor_review_rows": len(competitor_reviews),
             "image_review_rows": len(image_reviews),
+            "negative_review_rows": sum(
+                1 for review in snapshot.get("reviews") or [] if (review.get("rating") or 0) <= 2
+            ),
             "low_rating_review_rows": sum(
                 1 for review in snapshot.get("reviews") or [] if (review.get("rating") or 0) <= 3
             ),
         },
         "self": {
-            "risk_products": _risk_products(labeled_reviews),
+            "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", [])),
             "top_negative_clusters": top_negative_clusters,
             "recommendations": _recommendations(top_negative_clusters),
         },
