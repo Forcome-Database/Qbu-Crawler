@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+import requests
+
 
 def _snapshot():
     return {
@@ -18,7 +21,7 @@ def _analytics():
         "label_mode": "rule",
         "generated_at": "2026-04-02T10:00:00+08:00",
         "report_copy": {
-            "hero_headline": "Own Grinder 的可靠性问题需要优先处理",
+            "hero_headline": "Own Grinder 的可靠性问题需要优先处理。",
             "executive_bullets": [
                 "自有产品差评集中在可靠性问题。",
                 "竞品高频卖点集中在易用与做工。",
@@ -37,6 +40,7 @@ def _analytics():
             "competitor_review_rows": 3,
             "image_review_rows": 1,
             "low_rating_review_rows": 2,
+            "negative_review_rows": 2,
         },
         "self": {
             "risk_products": [
@@ -144,15 +148,13 @@ def test_render_report_html_contains_required_sections(tmp_path):
 
     html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
 
-    assert "每日深度分析报告" in html
-    assert "主结论" in html
-    assert "自有产品风险总览" in html
-    assert "重点产品深挖" in html
-    assert "问题簇与改良建议" in html
-    assert "竞品好评 Benchmark" in html
-    assert "证据附录" in html
-    assert "执行摘要" not in html
-    assert "class=\"report-page" in html
+    assert "report-page-hero" in html
+    assert "hero-headline" in html
+    assert "focus-grid" in html
+    assert "issue-grid" in html
+    assert "benchmark-layout" in html
+    assert "report-section" in html
+    assert 'class="report-page' in html
 
 
 def test_build_chart_assets_outputs_svg_files(tmp_path):
@@ -193,22 +195,42 @@ def test_render_report_html_uses_readable_labels_and_mode_copy(tmp_path):
 
     html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
 
-    assert "首日全量基线版" in html
-    assert "质量稳定性" in html
-    assert "易上手" in html
     assert "quality_stability" not in html
+    assert "easy_to_use" not in html
+    assert "Own Grinder 的可靠性问题需要优先处理。" in html
+    assert "自有产品差评集中在可靠性问题。" in html
 
 
-def test_render_report_html_renders_evidence_image_cards(tmp_path):
+def test_render_report_html_uses_business_kpis(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
     html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
 
-    assert "https://img.example.com/1.jpg" in html
-    assert "evidence-media" in html
+    assert "新增评论" in html
+    assert "差评率" in html
+    assert "图片评论" not in html
+    assert "40.0%" in html
+
+
+def test_render_report_html_renders_evidence_refs(tmp_path, monkeypatch):
+    """Evidence appendix was removed; verify evidence ref IDs still appear in risk/cluster sections."""
+    from qbu_crawler.server.report_pdf import render_report_html
+
+    class FakeResponse:
+        content = b"\x89PNG\r\n\x1a\nfake-image"
+        headers = {"Content-Type": "image/png"}
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(requests, "get", lambda url, timeout=10: FakeResponse())
+
+    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+
+    # Evidence ref IDs are still computed and shown in risk products / cluster sections
     assert "E1" in html
-    assert "支撑结论" in html
-    assert "质量稳定性" in html
+    # Evidence appendix section is removed from the template body (class may still exist in CSS)
+    assert 'class="evidence-directory"' not in html
 
 
 def test_write_report_html_preview_creates_file(tmp_path):
@@ -276,3 +298,52 @@ def test_generate_pdf_uses_playwright_print_contract(monkeypatch, tmp_path):
     assert calls["pdf"]["print_background"] is True
     assert calls["pdf"]["prefer_css_page_size"] is True
     assert "timeout" not in calls["pdf"]
+
+
+def test_generate_pdf_closes_browser_when_pdf_raises(monkeypatch, tmp_path):
+    from qbu_crawler.server import report_pdf
+
+    calls = {}
+
+    class FakePage:
+        def set_default_timeout(self, timeout):
+            calls["default_timeout"] = timeout
+
+        def set_content(self, html, wait_until=None):
+            calls["html"] = html
+            calls["wait_until"] = wait_until
+
+        def emulate_media(self, media=None):
+            calls["media"] = media
+
+        def pdf(self, **kwargs):
+            raise RuntimeError("pdf failed")
+
+    class FakeBrowser:
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            calls["browser_closed"] = True
+
+    class FakePlaywright:
+        def __init__(self):
+            self.chromium = self
+
+        def launch(self, headless=True):
+            calls["headless"] = headless
+            return FakeBrowser()
+
+    class FakeManager:
+        def __enter__(self):
+            return FakePlaywright()
+
+        def __exit__(self, exc_type, exc, tb):
+            calls["manager_closed"] = True
+
+    monkeypatch.setattr(report_pdf, "sync_playwright", lambda: FakeManager())
+
+    with pytest.raises(RuntimeError, match="pdf failed"):
+        report_pdf.generate_pdf_report(_snapshot(), _analytics(), str(tmp_path / "report.pdf"))
+
+    assert calls["browser_closed"] is True

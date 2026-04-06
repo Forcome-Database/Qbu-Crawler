@@ -1,6 +1,6 @@
 @page {
   size: A4;
-  margin: 10mm;
+  margin: 0;
 }
 
 :root {
@@ -48,14 +48,20 @@ ul {
   padding: 0;
 }
 
-.report-page {
+.report-page-hero {
   break-after: page;
   page-break-after: always;
 }
 
-.report-page:last-child {
+.report-page {
   break-after: auto;
   page-break-after: auto;
+}
+
+.report-section + .report-section {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 3px solid var(--accent);
 }
 
 .page-frame,
@@ -70,7 +76,7 @@ ul {
 }
 
 .page-frame {
-  min-height: 274mm;
+  min-height: auto;
   padding: 18px 20px 20px;
   border: 1px solid var(--line);
   border-radius: 26px;
@@ -238,7 +244,11 @@ ul {
 }
 
 .issue-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: block;
+}
+
+.issue-card + .issue-card {
+  margin-top: 14px;
 }
 
 .block-head {
@@ -442,6 +452,76 @@ ul {
 
 .evidence-title {
   font-weight: 700;
+}
+
+/* 证据缩略图条带 */
+.issue-evidence-strip {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.evidence-thumb {
+  position: relative;
+  width: 100px;
+  height: 80px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.evidence-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.evidence-label {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+.evidence-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 80px;
+  border-radius: 10px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 双语评论 */
+.quote-cn { font-weight: 600; }
+.quote-en { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.issue-timeline { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.issue-xref { margin-top: 10px; font-size: 9px; color: var(--muted); font-style: italic; }
+
+/* Delta 标记 */
+.delta { display: block; margin-top: 4px; font-size: 9px; font-weight: 600; }
+.delta-up { color: var(--accent); }
+.delta-down { color: var(--green); }
+
+/* Alert 信号灯 */
+.alert-signal { padding: 8px 14px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-top: 12px; }
+.alert-red { background: var(--accent-soft); color: var(--accent); }
+.alert-yellow { background: #f5ecd4; color: var(--gold); }
+.alert-green { background: var(--green-soft); color: var(--green); }
+
+/* Gap callout */
+.gap-callout {
+  margin-top: 14px;
+  padding: 14px;
+  border: 2px solid var(--accent-soft);
+  border-radius: 16px;
+  background: rgba(234, 214, 200, 0.3);
 }
 
 @media print {

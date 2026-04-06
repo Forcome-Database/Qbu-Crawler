@@ -27,18 +27,33 @@
           <div class="metric-card">
             <span>产品数</span>
             <strong>{{ analytics.kpis.product_count }}</strong>
+            {% if analytics.kpis.product_count_delta is defined and analytics.kpis.product_count_delta != 0 %}
+            <span class="delta {{ 'delta-up' if analytics.kpis.product_count_delta > 0 else 'delta-down' }}">
+              {{ analytics.kpis.product_count_delta_display }} vs 上期
+            </span>
+            {% endif %}
           </div>
           <div class="metric-card">
-            <span>入库评论</span>
+            <span>新增评论</span>
             <strong>{{ analytics.kpis.ingested_review_rows }}</strong>
+            {% if analytics.kpis.ingested_review_rows_delta is defined and analytics.kpis.ingested_review_rows_delta != 0 %}
+            <span class="delta {{ 'delta-up' if analytics.kpis.ingested_review_rows_delta > 0 else 'delta-down' }}">
+              {{ analytics.kpis.ingested_review_rows_delta_display }} vs 上期
+            </span>
+            {% endif %}
           </div>
           <div class="metric-card">
-            <span>低分评论</span>
-            <strong>{{ analytics.kpis.low_rating_review_rows }}</strong>
+            <span>差评数</span>
+            <strong>{{ analytics.kpis.negative_review_rows }}</strong>
+            {% if analytics.kpis.negative_review_rows_delta is defined and analytics.kpis.negative_review_rows_delta != 0 %}
+            <span class="delta {{ 'delta-up' if analytics.kpis.negative_review_rows_delta > 0 else 'delta-down' }}">
+              {{ analytics.kpis.negative_review_rows_delta_display }} vs 上期
+            </span>
+            {% endif %}
           </div>
           <div class="metric-card">
-            <span>图片评论</span>
-            <strong>{{ analytics.kpis.image_review_rows }}</strong>
+            <span>差评率</span>
+            <strong>{{ analytics.kpis.negative_review_rate_display }}</strong>
           </div>
         </div>
       </div>
@@ -58,10 +73,15 @@
           <p class="mode-copy">自有评论 {{ analytics.kpis.own_review_rows }} 条，竞品评论 {{ analytics.kpis.competitor_review_rows }} 条。</p>
         </article>
       </div>
+      {% if analytics.alert_level is defined %}
+      <div class="alert-signal alert-{{ analytics.alert_level }}">
+        {{ analytics.alert_text }}
+      </div>
+      {% endif %}
     </div>
   </section>
 
-  <section class="report-page">
+  <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
         <p class="section-kicker">自有产品</p>
@@ -113,10 +133,13 @@
           </div>
         </article>
       </div>
+      {% if chart_svgs.self_risk_matrix is defined %}
+      <div class="chart-wrap">{{ chart_svgs.self_risk_matrix }}</div>
+      {% endif %}
     </div>
   </section>
 
-  <section class="report-page">
+  <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
         <p class="section-kicker">重点产品</p>
@@ -158,7 +181,7 @@
     </div>
   </section>
 
-  <section class="report-page">
+  <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
         <p class="section-kicker">问题簇</p>
@@ -166,7 +189,7 @@
         <p class="page-note">每个建议都必须能回到证据量和图片编号，避免沦为空泛套话。</p>
       </div>
       <div class="issue-grid">
-        {% for item in analytics.self.recommendations[:4] %}
+        {% for item in analytics.self.top_negative_clusters[:4] %}
         <article class="issue-card">
           <div class="issue-top">
             <div>
@@ -175,29 +198,62 @@
             </div>
             <span class="priority-tag">{{ item.priority_display }}</span>
           </div>
-          <div class="issue-copy">
-            <div>
-              <p class="panel-label">可能原因边界</p>
-              <p>{{ item.possible_cause_boundary }}</p>
-            </div>
-            <div>
-              <p class="panel-label">建议改良方向</p>
-              <p>{{ item.improvement_direction }}</p>
-            </div>
+          <div class="issue-facts">
+            <p>差评 {{ item.evidence_count }} 条
+              {% if item.affected_product_count is defined %} | 涉及 {{ item.affected_product_count }} 个产品{% endif %}
+              {% if item.image_review_count is defined %} | 图片证据 {{ item.image_review_count }} 条{% endif %}
+            </p>
+            {% if item.first_seen %}
+            <p class="issue-timeline">首次出现：{{ item.first_seen }} ｜ 最近一条：{{ item.last_seen }}</p>
+            {% endif %}
           </div>
+          {% if item.example_reviews %}
+          <div class="issue-quotes">
+            {% set ex = item.example_reviews[0] %}
+            <blockquote>
+              <p class="quote-cn">"{{ ex.summary_text }}"</p>
+              {% if ex.headline_en or ex.body_en %}
+              <p class="quote-en">"{{ ex.headline_en }}{% if ex.body_en %}: {{ ex.body_en[:80] }}{% endif %}"</p>
+              {% endif %}
+              <cite>— 评分 {{ ex.rating }} · {{ ex.author or '匿名' }}{% if ex.date_published %} · {{ ex.date_published }}{% endif %}</cite>
+            </blockquote>
+          </div>
+          {% endif %}
+          {% if item.image_evidence %}
+          <div class="issue-evidence-strip">
+            {% for img in item.image_evidence[:3] %}
+            <div class="evidence-thumb">
+              <img src="{{ img.primary_image_data_uri or img.primary_image }}" alt="{{ img.evidence_id }}">
+              <span class="evidence-label">{{ img.evidence_id }}</span>
+            </div>
+            {% endfor %}
+            {% if item.image_evidence | length > 3 %}
+            <div class="evidence-more">+{{ item.image_evidence | length - 3 }}</div>
+            {% endif %}
+          </div>
+          {% endif %}
+          <p class="issue-xref">详见 Excel →「评论」页 → 筛选 SKU 列</p>
         </article>
         {% endfor %}
       </div>
     </div>
   </section>
 
-  <section class="report-page">
+  <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
         <p class="section-kicker">竞品借鉴</p>
         <h2>竞品好评 Benchmark</h2>
         <p class="page-note">竞品只看正向借鉴，不抢自有产品主篇幅。</p>
       </div>
+      {% if analytics.competitor.gap_analysis %}
+      <div class="gap-callout">
+        <p class="section-kicker">竞品优势 vs 自有短板</p>
+        {% for gap in analytics.competitor.gap_analysis %}
+        <p>{{ gap.label_display }}：竞品好评 {{ gap.competitor_positive_count }} 条，自有差评 {{ gap.own_negative_count }} 条</p>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="two-up benchmark-layout">
         <article class="analysis-block">
           <div class="block-head">
@@ -230,41 +286,5 @@
     </div>
   </section>
 
-  <section class="report-page">
-    <div class="page-frame">
-      <div class="page-head">
-        <p class="section-kicker">证据</p>
-        <h2>证据附录</h2>
-        <p class="page-note">每条证据都对应正文结论编号，不再使用等权图片墙。</p>
-      </div>
-      <div class="evidence-directory">
-        {% for item in analytics.appendix.image_reviews %}
-        <article class="evidence-record">
-          <div class="evidence-head">
-            <div class="evidence-id">{{ item.evidence_id }}</div>
-            <div class="evidence-meta">
-              <p class="row-title">{{ item.product_name }}</p>
-              <p class="row-meta">SKU: {{ item.product_sku }} ｜ 评分 {{ item.rating }} ｜ {{ item.supports_text }}</p>
-            </div>
-          </div>
-          <div class="evidence-body">
-            {% if item.primary_image %}
-            <div class="evidence-media">
-              <img src="{{ item.primary_image }}" alt="{{ item.headline_display }}" referrerpolicy="no-referrer">
-            </div>
-            {% endif %}
-            <div class="evidence-copy">
-              <p class="panel-label">评论摘录</p>
-              <p class="evidence-title">{{ item.headline_display }}</p>
-              {% if item.body_display %}
-              <p>{{ item.body_display }}</p>
-              {% endif %}
-            </div>
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-    </div>
-  </section>
 </body>
 </html>
