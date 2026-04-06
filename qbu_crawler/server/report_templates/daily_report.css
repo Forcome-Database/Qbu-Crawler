@@ -1,9 +1,31 @@
+/* ==========================================================================
+   Qbu-Crawler Daily Report — CSS Design System
+   Generated for Playwright/Chromium PDF output (A4)
+   Layout: float-based 2-column (NOT CSS Grid for flow sections)
+   ========================================================================== */
+
+/* ==========================================================================
+   1. PAGE & PRINT SETUP
+   ========================================================================== */
+
 @page {
   size: A4;
   margin: 0;
 }
 
+@media print {
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* ==========================================================================
+   2. DESIGN TOKENS
+   ========================================================================== */
+
 :root {
+  /* Color palette */
   --paper: #f5f0e8;
   --panel: #fffaf3;
   --panel-strong: #f1e6d7;
@@ -15,10 +37,44 @@
   --green: #345f57;
   --green-soft: #dce9e3;
   --gold: #b0823a;
+  --gold-soft: #f5ecd4;
+  --red-bg: #f2d9d0;
+
+  /* Spacing scale */
+  --sp-xs: 4px;
+  --sp-sm: 8px;
+  --sp-md: 12px;
+  --sp-lg: 16px;
+  --sp-xl: 20px;
+
+  /* Typography scale */
+  --fs-xs: 9px;
+  --fs-sm: 10px;
+  --fs-base: 11px;
+  --fs-md: 13px;
+  --fs-lg: 18px;
+  --fs-xl: 26px;
+  --fs-hero: 34px;
+
+  /* Radii */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 26px;
+  --radius-pill: 999px;
+
+  /* Shadows */
   --shadow: 0 10px 28px rgba(34, 23, 13, 0.08);
+  --shadow-sm: 0 2px 8px rgba(34, 23, 13, 0.05);
 }
 
-* {
+/* ==========================================================================
+   3. RESET & BASE
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -30,8 +86,8 @@ body {
 
 body {
   color: var(--ink);
-  font-family: var(--report-font-family);
-  font-size: 11px;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--fs-base);
   line-height: 1.55;
   background: linear-gradient(180deg, #faf6ef 0%, #f3ede3 100%);
 }
@@ -39,183 +95,112 @@ body {
 h1,
 h2,
 h3,
+h4,
 p,
-ul {
+ul,
+ol {
   margin: 0;
+  padding: 0;
 }
+
+/* ==========================================================================
+   4. REPORT SHELL & PAGE FRAMES
+   ========================================================================== */
 
 .report-shell {
   padding: 0;
 }
 
+/* P1 hero: force page break after */
 .report-page-hero {
   break-after: page;
   page-break-after: always;
 }
 
+/* P2-P5: no forced breaks, flow naturally */
 .report-page {
   break-after: auto;
   page-break-after: auto;
 }
 
+/* Section separator */
 .report-section + .report-section {
-  margin-top: 28px;
-  padding-top: 20px;
+  margin-top: 24px;
+  padding-top: var(--sp-xl);
   border-top: 3px solid var(--accent);
 }
 
-.page-frame,
-.hero-block,
-.analysis-block,
-.focus-card,
-.issue-card,
-.quote-block,
-.evidence-record {
+/* Page frame — the rounded card wrapping each major page */
+.page-frame {
+  padding: 18px var(--sp-xl) var(--sp-xl);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 251, 244, 0.98) 0%,
+    rgba(255, 248, 240, 0.96) 100%
+  );
+  box-shadow: var(--shadow);
   break-inside: avoid;
   page-break-inside: avoid;
 }
 
-.page-frame {
-  min-height: auto;
-  padding: 18px 20px 20px;
-  border: 1px solid var(--line);
-  border-radius: 26px;
-  background: linear-gradient(180deg, rgba(255, 251, 244, 0.98) 0%, rgba(255, 248, 240, 0.96) 100%);
-  box-shadow: var(--shadow);
-}
-
+/* Hero page variant */
 .report-page-hero .page-frame {
   background:
     radial-gradient(circle at top right, rgba(147, 84, 63, 0.14), transparent 35%),
     linear-gradient(180deg, #fff7f0 0%, #f5ede2 100%);
 }
 
-.hero-topline,
-.section-kicker,
-.panel-label,
-.row-meta,
-.page-note {
-  color: var(--muted);
+/* ==========================================================================
+   5. BREAK-INSIDE AVOID — CRITICAL FOR PDF
+   ========================================================================== */
+
+.issue-card,
+.chart-container,
+.quote-block,
+.evidence-strip {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
+
+.data-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* ==========================================================================
+   6. SECTION KICKERS & HEADINGS
+   ========================================================================== */
 
 .hero-topline,
 .section-kicker,
 .panel-label {
-  font-size: 10px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.16em;
   text-transform: uppercase;
-}
-
-.hero-topline,
-.section-kicker {
-  margin-bottom: 10px;
+  color: var(--muted);
 }
 
 .hero-topline {
   color: var(--accent);
+  margin-bottom: var(--sp-sm);
 }
 
-.hero-grid {
-  display: grid;
-  grid-template-columns: 1.2fr 0.88fr;
-  gap: 18px;
-  align-items: start;
+.section-kicker {
+  margin-bottom: var(--sp-sm);
 }
 
-.hero-main h1 {
-  max-width: 8ch;
-  font-size: 34px;
-  line-height: 1.03;
-  letter-spacing: -0.05em;
+.panel-label {
+  margin-bottom: var(--sp-sm);
 }
 
-.hero-headline {
-  max-width: 24ch;
-  margin-top: 18px;
-  font-size: 20px;
-  line-height: 1.28;
-  letter-spacing: -0.03em;
-}
-
-.hero-meta {
-  margin-top: 16px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.hero-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.metric-card {
-  padding: 14px 16px;
-  border: 1px solid rgba(147, 84, 63, 0.12);
-  border-radius: 18px;
-  background: rgba(255, 250, 244, 0.8);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-}
-
-.metric-card span {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.metric-card strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 26px;
-  line-height: 1;
-}
-
-.hero-support {
-  display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
-  gap: 14px;
-  margin-top: 18px;
-}
-
-.hero-block,
-.analysis-block,
-.focus-card,
-.issue-card,
-.quote-block,
-.evidence-record {
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: var(--panel);
-}
-
-.hero-block,
-.analysis-block,
-.focus-card,
-.issue-card {
-  padding: 16px;
-}
-
-.hero-bullets {
-  padding-left: 18px;
-}
-
-.hero-bullets li + li {
-  margin-top: 10px;
-}
-
-.hero-block-mode {
-  background: linear-gradient(180deg, rgba(255, 251, 245, 0.95) 0%, rgba(244, 236, 223, 0.92) 100%);
-}
-
-.mode-copy + .mode-copy {
-  margin-top: 10px;
-}
-
+/* Page head block */
 .page-head {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 16px;
+  gap: var(--sp-xs);
+  margin-bottom: var(--sp-lg);
 }
 
 .page-head h2 {
@@ -226,39 +211,17 @@ ul {
 
 .page-note {
   max-width: 58ch;
+  color: var(--muted);
+  font-size: var(--fs-base);
 }
 
-.two-up,
-.focus-grid,
-.issue-grid {
-  display: grid;
-  gap: 14px;
-}
-
-.two-up {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.focus-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.issue-grid {
-  display: block;
-}
-
-.issue-card + .issue-card {
-  margin-top: 14px;
-}
-
+/* Block-level headings */
 .block-head {
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-md);
 }
 
-.block-head h3,
-.focus-head h3,
-.issue-top h3 {
-  font-size: 18px;
+.block-head h3 {
+  font-size: var(--fs-lg);
   line-height: 1.18;
   letter-spacing: -0.03em;
 }
@@ -268,10 +231,125 @@ ul {
   color: var(--muted);
 }
 
+/* ==========================================================================
+   7. DATA TABLES
+   ========================================================================== */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+}
+
+.data-table th {
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 2px solid var(--line);
+}
+
+.data-table td {
+  padding: var(--sp-sm) var(--sp-md);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.data-table td:first-child {
+  max-width: 160px;
+  word-break: break-word;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tr:hover td {
+  background: rgba(245, 240, 232, 0.5);
+}
+
+/* Severity row coloring */
+.data-table tr.severity-high td {
+  background: rgba(242, 217, 208, 0.35);
+}
+
+.data-table tr.severity-medium td {
+  background: rgba(245, 236, 212, 0.35);
+}
+
+.data-table tr.severity-low td {
+  background: rgba(220, 233, 227, 0.25);
+}
+
+/* ==========================================================================
+   8. FLOAT-BASED 2-COLUMN LAYOUT (.grid-2)
+   NOTE: Uses float:left, NOT CSS Grid — Chromium break-inside:avoid is
+   unreliable inside grid children (see D013 devlog).
+   ========================================================================== */
+
+.grid-2 {
+  width: 100%;
+}
+
+.grid-2::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.grid-2 > * {
+  float: left;
+  width: calc(50% - 7px);
+  box-sizing: border-box;
+}
+
+.grid-2 > *:nth-child(odd) {
+  margin-right: 14px;
+}
+
+.grid-2 > *:nth-child(even) {
+  margin-right: 0;
+}
+
+/* Clearfix utility */
+.clearfix::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+/* ==========================================================================
+   9. CHART CONTAINERS
+   ========================================================================== */
+
+.chart-container {
+  padding: var(--sp-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+  overflow: hidden;
+}
+
+/* Plotly responsiveness override */
+.chart-container .js-plotly-plot {
+  width: 100% !important;
+}
+
+.chart-container .js-plotly-plot .plot-container {
+  width: 100% !important;
+}
+
+/* Legacy chart-wrap compatibility */
 .chart-wrap {
-  min-height: 246px;
+  min-height: 200px;
   padding: 10px 10px 0;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   background: #fff;
 }
 
@@ -281,14 +359,484 @@ ul {
   height: auto;
 }
 
-.stack-list {
-  margin-top: 12px;
+/* ==========================================================================
+   10. HERO PAGE (P1)
+   ========================================================================== */
+
+/* Health gauge + hero main side-by-side */
+.health-gauge-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-lg);
+  margin-bottom: var(--sp-lg);
 }
 
-.stack-row + .stack-row,
+.hero-main {
+  flex: 1;
+}
+
+.hero-main h1 {
+  font-size: var(--fs-hero);
+  line-height: 1.03;
+  letter-spacing: -0.05em;
+  max-width: 8ch;
+}
+
+.hero-headline {
+  max-width: 26ch;
+  margin-top: var(--sp-lg);
+  font-size: var(--fs-xl);
+  line-height: 1.28;
+  letter-spacing: -0.03em;
+}
+
+.hero-meta {
+  margin-top: var(--sp-md);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* KPI grid — flex-wrap, 5 metric cards + 1 health gauge */
+.kpi-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-lg);
+}
+
+.kpi-grid .metric-card {
+  flex: 1 1 calc(20% - var(--sp-sm));
+  min-width: 100px;
+}
+
+/* Metric card */
+.metric-card {
+  padding: var(--sp-md) var(--sp-lg);
+  border: 1px solid rgba(147, 84, 63, 0.12);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 250, 244, 0.8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.metric-card span {
+  display: block;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-xl);
+  line-height: 1;
+}
+
+.metric-card .metric-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: var(--sp-xs);
+}
+
+.metric-card .metric-value {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink);
+}
+
+/* Hero support row — flex, two panels side by side */
+.hero-support {
+  display: flex;
+  gap: var(--sp-md);
+  margin-top: var(--sp-lg);
+}
+
+.hero-support > * {
+  flex: 1;
+}
+
+/* Hero block — card panel in hero page */
+.hero-block {
+  padding: var(--sp-lg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.hero-block-mode {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 251, 245, 0.95) 0%,
+    rgba(244, 236, 223, 0.92) 100%
+  );
+}
+
+.hero-bullets {
+  padding-left: 18px;
+}
+
+.hero-bullets li + li {
+  margin-top: var(--sp-sm);
+}
+
+.mode-copy + .mode-copy {
+  margin-top: var(--sp-sm);
+}
+
+/* Alert signal lamps */
+.alert-signal {
+  padding: var(--sp-sm) 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  margin-top: var(--sp-md);
+}
+
+.alert-signal.alert-red {
+  background: var(--red-bg);
+  color: var(--accent);
+}
+
+.alert-signal.alert-yellow {
+  background: var(--gold-soft);
+  color: var(--gold);
+}
+
+.alert-signal.alert-green {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+/* Shorthand variants (no extra class needed) */
+.alert-red   { background: var(--red-bg);    color: var(--accent); }
+.alert-yellow { background: var(--gold-soft); color: var(--gold);   }
+.alert-green  { background: var(--green-soft); color: var(--green);  }
+
+/* ==========================================================================
+   11. ISSUE CARDS (P3 — Issue Deep Dive)
+   ========================================================================== */
+
+.issue-card {
+  padding: var(--sp-lg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.issue-card + .issue-card {
+  margin-top: var(--sp-md);
+}
+
+/* Issue header — title left, badge right */
+.issue-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-sm);
+}
+
+.issue-header h3 {
+  font-size: var(--fs-lg);
+  line-height: 1.18;
+  letter-spacing: -0.03em;
+}
+
+/* Issue stats row */
+.issue-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin-top: var(--sp-sm);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Issue timeline */
+.issue-timeline {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin-top: var(--sp-xs);
+}
+
+/* Cross-reference note */
+.issue-xref {
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ==========================================================================
+   12. EVIDENCE STRIP
+   ========================================================================== */
+
+.evidence-strip {
+  display: flex;
+  gap: var(--sp-sm);
+  margin-top: var(--sp-md);
+  overflow: hidden;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.evidence-thumb {
+  position: relative;
+  width: 100px;
+  height: 80px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.evidence-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.evidence-label {
+  position: absolute;
+  top: var(--sp-xs);
+  left: var(--sp-xs);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: var(--fs-xs);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.evidence-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 80px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   13. QUOTE BLOCKS (bilingual reviews)
+   ========================================================================== */
+
+.quote-block {
+  padding: var(--sp-md);
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
 .quote-block + .quote-block {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--sp-md);
+  padding-top: var(--sp-md);
+}
+
+/* Chinese review text */
+.quote-cn {
+  font-weight: 600;
+  font-size: var(--fs-base);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+/* Original English review */
+.quote-en {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin-top: var(--sp-xs);
+  line-height: 1.45;
+}
+
+/* Review metadata (author, date, stars) */
+.quote-meta {
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+/* ==========================================================================
+   14. LLM RECOMMENDATION BOX
+   ========================================================================== */
+
+.recommendation-box {
+  position: relative;
+  margin-top: var(--sp-md);
+  padding: var(--sp-md) var(--sp-md) var(--sp-md) 36px;
+  border: 1.5px dashed var(--accent-soft);
+  border-radius: var(--radius-md);
+  background: rgba(234, 214, 200, 0.15);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+
+.recommendation-box::before {
+  content: "AI";
+  position: absolute;
+  top: var(--sp-sm);
+  left: var(--sp-sm);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+}
+
+/* ==========================================================================
+   15. BADGES / SEVERITY PILLS
+   ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px var(--sp-sm);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge.severity-high {
+  background: var(--red-bg);
+  color: var(--accent);
+}
+
+.badge.severity-medium {
+  background: var(--gold-soft);
+  color: var(--gold);
+}
+
+.badge.severity-low {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+/* Standalone severity helpers (no .badge parent required) */
+.severity-high { color: var(--accent); }
+.severity-medium { color: var(--gold); }
+.severity-low { color: var(--green); }
+
+/* Legacy tag / priority-tag */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  padding: 3px var(--sp-sm);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+.priority-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 4px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   16. DELTA INDICATORS
+   ========================================================================== */
+
+.delta {
+  display: block;
+  margin-top: var(--sp-xs);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* Up delta — accent (brown), signals worsening / higher price */
+.delta-up {
+  color: var(--accent);
+}
+
+/* Down delta — green, signals improvement / lower price */
+.delta-down {
+  color: var(--green);
+}
+
+/* ==========================================================================
+   17. GAP CALLOUT (P4 — Competitive Intelligence)
+   ========================================================================== */
+
+.gap-callout {
+  margin-top: var(--sp-md);
+  padding: var(--sp-md);
+  border: 2px solid var(--accent-soft);
+  border-radius: var(--radius-md);
+  background: rgba(234, 214, 200, 0.3);
+}
+
+/* ==========================================================================
+   18. SHARED CARD / PANEL STYLES
+   ========================================================================== */
+
+.analysis-block,
+.focus-card {
+  padding: var(--sp-lg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.focus-panel {
+  padding: var(--sp-md);
+  border: 1px solid rgba(217, 204, 185, 0.8);
+  border-radius: var(--radius-md);
+  background: rgba(255, 252, 247, 0.8);
+}
+
+.focus-quote {
+  background: linear-gradient(
+    180deg,
+    rgba(241, 230, 215, 0.38) 0%,
+    rgba(255, 251, 244, 0.85) 100%
+  );
+}
+
+/* ==========================================================================
+   19. STACK LISTS & INLINE ROWS
+   ========================================================================== */
+
+.stack-list {
+  margin-top: var(--sp-md);
+}
+
+.stack-row + .stack-row {
+  margin-top: var(--sp-md);
+  padding-top: var(--sp-md);
   border-top: 1px solid var(--line);
 }
 
@@ -297,141 +845,96 @@ ul {
 }
 
 .row-meta {
-  margin-top: 4px;
-  font-size: 10px;
+  margin-top: var(--sp-xs);
+  font-size: var(--fs-sm);
+  color: var(--muted);
 }
 
 .row-stats,
 .row-inline,
-.focus-stats,
-.issue-top {
+.focus-stats {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-sm);
 }
 
 .row-stats,
 .focus-stats {
-  margin-top: 8px;
+  margin-top: var(--sp-sm);
   color: var(--muted);
 }
 
-.tag,
-.priority-tag,
-.evidence-id {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  font-weight: 700;
-}
-
-.tag {
-  min-width: 32px;
-  padding: 3px 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 10px;
-}
-
-.priority-tag {
-  min-width: 34px;
-  padding: 4px 9px;
-  background: var(--green-soft);
-  color: var(--green);
-  font-size: 10px;
-}
-
-.focus-head,
-.issue-top {
-  justify-content: space-between;
-}
-
-.focus-body,
-.issue-copy {
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.focus-body {
-  grid-template-columns: 0.85fr 0.7fr 1fr;
-}
-
-.focus-panel {
-  padding: 12px;
-  border: 1px solid rgba(217, 204, 185, 0.8);
-  border-radius: 16px;
-  background: rgba(255, 252, 247, 0.8);
-}
-
-.focus-quote {
-  background: linear-gradient(180deg, rgba(241, 230, 215, 0.38) 0%, rgba(255, 251, 244, 0.85) 100%);
-}
-
-.panel-label {
-  margin-bottom: 8px;
-}
-
-.benchmark-layout .analysis-block:last-child {
-  display: flex;
-  flex-direction: column;
-}
+/* ==========================================================================
+   20. TAKEAWAY LIST
+   ========================================================================== */
 
 .takeaway-list {
-  margin-top: 12px;
+  margin-top: var(--sp-md);
   padding-left: 18px;
 }
 
 .takeaway-list li + li {
-  margin-top: 8px;
+  margin-top: var(--sp-sm);
 }
 
-.quote-stack {
-  display: grid;
-  gap: 12px;
-  margin-top: 2px;
-}
-
-.quote-block {
-  padding: 14px;
-}
+/* ==========================================================================
+   21. EVIDENCE RECORDS (detailed evidence with media)
+   ========================================================================== */
 
 .evidence-directory {
-  display: grid;
-  gap: 14px;
+  display: block;
 }
 
 .evidence-record {
-  padding: 14px;
+  padding: var(--sp-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.evidence-record + .evidence-record {
+  margin-top: var(--sp-md);
 }
 
 .evidence-head {
-  display: grid;
-  grid-template-columns: 56px 1fr;
-  gap: 12px;
-  align-items: start;
+  display: flex;
+  gap: var(--sp-md);
+  align-items: flex-start;
 }
 
 .evidence-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 56px;
   height: 56px;
+  border-radius: var(--radius-pill);
   background: linear-gradient(180deg, var(--panel-strong) 0%, #ead9c2 100%);
   color: var(--accent);
-  font-size: 16px;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 .evidence-body {
-  display: grid;
-  grid-template-columns: 0.95fr 1.05fr;
-  gap: 14px;
-  margin-top: 12px;
+  margin-top: var(--sp-md);
+}
+
+.evidence-body::after {
+  content: "";
+  display: table;
+  clear: both;
 }
 
 .evidence-media {
-  min-height: 180px;
-  border-radius: 18px;
+  float: left;
+  width: 45%;
+  margin-right: var(--sp-md);
+  min-height: 160px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: #e9dfd0;
 }
@@ -444,89 +947,89 @@ ul {
 }
 
 .evidence-copy {
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 8px;
+  gap: var(--sp-sm);
 }
 
 .evidence-title {
   font-weight: 700;
 }
 
-/* 证据缩略图条带 */
-.issue-evidence-strip {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-  overflow: hidden;
+/* ==========================================================================
+   22. ISSUE COPY & FOCUS BODY
+   ========================================================================== */
+
+.issue-copy {
+  margin-top: var(--sp-md);
 }
-.evidence-thumb {
-  position: relative;
-  width: 100px;
-  height: 80px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
+
+.issue-copy::after {
+  content: "";
+  display: table;
+  clear: both;
 }
-.evidence-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.evidence-label {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  background: rgba(0,0,0,0.6);
-  color: #fff;
-  font-size: 9px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-weight: 700;
-}
-.evidence-more {
+
+.focus-head {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 60px;
-  height: 80px;
-  border-radius: 10px;
-  background: var(--panel-strong);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  justify-content: space-between;
 }
 
-/* 双语评论 */
-.quote-cn { font-weight: 600; }
-.quote-en { font-size: 10px; color: var(--muted); margin-top: 4px; }
-.issue-timeline { font-size: 10px; color: var(--muted); margin-top: 4px; }
-.issue-xref { margin-top: 10px; font-size: 9px; color: var(--muted); font-style: italic; }
-
-/* Delta 标记 */
-.delta { display: block; margin-top: 4px; font-size: 9px; font-weight: 600; }
-.delta-up { color: var(--accent); }
-.delta-down { color: var(--green); }
-
-/* Alert 信号灯 */
-.alert-signal { padding: 8px 14px; border-radius: 10px; font-size: 11px; font-weight: 600; margin-top: 12px; }
-.alert-red { background: var(--accent-soft); color: var(--accent); }
-.alert-yellow { background: #f5ecd4; color: var(--gold); }
-.alert-green { background: var(--green-soft); color: var(--green); }
-
-/* Gap callout */
-.gap-callout {
-  margin-top: 14px;
-  padding: 14px;
-  border: 2px solid var(--accent-soft);
-  border-radius: 16px;
-  background: rgba(234, 214, 200, 0.3);
+.focus-head h3 {
+  font-size: var(--fs-lg);
+  line-height: 1.18;
+  letter-spacing: -0.03em;
 }
 
-@media print {
-  body {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
+.focus-body {
+  margin-top: var(--sp-md);
 }
+
+.focus-body::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+/* ==========================================================================
+   23. QUOTE STACK
+   ========================================================================== */
+
+.quote-stack {
+  margin-top: var(--sp-xs);
+}
+
+.quote-stack .quote-block + .quote-block {
+  margin-top: var(--sp-md);
+}
+
+/* ==========================================================================
+   24. BENCHMARK / COMPETITIVE SECTION
+   ========================================================================== */
+
+.benchmark-layout .analysis-block:last-child {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   25. UTILITY CLASSES
+   ========================================================================== */
+
+.text-muted    { color: var(--muted); }
+.text-accent   { color: var(--accent); }
+.text-green    { color: var(--green); }
+.text-gold     { color: var(--gold); }
+.text-xs       { font-size: var(--fs-xs); }
+.text-sm       { font-size: var(--fs-sm); }
+.text-base     { font-size: var(--fs-base); }
+.text-md       { font-size: var(--fs-md); }
+.fw-bold       { font-weight: 700; }
+.fw-semibold   { font-weight: 600; }
+.mt-xs         { margin-top: var(--sp-xs); }
+.mt-sm         { margin-top: var(--sp-sm); }
+.mt-md         { margin-top: var(--sp-md); }
+.mt-lg         { margin-top: var(--sp-lg); }
+.mt-xl         { margin-top: var(--sp-xl); }
