@@ -138,6 +138,47 @@ def main():
         finally:
             scraper.close()
 
+    # ── backfill-analysis 子命令 ──────────────────────
+    if len(sys.argv) >= 2 and sys.argv[1] == "backfill-analysis":
+        from qbu_crawler import models, config
+        models.init_db()
+        if "--help" in sys.argv:
+            print("Usage: qbu-crawler backfill-analysis [--dry-run]")
+            print("Re-process existing reviews through the Translation++ pipeline.")
+            print("WARNING: This resets translate_status for reviews without analysis,")
+            print("causing them to be re-translated AND analyzed on next worker cycle.")
+            sys.exit(0)
+        dry_run = "--dry-run" in sys.argv
+
+        import sqlite3
+        conn = sqlite3.connect(config.DB_PATH)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM reviews r WHERE NOT EXISTS "
+            "(SELECT 1 FROM review_analysis ra WHERE ra.review_id = r.id)"
+        ).fetchone()[0]
+        conn.close()
+
+        print(f"Reviews without analysis: {total}")
+        if dry_run:
+            print("Dry run — no changes made.")
+            sys.exit(0)
+        if total == 0:
+            print("Nothing to backfill.")
+            sys.exit(0)
+
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.execute(
+            "UPDATE reviews SET translate_status = NULL WHERE id IN "
+            "(SELECT r.id FROM reviews r WHERE NOT EXISTS "
+            "(SELECT 1 FROM review_analysis ra WHERE ra.review_id = r.id))"
+        )
+        conn.commit()
+        conn.close()
+
+        print(f"Reset {total} reviews for re-processing.")
+        print("Start TranslationWorker (via 'qbu-crawler serve') to process them.")
+        sys.exit(0)
+
     # ── serve 子命令 ──────────────────────────────────
     if len(sys.argv) >= 2 and sys.argv[1] == "serve":
         from qbu_crawler.server.app import start_server
