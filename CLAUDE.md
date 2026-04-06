@@ -47,6 +47,7 @@ Qbu-Crawler/
 │       ├── __init__.py
 │       ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
 │       ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
+│       ├── report_common.py    # 报告共享常量、归一化、人话化 bullets、hero headline、alert level
 │       ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
 │       ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
 │       ├── api/
