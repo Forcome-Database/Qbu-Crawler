@@ -116,6 +116,97 @@ def _compute_kpi_deltas(current_kpis, prev_analytics):
     return deltas
 
 
+# ── Hero page helpers ──────────────────────────────────────────────────────
+
+
+def _generate_hero_headline(normalized):
+    """Generate a data-driven hero headline from *normalized* analytics."""
+    top = (normalized.get("self", {}).get("risk_products") or [None])[0]
+    if not top:
+        # No own-product risk data — fall back to competitor themes
+        themes = normalized.get("competitor", {}).get("top_positive_themes") or []
+        if themes:
+            return f"当前竞品最稳定的用户认可点集中在{themes[0].get('label_display', '')}。"
+        return "当前样本不足以形成明确主结论，建议继续积累样本后再判读。"
+
+    top_labels = top.get("top_labels") or []
+    cluster_code = top_labels[0].get("label_code") if top_labels else ""
+    cluster_name = _LABEL_DISPLAY.get(cluster_code, cluster_code)
+
+    neg_delta = normalized.get("kpis", {}).get("negative_review_rows_delta")
+    total_reviews = top.get("total_reviews") or 0
+    neg_count = top.get("negative_review_rows", 0)
+
+    if neg_delta and neg_delta > 0:
+        rate_word = "环比增加" if neg_delta < 10 else "环比激增"
+        return f"本期最高风险：{top['product_name']} {cluster_name}问题{rate_word} {neg_delta} 条，需优先跟进。"
+    elif total_reviews > 0:
+        pct = neg_count / total_reviews
+        return f"自有产品 {top['product_name']} 差评率 {pct:.0%}，{cluster_name}问题集中。"
+    else:
+        return f"自有产品 {top['product_name']} 的{cluster_name}问题最值得优先处理。"
+
+
+def _compute_alert_level(normalized):
+    """Return ``(level, text)`` where *level* is ``"red"``/``"yellow"``/``"green"``."""
+    top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
+    high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
+    delta = normalized.get("kpis", {}).get("negative_review_rows_delta", 0) or 0
+    if high_sev or delta >= 10:
+        return "red", "存在高严重度问题簇，建议今日跟进"
+    elif delta > 0:
+        return "yellow", "差评数较上期有所上升，请持续关注"
+    else:
+        return "green", "无新增高风险信号"
+
+
+def _humanize_bullets(normalized):
+    """Generate up to 3 natural-language conclusions for the executive summary."""
+    bullets = []
+    # Bullet 1: highest-risk product — negative rate and delta
+    top = (normalized.get("self", {}).get("risk_products") or [None])[0]
+    if top:
+        top_labels = top.get("top_labels") or []
+        cluster_code = top_labels[0].get("label_code") if top_labels else ""
+        cluster_name = _LABEL_DISPLAY.get(cluster_code, cluster_code)
+        total = top.get("total_reviews") or 0
+        neg = top.get("negative_review_rows", 0)
+        rate_str = f"（差评率 {neg/total:.0%}）" if total else ""
+        neg_delta = normalized.get("kpis", {}).get("negative_review_rows_delta", 0) or 0
+        delta_str = f"，较上期新增 {neg_delta} 条" if neg_delta > 0 else ""
+        bullets.append(
+            f"自有产品 {top['product_name']} 累计 {neg} 条差评"
+            f"{rate_str}，问题集中在{cluster_name}{delta_str}"
+        )
+
+    # Bullet 2: competitor comparison — prefer gap analysis
+    gaps = normalized.get("competitor", {}).get("gap_analysis") or []
+    themes = normalized.get("competitor", {}).get("top_positive_themes") or []
+    if gaps:
+        g = gaps[0]
+        bullets.append(
+            f"竞品在{g['label_display']}方面好评 {g['competitor_positive_count']} 条，"
+            f"同期自有同维度差评 {g['own_negative_count']} 条，存在差距"
+        )
+    elif themes:
+        bullets.append(
+            f"竞品好评聚焦在{themes[0].get('label_display', '')}（{themes[0].get('review_count', 0)} 条）"
+        )
+
+    # Bullet 3: coverage summary — show translation warning only if abnormal
+    kpis = normalized.get("kpis", {})
+    translation_rate = kpis.get("translation_completion_rate") or 1.0
+    if translation_rate < 0.7:
+        bullets.append(
+            f"注意：{kpis.get('untranslated_count', 0)} 条评论翻译未完成，中文分析可能不完整"
+        )
+    else:
+        bullets.append(
+            f"本期覆盖 {kpis.get('product_count', 0)} 个产品、{kpis.get('ingested_review_rows', 0)} 条评论"
+        )
+    return bullets[:3]
+
+
 # ── Previous analytics loader ───────────────────────────────────────────────
 
 

@@ -178,3 +178,95 @@ def test_compute_kpi_deltas_no_prev():
 def test_compute_kpi_deltas_missing_field():
     deltas = _compute_kpi_deltas({"negative_review_rows": 10}, {"kpis": {}})
     assert deltas["negative_review_rows_delta"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Tests for _generate_hero_headline, _compute_alert_level, _humanize_bullets
+# ---------------------------------------------------------------------------
+
+from qbu_crawler.server.report_common import (
+    _generate_hero_headline,
+    _compute_alert_level,
+    _humanize_bullets,
+)
+
+
+def test_hero_headline_with_delta():
+    normalized = {
+        "self": {"risk_products": [{"product_name": "Cabela's Stuffer", "negative_review_rows": 18,
+                                     "total_reviews": 50, "top_labels": [{"label_code": "quality_stability", "count": 14}]}],
+                 "top_negative_clusters": []},
+        "competitor": {"top_positive_themes": []},
+        "kpis": {"negative_review_rows_delta": 12},
+    }
+    result = _generate_hero_headline(normalized)
+    assert "环比" in result
+    assert "Cabela's Stuffer" in result
+    assert "质量稳定性" in result
+
+
+def test_hero_headline_no_delta():
+    normalized = {
+        "self": {"risk_products": [{"product_name": "Stuffer", "negative_review_rows": 18,
+                                     "total_reviews": 50, "top_labels": [{"label_code": "quality_stability"}]}]},
+        "competitor": {"top_positive_themes": []},
+        "kpis": {},
+    }
+    result = _generate_hero_headline(normalized)
+    assert "36%" in result  # 18/50
+
+
+def test_hero_headline_no_risk():
+    normalized = {"self": {"risk_products": []}, "competitor": {"top_positive_themes": []}, "kpis": {}}
+    result = _generate_hero_headline(normalized)
+    assert "样本不足" in result
+
+
+def test_alert_level_red():
+    normalized = {
+        "self": {"top_negative_clusters": [{"severity": "high", "review_count": 10}]},
+        "kpis": {"negative_review_rows_delta": 0},
+    }
+    level, _ = _compute_alert_level(normalized)
+    assert level == "red"
+
+
+def test_alert_level_yellow():
+    normalized = {
+        "self": {"top_negative_clusters": [{"severity": "medium", "review_count": 3}]},
+        "kpis": {"negative_review_rows_delta": 5},
+    }
+    level, _ = _compute_alert_level(normalized)
+    assert level == "yellow"
+
+
+def test_alert_level_green():
+    normalized = {"self": {"top_negative_clusters": []}, "kpis": {"negative_review_rows_delta": 0}}
+    level, _ = _compute_alert_level(normalized)
+    assert level == "green"
+
+
+def test_humanize_bullets_with_rate_and_delta():
+    normalized = {
+        "self": {"risk_products": [{"product_name": "Stuffer", "negative_review_rows": 18,
+                                     "total_reviews": 50, "top_labels": [{"label_code": "quality_stability"}]}]},
+        "competitor": {"top_positive_themes": [{"label_display": "做工扎实", "review_count": 69, "label_code": "solid_build"}],
+                       "gap_analysis": []},
+        "kpis": {"product_count": 9, "ingested_review_rows": 636, "untranslated_count": 0,
+                 "negative_review_rows_delta": 5, "translation_completion_rate": 1.0},
+    }
+    bullets = _humanize_bullets(normalized)
+    assert len(bullets) == 3
+    assert "36%" in bullets[0]
+    assert "新增 5 条" in bullets[0]
+
+
+def test_humanize_bullets_low_translation():
+    normalized = {
+        "self": {"risk_products": []},
+        "competitor": {"top_positive_themes": [], "gap_analysis": []},
+        "kpis": {"product_count": 5, "ingested_review_rows": 100,
+                 "untranslated_count": 40, "translation_completion_rate": 0.6},
+    }
+    bullets = _humanize_bullets(normalized)
+    assert any("翻译未完成" in b for b in bullets)
