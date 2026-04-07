@@ -558,8 +558,12 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
             item["label_code"],
         )
     )
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
     for item in items:
         item.pop("severity_score")
+        item["label_display"] = _LABEL_DISPLAY.get(item["label_code"], item["label_code"])
+        item["severity_display"] = {"high": "高", "medium": "中", "low": "低"}.get(item["severity"], item["severity"])
         item["affected_product_count"] = len(item.pop("affected_products"))
         dates = item.pop("dates")
         item["first_seen"] = min(dates) if dates else None
@@ -770,8 +774,10 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
         max_sev = max(data["severities"], key=lambda s: _SEVERITY_SCORE.get(s, 0), default="low")
 
         result.append({
+            "label_code": feat,
             "feature_display": feat,
             "label_display": feat,  # backward compat with label-based templates
+            "label_polarity": polarity,
             "review_count": len(reviews),
             "affected_product_count": len(data["products"]),
             "severity": max_sev,
@@ -1001,6 +1007,17 @@ def build_report_analytics(snapshot, synced_labels=None):
     # Chart-specific analytics data (radar, heatmap, sentiment distribution)
     chart_data = _compute_chart_data(labeled_reviews, snapshot)
 
+    # Compute recently_published_count: reviews published within 30 days of logical_date
+    from qbu_crawler.server.report_common import _parse_date_flexible
+    from datetime import date as _date, timedelta as _timedelta
+    logical = _date.fromisoformat(snapshot["logical_date"])
+    recent_cutoff = logical - _timedelta(days=30)
+    recently_published_count = 0
+    for review in snapshot_reviews:
+        pub_date = _parse_date_flexible(review.get("date_published"))
+        if pub_date and pub_date >= recent_cutoff:
+            recently_published_count += 1
+
     return {
         "run_id": snapshot.get("run_id"),
         "logical_date": snapshot["logical_date"],
@@ -1013,7 +1030,8 @@ def build_report_analytics(snapshot, synced_labels=None):
         "generated_at": config.now_shanghai().isoformat(),
         "_products_for_charts": products_for_charts,
         "metric_semantics": {
-            "ingested_review_rows": "reviews 实际入库行数",
+            "ingested_review_rows": "reviews 实际入库行数（按 scraped_at 窗口，含历史补采）",
+            "recently_published_count": "其中 date_published 在近 30 天内的评论数",
             "site_reported_review_total_current": "products.review_count 当前站点展示总评论数",
         },
         "kpis": {
@@ -1042,6 +1060,7 @@ def build_report_analytics(snapshot, synced_labels=None):
             "low_rating_review_rows": sum(
                 1 for review in snapshot_reviews if (review.get("rating") or 0) <= config.LOW_RATING_THRESHOLD
             ),
+            "recently_published_count": recently_published_count,
         },
         "self": {
             "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", [])),

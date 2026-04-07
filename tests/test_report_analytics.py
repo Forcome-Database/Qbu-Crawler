@@ -623,3 +623,62 @@ def test_recommendations_include_concrete_evidence(analytics_db):
     assert "top_complaint" in rec, "Should include top_complaint field"
     assert rec["top_complaint"], "top_complaint should not be empty"
     assert "affected_products" in rec, "Should include affected_products field"
+
+
+def test_kpis_include_recently_published_count(analytics_db):
+    """KPIs should distinguish scraped count from recently published count."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-07",
+        "snapshot_hash": "test",
+        "products": [
+            {"name": "P1", "sku": "S1", "ownership": "own", "rating": 4.0,
+             "review_count": 10, "site": "basspro"},
+        ],
+        "reviews": [
+            # Published recently
+            {"product_name": "P1", "product_sku": "S1", "ownership": "own",
+             "rating": 2, "headline": "broke", "body": "", "headline_cn": "",
+             "body_cn": "", "date_published": "2026-04-06", "images": None},
+            # Published 6 months ago but scraped in this window
+            {"product_name": "P1", "product_sku": "S1", "ownership": "own",
+             "rating": 1, "headline": "broke after a week", "body": "",
+             "headline_cn": "", "body_cn": "", "date_published": "2025-10-01",
+             "images": None},
+        ],
+    }
+    analytics = build_report_analytics(snapshot)
+    kpis = analytics["kpis"]
+    assert "recently_published_count" in kpis
+    assert kpis["recently_published_count"] == 1  # only the recent one
+
+
+def test_cluster_output_consistent_fields(analytics_db):
+    """Both cluster code paths must produce the same set of required fields."""
+    from qbu_crawler.server.report_analytics import _cluster_summary_items, _build_feature_clusters, _build_labeled_reviews
+
+    snapshot = _build_snapshot(1, "2026-04-01")
+    labeled = _build_labeled_reviews(snapshot)
+    label_clusters = _cluster_summary_items(labeled, ownership="own", polarity="negative")
+
+    # Feature clusters need analysis data
+    enriched_reviews = [
+        {**r, "analysis_features": '["电机质量"]', "analysis_labels": '[{"severity": "high"}]',
+         "sentiment": "negative"}
+        for r in snapshot["reviews"] if r.get("ownership") == "own"
+    ]
+    feature_clusters = _build_feature_clusters(enriched_reviews, ownership="own", polarity="negative")
+
+    required_keys = {
+        "label_code", "label_display", "review_count", "severity",
+        "severity_display", "affected_product_count", "first_seen",
+        "last_seen", "example_reviews", "image_review_count",
+    }
+    for cluster in label_clusters:
+        missing = required_keys - set(cluster.keys())
+        assert not missing, f"Label cluster missing keys: {missing}"
+    for cluster in feature_clusters:
+        missing = required_keys - set(cluster.keys())
+        assert not missing, f"Feature cluster missing keys: {missing}"
