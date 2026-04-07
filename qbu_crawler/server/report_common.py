@@ -642,8 +642,11 @@ def normalize_deep_report_analytics(analytics):
         product_key = review.get("product_sku") or review.get("product_name") or ""
         if product_key:
             evidence_refs_by_sku.setdefault(product_key, []).append(review["evidence_id"])
-        for label_code in label_codes:
-            evidence_refs_by_label.setdefault(label_code, []).append(review["evidence_id"])
+        # Only link to the primary (first/highest-confidence) label
+        review["primary_label"] = label_codes[0] if label_codes else None
+        primary = label_codes[0] if label_codes else None
+        if primary:
+            evidence_refs_by_label.setdefault(primary, []).append(review["evidence_id"])
         image_reviews.append(review)
     normalized["appendix"]["image_reviews"] = image_reviews
 

@@ -887,3 +887,49 @@ def test_baseline_mode_suppresses_deltas():
     # Delta values should be 0
     assert normalized["kpis"]["negative_review_rows_delta"] == 0
     assert normalized["kpis"]["own_negative_review_rows_delta"] == 0
+
+
+def test_evidence_refs_use_primary_label():
+    """Image evidence should be linked to its primary (first) label, not all labels."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {"ingested_review_rows": 5},
+        "self": {
+            "risk_products": [
+                {"product_name": "P1", "product_sku": "S1",
+                 "negative_review_rows": 3, "risk_score": 10,
+                 "top_labels": [{"label_code": "quality_stability", "count": 3}]},
+            ],
+            "top_negative_clusters": [
+                {"label_code": "quality_stability", "review_count": 3,
+                 "severity": "high", "affected_product_count": 1,
+                 "example_reviews": [], "image_review_count": 1},
+                {"label_code": "material_finish", "review_count": 1,
+                 "severity": "medium", "affected_product_count": 1,
+                 "example_reviews": [], "image_review_count": 0},
+            ],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {
+            "image_reviews": [
+                {"product_name": "P1", "product_sku": "S1", "ownership": "own",
+                 "rating": 1, "headline": "Motor burned out", "body": "broke and rusted",
+                 "images": ["http://example.com/img1.jpg"],
+                 "label_codes": ["quality_stability", "material_finish"]},
+            ],
+        },
+    }
+    normalized = normalize_deep_report_analytics(analytics)
+
+    # quality_stability (primary/first label) should have the evidence ref
+    qs_cluster = [c for c in normalized["self"]["top_negative_clusters"]
+                  if c.get("label_code") == "quality_stability"][0]
+    assert qs_cluster["evidence_refs"], "Primary label cluster should have evidence"
+
+    # material_finish (secondary label) should NOT have the same evidence
+    mf_cluster = [c for c in normalized["self"]["top_negative_clusters"]
+                  if c.get("label_code") == "material_finish"][0]
+    assert not mf_cluster["evidence_refs"], \
+        "Secondary label cluster should NOT have evidence from primary-only linking"
