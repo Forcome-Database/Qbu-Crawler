@@ -126,14 +126,14 @@ def _build_bar_chart(
         template=QBU_THEME,
         title=dict(text=title),
         height=height,
-        yaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed", automargin=True),
         xaxis=dict(
             showgrid=True,
             gridcolor="#f0ebe3",
             griddash="dash",
         ),
         bargap=0.3,
-        margin=dict(l=10, r=40, t=36, b=10),
+        margin=dict(l=10, r=40, t=36, b=10, autoexpand=True),
     )
     return _to_html(fig)
 
