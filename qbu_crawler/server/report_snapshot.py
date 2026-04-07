@@ -139,8 +139,13 @@ def generate_full_report_from_snapshot(
         config.REPORT_DIR,
         f"workflow-run-{snapshot['run_id']}-full-report.pdf",
     )
+    html_output_path = os.path.join(
+        config.REPORT_DIR,
+        f"workflow-run-{snapshot['run_id']}-full-report.html",
+    )
     excel_path = None
     pdf_path = None
+    html_path = None
 
     try:
         synced_labels = report_analytics.sync_review_labels(snapshot)
@@ -163,6 +168,11 @@ def generate_full_report_from_snapshot(
             analytics=analytics,
         )
         pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, pdf_output_path)
+
+        # 保存完整交互式 HTML 报告（含 Plotly 图表，浏览器打开可交互）
+        report_html = report_pdf.render_report_html(snapshot, analytics)
+        Path(html_output_path).write_text(report_html, encoding="utf-8")
+        html_path = html_output_path
     except Exception as exc:
         if isinstance(exc, FullReportGenerationError):
             raise
@@ -183,7 +193,7 @@ def generate_full_report_from_snapshot(
                 subject=subject,
                 body_text=body,
                 body_html=body_html,
-                attachment_paths=[excel_path, pdf_path],
+                attachment_paths=[excel_path, pdf_path, html_path],
             )
         except Exception as exc:
             email_result = {"success": False, "error": str(exc), "recipients": 0}
@@ -198,5 +208,6 @@ def generate_full_report_from_snapshot(
         "excel_path": excel_path,
         "analytics_path": analytics_path,
         "pdf_path": pdf_path,
+        "html_path": html_path,
         "email": email_result,
     }

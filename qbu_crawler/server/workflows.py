@@ -603,6 +603,7 @@ class WorkflowWorker:
             excel_path = full_report["excel_path"]
             analytics_path = full_report.get("analytics_path")
             pdf_path = full_report.get("pdf_path")
+            html_path = full_report.get("html_path")
             email = full_report.get("email")
             email_ok = (email or {}).get("success")
             models.update_workflow_run(
@@ -630,6 +631,7 @@ class WorkflowWorker:
                     "excel_path": excel_path,
                     "analytics_path": analytics_path,
                     "pdf_path": pdf_path,
+                    "html_path": html_path,
                     "email_status": _workflow_email_status(
                         email_success=email_ok,
                         untranslated_count=snapshot.get("untranslated_count", 0),

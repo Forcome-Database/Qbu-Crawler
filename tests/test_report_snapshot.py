@@ -324,7 +324,10 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     assert "需要关注" in captured["body_text"]
     assert "详见附件 PDF" in captured["body_text"]
     assert captured["attachment_path"] is None
-    assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
+    paths = captured["attachment_paths"]
+    assert paths[0] == str(excel_path)
+    assert paths[1] == str(pdf_path)
+    assert len(paths) == 3 and paths[2].endswith(".html")
 
 
 def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_path, monkeypatch):
@@ -530,7 +533,10 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
 
     assert result["pdf_path"] == str(pdf_path)
     assert captured["attachment_path"] is None
-    assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
+    paths = captured["attachment_paths"]
+    assert paths[0] == str(excel_path)
+    assert paths[1] == str(pdf_path)
+    assert len(paths) == 3 and paths[2].endswith(".html")
 
 
 def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_artifacts(
