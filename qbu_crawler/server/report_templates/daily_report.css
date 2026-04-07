@@ -371,6 +371,17 @@ ol {
   margin-bottom: var(--sp-lg);
 }
 
+/* Gauge chart: fixed share of hero row — prevents Plotly SVG from crowding hero-main */
+.health-gauge-wrap > .chart-container {
+  flex: 0 0 52%;
+  max-width: 340px;
+}
+
+.health-gauge-wrap > .hero-main {
+  flex: 1 1 0;
+  min-width: 180px;
+}
+
 .hero-main {
   flex: 1;
 }
@@ -379,7 +390,6 @@ ol {
   font-size: var(--fs-hero);
   line-height: 1.03;
   letter-spacing: -0.05em;
-  max-width: 8ch;
 }
 
 .hero-headline {
