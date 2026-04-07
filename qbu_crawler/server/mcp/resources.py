@@ -111,6 +111,20 @@ WHERE r.images IS NOT NULL AND r.images != '[]';
 SELECT p.name, p.rating as product_rating, AVG(r.rating) as avg_review_rating
 FROM products p JOIN reviews r ON p.id = r.product_id GROUP BY p.id;
 ```
+
+### ⚠ JOIN 聚合注意
+products 与 reviews 是一对多关系。按站点/归属统计产品数时，必须在 products 表上直接聚合：
+```sql
+-- ✅ 正确：直接在 products 上 COUNT
+SELECT site, COUNT(*) FROM products GROUP BY site;
+
+-- ❌ 错误：JOIN reviews 后 COUNT(*) 会按评论数膨胀
+-- 一个有 50 条评论的产品会被计为 50 而非 1
+SELECT p.site, COUNT(*) FROM products p JOIN reviews r ON p.id = r.product_id GROUP BY p.site;
+
+-- ✅ 如需统计每站点评论数，应以 reviews 为主表
+SELECT p.site, COUNT(*) FROM reviews r JOIN products p ON r.product_id = p.id GROUP BY p.site;
+```
 """
 
 SCHEMA_TASKS = """
