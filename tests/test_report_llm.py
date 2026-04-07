@@ -460,3 +460,46 @@ def test_parse_llm_response_plain():
     raw = '{"hero_headline": "test"}'
     result = _parse_llm_response(raw)
     assert result["hero_headline"] == "test"
+
+
+def test_validate_llm_evidence_counts():
+    """LLM-reported evidence_count must be capped at actual cluster counts."""
+    from qbu_crawler.server.report_llm import _validate_insights
+
+    analytics = {
+        "self": {
+            "top_negative_clusters": [
+                {"label_code": "quality_stability", "review_count": 5},
+                {"label_code": "noise_power", "review_count": 3},
+            ],
+        },
+    }
+    llm_output = {
+        "hero_headline": "质量问题严重",
+        "executive_summary": "摘要",
+        "executive_bullets": ["要点1"],
+        "improvement_priorities": [
+            {"rank": 1, "target": "Product A", "issue": "质量",
+             "action": "修复", "evidence_count": 999},
+        ],
+        "competitive_insight": "洞察",
+    }
+    validated = _validate_insights(llm_output, analytics)
+    for p in validated["improvement_priorities"]:
+        assert p["evidence_count"] <= 8, \
+            f"evidence_count {p['evidence_count']} exceeds total cluster count"
+
+
+def test_hero_headline_truncation():
+    """hero_headline must be capped at 80 chars."""
+    from qbu_crawler.server.report_llm import _validate_insights
+
+    llm_output = {
+        "hero_headline": "A" * 200,
+        "executive_summary": "",
+        "executive_bullets": [],
+        "improvement_priorities": [],
+        "competitive_insight": "",
+    }
+    validated = _validate_insights(llm_output, {})
+    assert len(validated["hero_headline"]) <= 80

@@ -356,6 +356,36 @@ def _parse_llm_response(text):
     return json.loads(text)
 
 
+_MAX_HEADLINE_LEN = 80
+
+
+def _validate_insights(llm_output: dict, analytics: dict) -> dict:
+    """Cross-validate LLM output against actual analytics data."""
+    result = dict(llm_output)
+
+    # Cap headline length
+    headline = result.get("hero_headline", "")
+    if len(headline) > _MAX_HEADLINE_LEN:
+        result["hero_headline"] = headline[:_MAX_HEADLINE_LEN - 1] + "\u2026"
+
+    # Cap executive_bullets to 3
+    bullets = result.get("executive_bullets") or []
+    result["executive_bullets"] = bullets[:3]
+
+    # Validate improvement_priorities evidence counts
+    cluster_counts = {}
+    for c in (analytics.get("self") or {}).get("top_negative_clusters") or []:
+        code = c.get("label_code") or c.get("feature_display") or ""
+        cluster_counts[code] = cluster_counts.get(code, 0) + (c.get("review_count") or 0)
+    total_negative = sum(cluster_counts.values())
+
+    for p in result.get("improvement_priorities") or []:
+        claimed = p.get("evidence_count", 0) or 0
+        p["evidence_count"] = min(claimed, total_negative)
+
+    return result
+
+
 def generate_report_insights(analytics):
     """Generate executive summary, headline, and recommendations via LLM.
 
@@ -398,7 +428,7 @@ def generate_report_insights(analytics):
         if not isinstance(result.get("improvement_priorities"), list):
             result["improvement_priorities"] = []
 
-        return result
+        return _validate_insights(result, analytics)
 
     except Exception:
         logger.warning("LLM insights generation failed, using fallback", exc_info=True)
