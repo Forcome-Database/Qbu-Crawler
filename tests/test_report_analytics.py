@@ -599,3 +599,27 @@ def test_build_report_analytics_uses_synced_labels(analytics_db, monkeypatch):
     analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced)
     assert call_count["classify"] == 0, \
         f"classify_review_labels called {call_count['classify']} times during build_report_analytics"
+
+
+def test_recommendations_include_concrete_evidence(analytics_db):
+    """Recommendations should reference specific review content, not just generic text."""
+    from qbu_crawler.server.report_analytics import _recommendations
+
+    clusters = [
+        {
+            "label_code": "quality_stability",
+            "severity": "high",
+            "review_count": 5,
+            "example_reviews": [
+                {"headline": "Motor burned out", "headline_cn": "电机烧了",
+                 "body": "After 3 months the motor just died", "body_cn": "用了三个月电机坏了",
+                 "product_name": "Grinder Pro", "product_sku": "GP-1"},
+            ],
+        },
+    ]
+    recs = _recommendations(clusters)
+    assert recs, "Should produce recommendations"
+    rec = recs[0]
+    assert "top_complaint" in rec, "Should include top_complaint field"
+    assert rec["top_complaint"], "top_complaint should not be empty"
+    assert "affected_products" in rec, "Should include affected_products field"

@@ -643,6 +643,24 @@ def _recommendations(top_negative_clusters):
         content = _RECOMMENDATION_MAP.get(cluster["label_code"])
         if not content:
             continue
+
+        # Extract concrete evidence from example reviews
+        examples = cluster.get("example_reviews") or []
+        top_complaint = ""
+        affected_products = []
+        seen_products = set()
+        for ex in examples:
+            if not top_complaint:
+                top_complaint = (
+                    (ex.get("headline_cn") or ex.get("headline") or "")
+                    + "："
+                    + (ex.get("body_cn") or ex.get("body") or "")
+                ).strip().rstrip("：")[:120]
+            pname = ex.get("product_name") or ""
+            if pname and pname not in seen_products:
+                seen_products.add(pname)
+                affected_products.append(pname)
+
         items.append(
             {
                 "label_code": cluster["label_code"],
@@ -650,6 +668,8 @@ def _recommendations(top_negative_clusters):
                 "possible_cause_boundary": content["possible_cause_boundary"],
                 "improvement_direction": content["improvement_direction"],
                 "evidence_count": cluster["review_count"],
+                "top_complaint": top_complaint,
+                "affected_products": affected_products[:3],
             }
         )
     return items
