@@ -485,6 +485,7 @@ def normalize_deep_report_analytics(analytics):
     for item in normalized["self"]["risk_products"]:
         product = dict(item)
         product["top_labels_display"] = _join_label_counts(product.get("top_labels") or [])
+        product["top_features_display"] = product["top_labels_display"]   # alias for template
         evidence_refs = evidence_refs_by_sku.get(product.get("product_sku") or product.get("product_name") or "", [])
         product["evidence_refs"] = evidence_refs
         product["evidence_refs_display"] = "、".join(evidence_refs) or "暂无图片证据"

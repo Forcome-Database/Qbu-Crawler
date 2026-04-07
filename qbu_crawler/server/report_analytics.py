@@ -519,9 +519,11 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
 
 def _risk_products(labeled_reviews, snapshot_products=None):
     sku_to_review_count = {}
+    sku_to_rating = {}
     for p in (snapshot_products or []):
         sku = p.get("sku") or ""
         sku_to_review_count[sku] = p.get("review_count") or 0
+        sku_to_rating[sku] = p.get("rating")
 
     grouped = {}
     for item in labeled_reviews:
@@ -541,6 +543,8 @@ def _risk_products(labeled_reviews, snapshot_products=None):
                 "image_review_rows": 0,
                 "risk_score": 0,
                 "total_reviews": sku_to_review_count.get(review.get("product_sku", ""), 0),
+                "rating_avg": sku_to_rating.get(review.get("product_sku", "")),
+                "negative_rate": None,
                 "top_labels": {},
             },
         )
@@ -570,6 +574,10 @@ def _risk_products(labeled_reviews, snapshot_products=None):
             {"label_code": code, "count": count}
             for code, count in sorted(label_counts.items(), key=lambda pair: (-pair[1], pair[0]))
         ]
+        total = item.get("total_reviews") or 0
+        neg = item.get("negative_review_rows", 0)
+        item["negative_rate"] = neg / total if total else None
+        item["top_features_display"] = ""
     return items
 
 

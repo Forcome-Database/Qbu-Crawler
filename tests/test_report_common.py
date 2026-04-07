@@ -1,5 +1,6 @@
 """Tests for server/report_common.py — shared constants and helpers."""
 
+import pytest
 from qbu_crawler.server.report_common import (
     _LABEL_DISPLAY,
     _SEVERITY_DISPLAY,
@@ -385,3 +386,33 @@ def test_alert_level_yellow_on_moderate_health(monkeypatch):
     level, text = _compute_alert_level(normalized)
     assert level == "yellow"
     assert "健康指数" in text
+
+
+# ---------------------------------------------------------------------------
+# Tests for _risk_products rating_avg / negative_rate / top_features_display
+# ---------------------------------------------------------------------------
+
+
+def test_risk_products_has_rating_avg_and_negative_rate():
+    """_risk_products via normalize returns rating_avg, negative_rate, top_features_display."""
+    from qbu_crawler.server.report_analytics import _risk_products
+    labeled_reviews = [
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 1},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                        "severity": "high", "confidence": 0.9}],
+            "images": [],
+        },
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 5},
+            "labels": [],
+            "images": [],
+        },
+    ]
+    snapshot_products = [{"sku": "SKU1", "rating": 3.5, "review_count": 20}]
+    result = _risk_products(labeled_reviews, snapshot_products=snapshot_products)
+    assert len(result) == 1
+    p = result[0]
+    assert p["rating_avg"] == 3.5          # from snapshot_products
+    assert p["negative_rate"] == pytest.approx(1 / 20)  # 1 negative / 20 site total
+    assert "top_features_display" in p
