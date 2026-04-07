@@ -568,6 +568,8 @@ def _risk_products(labeled_reviews, snapshot_products=None):
             item["product_sku"] or "",
         )
     )
+    from qbu_crawler.server.report_common import _join_label_counts
+
     for item in items:
         label_counts = item.pop("top_labels")
         item["top_labels"] = [
@@ -577,7 +579,7 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         total = item.get("total_reviews") or 0
         neg = item.get("negative_review_rows", 0)
         item["negative_rate"] = neg / total if total else None
-        item["top_features_display"] = ""
+        item["top_features_display"] = _join_label_counts(item["top_labels"])
     return items
 
 

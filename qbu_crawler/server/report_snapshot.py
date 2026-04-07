@@ -53,11 +53,11 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         for r in reviews:
             ea = _enriched_map.get(r.get("id"))
             if ea:
-                r.setdefault("sentiment", ea.get("sentiment"))
-                r.setdefault("analysis_features", ea.get("analysis_features"))
-                r.setdefault("analysis_labels", ea.get("analysis_labels"))
-                r.setdefault("analysis_insight_cn", ea.get("analysis_insight_cn"))
-                r.setdefault("analysis_insight_en", ea.get("analysis_insight_en"))
+                for _key in ("sentiment", "analysis_features", "analysis_labels",
+                             "analysis_insight_cn", "analysis_insight_en"):
+                    _val = ea.get(_key)
+                    if _val is not None:
+                        r.setdefault(_key, _val)
 
     translated_count = sum(1 for item in reviews if item.get("translate_status") == "done")
     snapshot_at = now or config.now_shanghai().isoformat()
