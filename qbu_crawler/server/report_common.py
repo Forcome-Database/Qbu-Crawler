@@ -74,35 +74,64 @@ def _derive_review_label_codes(review):
 
 # ── Competitor gap analysis ──────────────────────────────────────────────────
 
+# Map negative label codes to their positive counterpart for cross-taxonomy gap analysis.
+# Dimensions where competitors are praised AND own products are criticized.
+_NEGATIVE_TO_POSITIVE_DIMENSION = {
+    "quality_stability": "solid_build",
+    "material_finish": "solid_build",
+    "structure_design": "solid_build",
+    "cleaning_maintenance": "easy_to_clean",
+    "noise_power": "strong_performance",
+    "packaging_shipping": "good_packaging",
+    "assembly_installation": "easy_to_use",
+    # service_fulfillment has no positive counterpart
+}
+
+# Human-readable dimension names for gap analysis display
+_DIMENSION_DISPLAY = {
+    "solid_build": "做工与质量",
+    "easy_to_clean": "清洁便利性",
+    "strong_performance": "性能与动力",
+    "good_packaging": "包装运输",
+    "easy_to_use": "安装与使用",
+}
+
 
 def _competitor_gap_analysis(normalized):
-    """Find themes where competitors are praised but our products are criticised."""
+    """Find dimensions where competitors are praised but our products are criticised."""
     comp_positive = {
         t["label_code"]: t
         for t in normalized.get("competitor", {}).get("top_positive_themes", [])
     }
-    own_negative = {
-        c["label_code"]: c
-        for c in normalized.get("self", {}).get("top_negative_clusters", [])
-    }
-    gap_codes = set(comp_positive) & set(own_negative)
+    own_negative_clusters = normalized.get("self", {}).get("top_negative_clusters", [])
+
+    # Group own negatives by their positive-taxonomy dimension
+    dimension_own_negative: dict[str, int] = {}
+    dimension_neg_codes: dict[str, list[str]] = {}
+    for c in own_negative_clusters:
+        neg_code = c.get("label_code", "")
+        pos_dim = _NEGATIVE_TO_POSITIVE_DIMENSION.get(neg_code)
+        if not pos_dim:
+            continue
+        dimension_own_negative[pos_dim] = dimension_own_negative.get(pos_dim, 0) + (c.get("review_count") or 0)
+        dimension_neg_codes.setdefault(pos_dim, []).append(neg_code)
+
+    # Find dimensions where competitor has positive AND own has negative
+    gap_dims = set(comp_positive) & set(dimension_own_negative)
     gaps = []
-    for code in gap_codes:
-        comp_cnt = comp_positive[code].get("review_count", 0)
-        own_cnt = own_negative[code].get("review_count", 0)
+    for dim in gap_dims:
+        comp_cnt = comp_positive[dim].get("review_count", 0)
+        own_cnt = dimension_own_negative[dim]
         gap_val = comp_cnt - own_cnt
         if own_cnt >= 5:
-            priority = "high"
-            priority_display = "高"
+            priority, priority_display = "high", "高"
         elif own_cnt >= 2:
-            priority = "medium"
-            priority_display = "中"
+            priority, priority_display = "medium", "中"
         else:
-            priority = "low"
-            priority_display = "低"
+            priority, priority_display = "low", "低"
         gaps.append({
-            "label_code": code,
-            "label_display": _LABEL_DISPLAY.get(code, code),
+            "label_code": dim,
+            "label_display": _DIMENSION_DISPLAY.get(dim, _LABEL_DISPLAY.get(dim, dim)),
             "competitor_positive_count": comp_cnt,
             "own_negative_count": own_cnt,
             "gap": gap_val,
@@ -185,22 +214,60 @@ def _compute_alert_level(normalized):
     return "green", "无新增高风险信号"
 
 
-def _duration_display(first_seen: str | None, last_seen: str | None) -> str | None:
-    """Human-readable duration from ISO date strings."""
-    if not first_seen or not last_seen:
+def _parse_date_flexible(value: str | None):
+    """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago')."""
+    if not value:
         return None
+    from datetime import date, timedelta
+    s = value.strip()
+    # ISO format: "2026-01-01" or "2026-01-01T..."
     try:
-        from datetime import date
-        d1 = date.fromisoformat(first_seen[:10])
-        d2 = date.fromisoformat(last_seen[:10])
-        days = (d2 - d1).days
-        if days <= 0:
-            return None
-        if days < 30:
-            return f"{days} 天"
-        return f"约 {days // 30} 个月"
-    except Exception:
+        return date.fromisoformat(s[:10])
+    except (ValueError, IndexError):
+        pass
+    # MM/DD/YYYY format
+    try:
+        from datetime import datetime
+        return datetime.strptime(s, "%m/%d/%Y").date()
+    except ValueError:
+        pass
+    # Relative format: "X days/months/years ago", "a month ago", "a year ago"
+    import re
+    today = date.today()
+    m = re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, re.IGNORECASE)
+    if m:
+        amount = int(m.group(1)) if m.group(1) else 1
+        unit = m.group(2).lower()
+        if unit == "day":
+            return today - timedelta(days=amount)
+        elif unit == "week":
+            return today - timedelta(weeks=amount)
+        elif unit == "month":
+            return today - timedelta(days=amount * 30)
+        elif unit == "year":
+            return today - timedelta(days=amount * 365)
+    return None
+
+
+def _duration_display(first_seen: str | None, last_seen: str | None) -> str | None:
+    """Human-readable duration between two date strings (any format)."""
+    d1 = _parse_date_flexible(first_seen)
+    d2 = _parse_date_flexible(last_seen)
+    if not d1 or not d2:
         return None
+    days = abs((d2 - d1).days)
+    if days <= 0:
+        return None
+    if days < 30:
+        return f"{days} 天"
+    months = days // 30
+    if months < 12:
+        return f"约 {months} 个月"
+    years = months // 12
+    remaining = months % 12
+    if remaining == 0:
+        return f"约 {years} 年"
+    return f"约 {years} 年 {remaining} 个月"
 
 
 def _humanize_bullets(normalized):

@@ -186,6 +186,7 @@ from qbu_crawler.server.report_common import (
 
 
 def test_competitor_gap_analysis_finds_intersection():
+    # quality_stability and material_finish both map to "solid_build" via _NEGATIVE_TO_POSITIVE_DIMENSION
     normalized = {
         "self": {"top_negative_clusters": [
             {"label_code": "quality_stability", "review_count": 13},
@@ -193,19 +194,19 @@ def test_competitor_gap_analysis_finds_intersection():
         ]},
         "competitor": {"top_positive_themes": [
             {"label_code": "solid_build", "review_count": 69},
-            {"label_code": "quality_stability", "review_count": 5},
         ]},
     }
     gaps = _competitor_gap_analysis(normalized)
     assert len(gaps) == 1
-    assert gaps[0]["label_code"] == "quality_stability"
-    assert gaps[0]["competitor_positive_count"] == 5
-    assert gaps[0]["own_negative_count"] == 13
+    assert gaps[0]["label_code"] == "solid_build"
+    assert gaps[0]["competitor_positive_count"] == 69
+    assert gaps[0]["own_negative_count"] == 20  # 13 + 7 aggregated under solid_build
 
 
 def test_competitor_gap_analysis_empty():
+    # service_fulfillment has no positive counterpart in _NEGATIVE_TO_POSITIVE_DIMENSION → no gap
     normalized = {
-        "self": {"top_negative_clusters": [{"label_code": "material_finish", "review_count": 7}]},
+        "self": {"top_negative_clusters": [{"label_code": "service_fulfillment", "review_count": 7}]},
         "competitor": {"top_positive_themes": [{"label_code": "solid_build", "review_count": 69}]},
     }
     gaps = _competitor_gap_analysis(normalized)
@@ -471,6 +472,7 @@ def test_risk_products_has_rating_avg_and_negative_rate():
 
 def test_gap_analysis_has_gap_and_priority_display():
     """Gap analysis items must include 'gap' and 'priority_display'."""
+    # material_finish maps to solid_build via _NEGATIVE_TO_POSITIVE_DIMENSION
     normalized = {
         "competitor": {
             "top_positive_themes": [
@@ -479,7 +481,7 @@ def test_gap_analysis_has_gap_and_priority_display():
         },
         "self": {
             "top_negative_clusters": [
-                {"label_code": "solid_build", "review_count": 6, "severity": "high"}
+                {"label_code": "material_finish", "review_count": 6, "severity": "high"}
             ]
         },
     }
@@ -488,5 +490,7 @@ def test_gap_analysis_has_gap_and_priority_display():
     g = gaps[0]
     assert "gap" in g
     assert "priority_display" in g
-    assert g["gap"] == 10 - 6    # 4
+    assert g["competitor_positive_count"] == 10
+    assert g["own_negative_count"] == 6
+    assert g["gap"] == 10 - 6
     assert g["priority_display"] in ("高", "中", "低")
