@@ -854,3 +854,36 @@ def test_kpi_cards_value_class_competitive_gap():
     result3 = normalize_deep_report_analytics(analytics3)
     gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "竞品差距指数"][0]
     assert gap_card3["value_class"] == ""
+
+
+def test_baseline_mode_suppresses_deltas():
+    """In baseline mode, KPI deltas should show '—' and baseline_note should exist."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "mode": "baseline",
+        "baseline_sample_days": 1,
+        "kpis": {
+            "ingested_review_rows": 50,
+            "negative_review_rows": 5,
+            "own_negative_review_rows": 3,
+            "translated_count": 50,
+            "negative_review_rows_delta": 5,
+            "negative_review_rows_delta_display": "+5",
+            "own_negative_review_rows_delta": 3,
+            "own_negative_review_rows_delta_display": "+3",
+            "ingested_review_rows_delta": 10,
+            "ingested_review_rows_delta_display": "+10",
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    normalized = normalize_deep_report_analytics(analytics)
+    assert normalized.get("baseline_note"), "Baseline mode should include explanatory note"
+    # All delta displays should be suppressed
+    assert normalized["kpis"]["negative_review_rows_delta_display"] == "—"
+    assert normalized["kpis"]["own_negative_review_rows_delta_display"] == "—"
+    assert normalized["kpis"]["ingested_review_rows_delta_display"] == "—"
+    # Delta values should be 0
+    assert normalized["kpis"]["negative_review_rows_delta"] == 0
+    assert normalized["kpis"]["own_negative_review_rows_delta"] == 0

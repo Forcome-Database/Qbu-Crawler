@@ -560,6 +560,20 @@ def normalize_deep_report_analytics(analytics):
         f"{normalized['kpis']['translation_completion_rate'] * 100:.1f}%"
     )
 
+    # ── Baseline mode: suppress delta displays (must run AFTER KPI spread) ──
+    if normalized["mode"] == "baseline":
+        normalized["baseline_note"] = (
+            f"首次全量基线报告（历史样本 {normalized.get('baseline_sample_days', 0)} 天），"
+            f"环比数据将在第 4 期报告后开始展示"
+        )
+        for key in list(normalized["kpis"].keys()):
+            if key.endswith("_delta_display"):
+                normalized["kpis"][key] = "—"
+            elif key.endswith("_delta") and not key.endswith("_delta_display"):
+                normalized["kpis"][key] = 0
+    else:
+        normalized["baseline_note"] = ""
+
     negative_clusters = []
     for item in normalized["self"]["top_negative_clusters"]:
         cluster = dict(item)
