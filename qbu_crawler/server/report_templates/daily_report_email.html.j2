@@ -73,28 +73,28 @@
       <!-- Row 1: 3 cards -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <!-- Card: 新增评论 -->
+          <!-- Card: 自有评论 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">新增评论</div>
-            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.ingested_review_rows | default(0) }}</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有评论</div>
+            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_review_rows | default(0) }}</div>
             {% if analytics.kpis.ingested_review_rows_delta_display is defined and analytics.kpis.ingested_review_rows_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.ingested_review_rows_delta_display }}</div>
             {% endif %}
           </td>
           <td width="2%"></td>
-          <!-- Card: 差评数 -->
+          <!-- Card: 自有差评 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">差评数</div>
-            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.negative_review_rows | default(0) }}</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评</div>
+            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.own_negative_review_rows | default(analytics.kpis.negative_review_rows | default(0)) }}</div>
             {% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rows_delta_display }}</div>
             {% endif %}
           </td>
           <td width="2%"></td>
-          <!-- Card: 差评率 -->
+          <!-- Card: 自有差评率 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">差评率</div>
-            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.negative_review_rate_display | default('—') }}</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评率</div>
+            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_negative_review_rate_display | default(analytics.kpis.negative_review_rate_display | default('—')) }}</div>
             {% if analytics.kpis.negative_review_rate_delta_display is defined and analytics.kpis.negative_review_rate_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rate_delta_display }}</div>
             {% endif %}

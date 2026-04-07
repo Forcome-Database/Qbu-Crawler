@@ -41,6 +41,8 @@ def _analytics():
             "image_review_rows": 1,
             "low_rating_review_rows": 2,
             "negative_review_rows": 2,
+            "own_negative_review_rows": 2,
+            "own_negative_review_rate": 0.40,
         },
         "self": {
             "risk_products": [

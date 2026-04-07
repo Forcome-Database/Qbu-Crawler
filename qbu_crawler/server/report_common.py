@@ -312,7 +312,7 @@ def _humanize_bullets(normalized):
         )
     else:
         bullets.append(
-            f"本期覆盖 {kpis.get('product_count', 0)} 个产品、{kpis.get('ingested_review_rows', 0)} 条评论"
+            f"本期覆盖 {kpis.get('product_count', 0)} 个产品（自有 {kpis.get('own_product_count', 0)}、竞品 {kpis.get('competitor_product_count', 0)}），{kpis.get('own_review_rows', 0)} 条自有评论"
         )
     return bullets[:3]
 
@@ -631,6 +631,8 @@ def normalize_deep_report_analytics(analytics):
 
     # ── Build kpi_cards for template ─────────────────────────────────────
     kpis = normalized["kpis"]
+    own_neg_rate = kpis.get("own_negative_review_rate") or 0
+    kpis["own_negative_review_rate_display"] = f"{own_neg_rate * 100:.1f}%"
     kpi_cards = [
         {
             "label": "健康指数",
@@ -640,13 +642,13 @@ def normalize_deep_report_analytics(analytics):
         },
         {
             "label": "差评率",
-            "value": kpis.get("negative_review_rate_display", "—"),
+            "value": kpis.get("own_negative_review_rate_display", "—"),
             "delta_display": kpis.get("negative_review_rows_delta_display", ""),
             "delta_class": "up" if (kpis.get("negative_review_rows_delta", 0) or 0) > 0 else "neutral",
         },
         {
-            "label": "评论总数",
-            "value": kpis.get("ingested_review_rows", 0),
+            "label": "自有评论",
+            "value": kpis.get("own_review_rows", 0),
             "delta_display": kpis.get("ingested_review_rows_delta_display", ""),
             "delta_class": "neutral",
         },
@@ -663,6 +665,23 @@ def normalize_deep_report_analytics(analytics):
             "delta_class": "neutral",
         },
     ]
+
+    # ── Assign status color classes to KPI values ────────────────────
+    for card in kpi_cards:
+        label = card["label"]
+        val = card["value"]
+        if label == "健康指数" and isinstance(val, (int, float)):
+            card["value_class"] = "severity-high" if val < 60 else ("severity-medium" if val < 80 else "severity-low")
+        elif label == "差评率" and isinstance(val, str) and val.endswith("%"):
+            rate = float(val.rstrip("%"))
+            card["value_class"] = "severity-high" if rate > 20 else ("severity-medium" if rate > 10 else "")
+        elif label == "高风险产品" and isinstance(val, (int, float)):
+            card["value_class"] = "severity-high" if val > 0 else ""
+        elif label == "竞品差距指数" and isinstance(val, (int, float)):
+            card["value_class"] = "severity-high" if val > 50 else ("severity-medium" if val > 20 else "")
+        else:
+            card.setdefault("value_class", "")
+
     normalized["kpi_cards"] = kpi_cards
 
     # ── Build issue_cards from top_negative_clusters ─────────────────────

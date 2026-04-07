@@ -37,7 +37,7 @@
         {% for card in analytics.kpi_cards %}
         <div class="metric-card">
           <span class="metric-label">{{ card.label }}</span>
-          <strong class="metric-value">{{ card.value }}</strong>
+          <strong class="metric-value {{ card.value_class or '' }}">{{ card.value }}</strong>
           {% if card.delta_display %}
           <span class="delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>
           {% endif %}
@@ -81,7 +81,7 @@
     <div class="page-frame">
       <div class="page-head">
         <p class="section-kicker">产品健康矩阵</p>
-        <h2>产品健康度排名</h2>
+        <h2>自有产品健康度排名</h2>
         <p class="page-note">按风险分降序排列，帮助快速锁定需要优先排查的产品。</p>
       </div>
 
@@ -139,16 +139,16 @@
   <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
-        <p class="section-kicker">问题深度诊断</p>
+        <p class="section-kicker">自有产品问题诊断</p>
         <h2>按影响规模排序</h2>
         <p class="page-note">每个问题簇附带证据引用和改良建议，便于研发快速定位根因。</p>
       </div>
 
       {% for item in analytics.self.issue_cards[:4] %}
       <article class="issue-card">
-        {# Issue header: feature_display + severity badge #}
+        {# Issue header: priority number + feature_display + severity badge #}
         <div class="issue-header">
-          <h3>{{ item.feature_display }}</h3>
+          <h3><span class="text-accent fw-bold">#{{ loop.index }}</span>&nbsp;&nbsp;{{ item.feature_display }}</h3>
           {% if item.severity_display is defined %}
           <span class="badge severity-{{ item.severity or 'medium' }}">{{ item.severity_display }}</span>
           {% endif %}
@@ -316,7 +316,7 @@
   <section class="report-page report-section">
     <div class="page-frame">
       <div class="page-head">
-        <p class="section-kicker">特征情感全景</p>
+        <p class="section-kicker">自有产品特征全景</p>
         <h2>产品×特征 情感矩阵</h2>
         <p class="page-note">行为产品，列为特征维度，色值表示情感倾向（绿=正面，红=负面）。</p>
       </div>
@@ -326,19 +326,26 @@
         {{ charts.feature_heatmap | safe }}
       </div>
 
-      {# Sentiment distribution + Rating trend side-by-side #}
-      {% if charts.sentiment_distribution is defined or charts.rating_trend is defined %}
+      {# Sentiment distribution (own + competitor) side-by-side #}
+      {% if charts.sentiment_distribution_own is defined or charts.sentiment_distribution_competitor is defined %}
       <div class="grid-2 mt-lg">
-        {% if charts.sentiment_distribution is defined %}
+        {% if charts.sentiment_distribution_own is defined %}
         <div class="chart-container">
-          {{ charts.sentiment_distribution | safe }}
+          {{ charts.sentiment_distribution_own | safe }}
         </div>
         {% endif %}
-        {% if charts.rating_trend is defined %}
+        {% if charts.sentiment_distribution_competitor is defined %}
         <div class="chart-container">
-          {{ charts.rating_trend | safe }}
+          {{ charts.sentiment_distribution_competitor | safe }}
         </div>
         {% endif %}
+      </div>
+      {% endif %}
+
+      {# Rating trend #}
+      {% if charts.rating_trend is defined %}
+      <div class="chart-container mt-lg">
+        {{ charts.rating_trend | safe }}
       </div>
       {% endif %}
     </div>
