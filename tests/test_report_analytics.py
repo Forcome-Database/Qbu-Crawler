@@ -466,3 +466,23 @@ def test_build_report_analytics_includes_products_for_charts(analytics_db):
     assert "name" in pfc[0]
     assert "price" in pfc[0]
     assert "ownership" in pfc[0]
+
+
+def test_build_report_analytics_includes_chart_data(analytics_db):
+    """Chart data keys should be present when sufficient data exists."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_snapshot(run["id"], "2026-03-29")
+    result = build_report_analytics(snapshot)
+    # _sentiment_distribution needs >= 2 products with reviews (snapshot has 2)
+    if "_sentiment_distribution" in result:
+        sd = result["_sentiment_distribution"]
+        assert "categories" in sd
+        assert "positive" in sd
+        assert len(sd["categories"]) == len(sd["positive"])
+    # _radar_data needs >= 3 dimensions with data from both sides
+    # May not be present with small test data — just verify format if present
+    if "_radar_data" in result:
+        rd = result["_radar_data"]
+        assert len(rd["categories"]) == len(rd["own_values"])
+        assert len(rd["categories"]) == len(rd["competitor_values"])

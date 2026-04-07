@@ -725,6 +725,137 @@ def _has_review_analysis_data(reviews):
     return False
 
 
+def _compute_chart_data(labeled_reviews, snapshot):
+    """Compute chart-specific analytics data for Plotly visualizations."""
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    # All label codes that appear in labeled reviews
+    DIMENSIONS = list(set(
+        label["label_code"]
+        for item in labeled_reviews
+        for label in item["labels"]
+    ))
+    if not DIMENSIONS:
+        return {}
+
+    result = {}
+
+    # ── Radar data: own vs competitor positive ratio per dimension ─────
+    own_dim_pos = {}
+    own_dim_total = {}
+    comp_dim_pos = {}
+    comp_dim_total = {}
+    for item in labeled_reviews:
+        ownership = item["review"].get("ownership")
+        for label in item["labels"]:
+            code = label["label_code"]
+            if ownership == "own":
+                own_dim_total[code] = own_dim_total.get(code, 0) + 1
+                if label["label_polarity"] == "positive":
+                    own_dim_pos[code] = own_dim_pos.get(code, 0) + 1
+            else:
+                comp_dim_total[code] = comp_dim_total.get(code, 0) + 1
+                if label["label_polarity"] == "positive":
+                    comp_dim_pos[code] = comp_dim_pos.get(code, 0) + 1
+
+    # Only include dimensions that have data from BOTH sides
+    radar_dims = [d for d in DIMENSIONS if own_dim_total.get(d, 0) > 0 and comp_dim_total.get(d, 0) > 0]
+    if len(radar_dims) >= 3:
+        result["_radar_data"] = {
+            "categories": [_LABEL_DISPLAY.get(d, d) for d in radar_dims],
+            "own_values": [
+                round(own_dim_pos.get(d, 0) / max(own_dim_total.get(d, 1), 1), 2)
+                for d in radar_dims
+            ],
+            "competitor_values": [
+                round(comp_dim_pos.get(d, 0) / max(comp_dim_total.get(d, 1), 1), 2)
+                for d in radar_dims
+            ],
+        }
+
+    # ── Sentiment distribution: per-product positive/neutral/negative ──
+    products = snapshot.get("products") or []
+    product_names = []
+    pos_counts = []
+    neu_counts = []
+    neg_counts = []
+    for p in products:
+        pname = p.get("name") or p.get("sku") or "?"
+        psku = p.get("sku") or ""
+        pos = neu = neg = 0
+        for item in labeled_reviews:
+            r = item["review"]
+            if (r.get("product_sku") or "") == psku or (r.get("product_name") or "") == pname:
+                rating = float(r.get("rating") or 0)
+                if rating >= 4:
+                    pos += 1
+                elif rating <= 2:
+                    neg += 1
+                else:
+                    neu += 1
+        if pos + neu + neg > 0:
+            product_names.append(pname[:20])
+            pos_counts.append(pos)
+            neu_counts.append(neu)
+            neg_counts.append(neg)
+
+    if len(product_names) >= 2:
+        result["_sentiment_distribution"] = {
+            "categories": product_names,
+            "positive": pos_counts,
+            "neutral": neu_counts,
+            "negative": neg_counts,
+        }
+
+    # ── Heatmap: product × dimension sentiment score (-1 to 1) ─────────
+    # Only for own products with at least some labels
+    own_products = [p for p in products if p.get("ownership") == "own"]
+    heatmap_dims = sorted(set(
+        label["label_code"]
+        for item in labeled_reviews
+        if item["review"].get("ownership") == "own"
+        for label in item["labels"]
+    ))
+    if len(own_products) >= 2 and len(heatmap_dims) >= 2:
+        y_labels = []
+        z = []
+        for p in own_products:
+            psku = p.get("sku") or ""
+            pname = p.get("name") or "?"
+            row = []
+            has_data = False
+            for dim in heatmap_dims:
+                pos = neg = 0
+                for item in labeled_reviews:
+                    r = item["review"]
+                    if (r.get("product_sku") or "") != psku:
+                        continue
+                    for label in item["labels"]:
+                        if label["label_code"] == dim:
+                            if label["label_polarity"] == "positive":
+                                pos += 1
+                            else:
+                                neg += 1
+                total = pos + neg
+                if total > 0:
+                    has_data = True
+                    row.append(round((pos - neg) / total, 2))
+                else:
+                    row.append(0.0)
+            if has_data:
+                y_labels.append(pname[:25])
+                z.append(row)
+
+        if len(y_labels) >= 2:
+            result["_heatmap_data"] = {
+                "z": z,
+                "x_labels": [_LABEL_DISPLAY.get(d, d) for d in heatmap_dims],
+                "y_labels": y_labels,
+            }
+
+    return result
+
+
 def build_report_analytics(snapshot):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot)
@@ -781,6 +912,9 @@ def build_report_analytics(snapshot):
         for p in (snapshot.get("products") or [])
         if p.get("price") and p.get("rating")
     ]
+
+    # Chart-specific analytics data (radar, heatmap, sentiment distribution)
+    chart_data = _compute_chart_data(labeled_reviews, snapshot)
 
     return {
         "run_id": snapshot.get("run_id"),
@@ -842,4 +976,5 @@ def build_report_analytics(snapshot):
                 "competitor_reviews": len(competitor_reviews),
             },
         },
+        **chart_data,
     }
