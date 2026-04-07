@@ -539,3 +539,217 @@ def test_duration_display_abs_order_invariant():
     r2 = _duration_display("2026-04-01", "2026-01-01")
     assert r1 == r2
     assert r1 is not None
+
+
+def test_kpi_cards_value_class_health_index():
+    """KPI cards should assign status color classes based on health_index threshold."""
+    # Create analytics with conditions that result in low health (< 60)
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 10,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.9,  # Very high negative rate
+            "own_avg_rating": 1.0,  # Very low rating
+        },
+        "self": {
+            "risk_products": [
+                {"risk_score": 10},  # High risk product to lower health
+            ],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    health_card = [c for c in result["kpi_cards"] if c["label"] == "健康指数"][0]
+    # Verify that the card has value_class set (it should be one of the severity classes)
+    assert health_card["value_class"] in ["severity-high", "severity-medium", "severity-low"]
+
+    # Create analytics with high health (> 80)
+    analytics2 = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 1,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,  # Low negative rate
+            "own_avg_rating": 4.8,  # Very high rating
+        },
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result2 = normalize_deep_report_analytics(analytics2)
+    health_card2 = [c for c in result2["kpi_cards"] if c["label"] == "健康指数"][0]
+    # High health should either be severity-low or have no class
+    assert health_card2["value_class"] in ["severity-low", ""]
+
+
+def test_kpi_cards_value_class_negative_rate():
+    """KPI cards should assign status colors based on negative_review_rate thresholds."""
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.25,  # 25% → severity-high
+            "own_avg_rating": 3.0,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    rate_card = [c for c in result["kpi_cards"] if c["label"] == "差评率"][0]
+    assert rate_card["value_class"] == "severity-high"
+
+    # Test middle range: 10% < rate < 20% → severity-medium
+    analytics["kpis"]["own_negative_review_rate"] = 0.15  # 15%
+    result = normalize_deep_report_analytics(analytics)
+    rate_card = [c for c in result["kpi_cards"] if c["label"] == "差评率"][0]
+    assert rate_card["value_class"] == "severity-medium"
+
+    # Test good range: rate <= 10% → no class
+    analytics["kpis"]["own_negative_review_rate"] = 0.05  # 5%
+    result = normalize_deep_report_analytics(analytics)
+    rate_card = [c for c in result["kpi_cards"] if c["label"] == "差评率"][0]
+    assert rate_card["value_class"] == ""
+
+
+def test_kpi_cards_value_class_high_risk_products():
+    """KPI cards should assign severity-high for high_risk_count > 0."""
+    from qbu_crawler import config as _config
+
+    # Create analytics with high-risk products (risk_score >= HIGH_RISK_THRESHOLD)
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 3.5,
+        },
+        "self": {
+            "risk_products": [
+                {"risk_score": _config.HIGH_RISK_THRESHOLD},  # Meets threshold
+            ],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    risk_card = [c for c in result["kpi_cards"] if c["label"] == "高风险产品"][0]
+    assert risk_card["value_class"] == "severity-high"
+
+    # Test with no high-risk products
+    analytics2 = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 3.5,
+        },
+        "self": {
+            "risk_products": [
+                {"risk_score": _config.HIGH_RISK_THRESHOLD - 1},  # Below threshold
+            ],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result2 = normalize_deep_report_analytics(analytics2)
+    risk_card2 = [c for c in result2["kpi_cards"] if c["label"] == "高风险产品"][0]
+    assert risk_card2["value_class"] == ""
+
+
+def test_kpi_cards_value_class_competitive_gap():
+    """KPI cards should assign status colors based on competitive_gap_index thresholds."""
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 3.5,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                # High gaps add up to trigger severity-high
+                {"competitor_positive_count": 30, "own_negative_count": 25},  # Total gap = 55 > 50
+            ],
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    gap_card = [c for c in result["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    assert gap_card["value_class"] == "severity-high"
+
+    # Test middle range: total gaps 20-50 → severity-medium
+    analytics2 = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 3.5,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"competitor_positive_count": 15, "own_negative_count": 20},  # Total gap = 35
+            ],
+        },
+    }
+    result2 = normalize_deep_report_analytics(analytics2)
+    gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    assert gap_card2["value_class"] == "severity-medium"
+
+    # Test good range: total gaps <= 20 → no class
+    analytics3 = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 3.5,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"competitor_positive_count": 8, "own_negative_count": 7},  # Total gap = 15
+            ],
+        },
+    }
+    result3 = normalize_deep_report_analytics(analytics3)
+    gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    assert gap_card3["value_class"] == ""
