@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, timedelta
 
 from qbu_crawler import config, models
@@ -85,7 +86,12 @@ _NEGATIVE_RULES = {
             "cheap plastic",
             "rust",
             "rusted",
-            "finish",
+            "rusting",
+            "poor finish",
+            "bad finish",
+            "finish peeling",
+            "finish chipping",
+            "scratched",
             "scratch",
             "材料差",
             "做工差",
@@ -207,7 +213,9 @@ _POSITIVE_RULES = {
         "keywords": (
             "works great",
             "great performance",
-            "powerful",
+            "powerful motor",
+            "powerful enough",
+            "very powerful",
             "performs well",
             "动力强",
             "性能好",
@@ -264,6 +272,38 @@ _RECOMMENDATION_MAP = {
 }
 
 
+_NEGATION_WORDS = {"not", "no", "never", "don't", "doesn't", "didn't", "isn't", "wasn't",
+                   "won't", "can't", "couldn't", "shouldn't", "wouldn't", "hardly",
+                   "没有", "不", "不会", "没", "未", "无"}
+_NEGATION_WINDOW = 4
+
+_KEYWORD_PATTERN_CACHE: dict[str, re.Pattern] = {}
+
+
+def _build_keyword_pattern(keyword: str) -> re.Pattern:
+    cjk_chars = sum(1 for c in keyword if '\u4e00' <= c <= '\u9fff')
+    if cjk_chars > len(keyword) / 2:
+        return re.compile(re.escape(keyword))
+    return re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+
+
+def _get_keyword_pattern(keyword: str) -> re.Pattern:
+    if keyword not in _KEYWORD_PATTERN_CACHE:
+        _KEYWORD_PATTERN_CACHE[keyword] = _build_keyword_pattern(keyword)
+    return _KEYWORD_PATTERN_CACHE[keyword]
+
+
+def _is_negated(text: str, match_start: int, keyword: str) -> bool:
+    cjk_chars = sum(1 for c in keyword if '\u4e00' <= c <= '\u9fff')
+    if cjk_chars > len(keyword) / 2:
+        prefix = text[max(0, match_start - 4):match_start]
+        return any(neg in prefix for neg in ("不", "没", "未", "无", "没有", "不会"))
+    before_text = text[:match_start]
+    words = before_text.split()
+    preceding = words[-_NEGATION_WINDOW:] if words else []
+    return any(w.lower().rstrip(".,;:!?") in _NEGATION_WORDS for w in preceding)
+
+
 def _safe_date(value):
     return date.fromisoformat(value)
 
@@ -305,8 +345,13 @@ def _review_id(review):
     return review.get("id") or review.get("review_id")
 
 
-def _match_rule(text, rule):
-    return any(keyword in text for keyword in rule["keywords"])
+def _match_rule(text: str, rule: dict) -> bool:
+    for keyword in rule["keywords"]:
+        pattern = _get_keyword_pattern(keyword)
+        for m in pattern.finditer(text):
+            if not _is_negated(text, m.start(), keyword):
+                return True
+    return False
 
 
 def _label_item(label_code, label_polarity, rule):
