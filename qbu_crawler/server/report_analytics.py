@@ -773,39 +773,43 @@ def _compute_chart_data(labeled_reviews, snapshot):
             ],
         }
 
-    # ── Sentiment distribution: per-product positive/neutral/negative ──
+    # ── Sentiment distribution: split by ownership ─────────────────
     products = snapshot.get("products") or []
-    product_names = []
-    pos_counts = []
-    neu_counts = []
-    neg_counts = []
-    for p in products:
-        pname = p.get("name") or p.get("sku") or "?"
-        psku = p.get("sku") or ""
-        pos = neu = neg = 0
-        for item in labeled_reviews:
-            r = item["review"]
-            if (r.get("product_sku") or "") == psku or (r.get("product_name") or "") == pname:
-                rating = float(r.get("rating") or 0)
-                if rating >= 4:
-                    pos += 1
-                elif rating <= 2:
-                    neg += 1
-                else:
-                    neu += 1
-        if pos + neu + neg > 0:
-            product_names.append(pname[:20])
-            pos_counts.append(pos)
-            neu_counts.append(neu)
-            neg_counts.append(neg)
+    for ownership_tag in ("own", "competitor"):
+        product_names = []
+        pos_counts = []
+        neu_counts = []
+        neg_counts = []
+        for p in products:
+            if p.get("ownership", "competitor") != ownership_tag:
+                continue
+            pname = p.get("name") or p.get("sku") or "?"
+            psku = p.get("sku") or ""
+            pos = neu = neg = 0
+            for item in labeled_reviews:
+                r = item["review"]
+                if (r.get("product_sku") or "") == psku or (r.get("product_name") or "") == pname:
+                    rating = float(r.get("rating") or 0)
+                    if rating >= 4:
+                        pos += 1
+                    elif rating <= 2:
+                        neg += 1
+                    else:
+                        neu += 1
+            if pos + neu + neg > 0:
+                product_names.append(pname[:20])
+                pos_counts.append(pos)
+                neu_counts.append(neu)
+                neg_counts.append(neg)
 
-    if len(product_names) >= 2:
-        result["_sentiment_distribution"] = {
-            "categories": product_names,
-            "positive": pos_counts,
-            "neutral": neu_counts,
-            "negative": neg_counts,
-        }
+        if len(product_names) >= 2:
+            key = f"_sentiment_distribution_{ownership_tag}"
+            result[key] = {
+                "categories": product_names,
+                "positive": pos_counts,
+                "neutral": neu_counts,
+                "negative": neg_counts,
+            }
 
     # ── Heatmap: product × dimension sentiment score (-1 to 1) ─────────
     # Only for own products with at least some labels

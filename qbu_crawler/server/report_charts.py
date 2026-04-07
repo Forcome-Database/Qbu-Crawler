@@ -497,15 +497,26 @@ def build_chart_html_fragments(analytics: dict) -> dict[str, str]:
             title="竞品对标雷达图",
         )
 
-    # ── Sentiment distribution stacked bar ───────────────────────────────────
-    sentiment_dist = analytics.get("_sentiment_distribution")
-    if sentiment_dist:
-        fragments["sentiment_distribution"] = _build_stacked_bar(
-            categories=sentiment_dist["categories"],
-            positive=sentiment_dist["positive"],
-            neutral=sentiment_dist["neutral"],
-            negative=sentiment_dist["negative"],
-            title="情感分布",
+    # ── Sentiment distribution (own) ────────────────────────────────
+    sentiment_own = analytics.get("_sentiment_distribution_own")
+    if sentiment_own:
+        fragments["sentiment_distribution_own"] = _build_stacked_bar(
+            categories=sentiment_own["categories"],
+            positive=sentiment_own["positive"],
+            neutral=sentiment_own["neutral"],
+            negative=sentiment_own["negative"],
+            title="自有产品情感分布",
+        )
+
+    # ── Sentiment distribution (competitor) ─────────────────────────
+    sentiment_comp = analytics.get("_sentiment_distribution_competitor")
+    if sentiment_comp:
+        fragments["sentiment_distribution_competitor"] = _build_stacked_bar(
+            categories=sentiment_comp["categories"],
+            positive=sentiment_comp["positive"],
+            neutral=sentiment_comp["neutral"],
+            negative=sentiment_comp["negative"],
+            title="竞品情感分布",
         )
 
     # ── Rating trend line ────────────────────────────────────────────────────
