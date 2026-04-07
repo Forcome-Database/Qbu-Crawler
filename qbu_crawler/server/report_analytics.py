@@ -950,6 +950,13 @@ def build_report_analytics(snapshot):
     own_ratings = [p.get("rating") for p in own_products if p.get("rating")]
     own_avg_rating = round(sum(own_ratings) / len(own_ratings), 2) if own_ratings else 0
 
+    # sample_avg_rating: average from actual reviews in this window (leading)
+    own_review_ratings = [
+        float(r["review"].get("rating") or 0) for r in own_reviews
+        if r["review"].get("rating")
+    ]
+    sample_avg_rating = round(sum(own_review_ratings) / len(own_review_ratings), 2) if own_review_ratings else own_avg_rating
+
     # Use config.NEGATIVE_THRESHOLD for negative review counting
     negative_threshold = config.NEGATIVE_THRESHOLD
 
@@ -996,6 +1003,7 @@ def build_report_analytics(snapshot):
             "competitor_review_rows": len(competitor_reviews),
             "image_review_rows": len(image_reviews),
             "own_avg_rating": own_avg_rating,
+            "sample_avg_rating": sample_avg_rating,
             "negative_review_rows": sum(
                 1 for review in snapshot_reviews if (review.get("rating") or 0) <= negative_threshold
             ),

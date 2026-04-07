@@ -328,14 +328,20 @@ def _humanize_bullets(normalized):
 
 
 def compute_health_index(analytics: dict) -> float:
-    """Compute 0-100 health index. Higher = healthier."""
+    """Compute 0-100 health index. Higher = healthier.
+
+    Weights: 20% site rating (lagging) + 25% sample rating (leading)
+             + 35% negative rate + 20% risk score.
+    """
     kpis = analytics.get("kpis", {})
     own_count = kpis.get("own_product_count", 0) or 1
 
-    avg_rating = kpis.get("own_avg_rating", 0) or 0
-    rating_score = min(avg_rating / 5.0, 1.0)
+    site_rating = kpis.get("own_avg_rating", 0) or 0
+    site_rating_score = min(site_rating / 5.0, 1.0)
 
-    # Use own-only negative rate (not polluted by competitor reviews)
+    sample_rating = kpis.get("sample_avg_rating") or site_rating or 0
+    sample_rating_score = min(sample_rating / 5.0, 1.0)
+
     neg_rate = kpis.get("own_negative_review_rate") or kpis.get("negative_review_rate", 0) or 0
     neg_score = 1.0 - min(neg_rate, 1.0)
 
@@ -346,7 +352,12 @@ def compute_health_index(analytics: dict) -> float:
     risk_ratio = high_risk_count / max(own_count, 1)
     risk_score = 1.0 - min(risk_ratio, 1.0)
 
-    index = (rating_score * 0.40 + neg_score * 0.35 + risk_score * 0.25) * 100
+    index = (
+        site_rating_score * 0.20
+        + sample_rating_score * 0.25
+        + neg_score * 0.35
+        + risk_score * 0.20
+    ) * 100
     return round(max(0, min(100, index)), 1)
 
 

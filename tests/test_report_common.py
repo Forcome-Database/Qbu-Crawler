@@ -346,7 +346,7 @@ def test_compute_health_index_worst():
         "kpis": {"own_avg_rating": 1.0, "negative_review_rate": 1.0, "own_product_count": 1},
         "self": {"risk_products": [{"risk_score": config.HIGH_RISK_THRESHOLD + 1}]},
     }
-    assert report_common.compute_health_index(analytics) == 8.0  # 0.2*40 + 0*35 + 0*25 = 8
+    assert report_common.compute_health_index(analytics) == 9.0  # 0.2*20 + 0.2*25 + 0*35 + 0*20 = 9
 
 
 def test_compute_competitive_gap_index():
@@ -726,6 +726,26 @@ def test_alert_level_ignores_competitor_negative_delta():
 
     level, _ = _compute_alert_level(normalized)
     assert level == "green", f"Expected green but got {level} — competitor delta is inflating alert"
+
+
+def test_health_index_sensitive_to_negative_spike():
+    """Health index should drop significantly when negative rate spikes."""
+    from qbu_crawler.server.report_common import compute_health_index
+
+    baseline = {
+        "kpis": {"own_avg_rating": 4.5, "own_negative_review_rate": 0.05,
+                 "own_product_count": 5, "sample_avg_rating": 4.5},
+        "self": {"risk_products": []},
+    }
+    spiked = {
+        "kpis": {"own_avg_rating": 4.5, "own_negative_review_rate": 0.30,
+                 "own_product_count": 5, "sample_avg_rating": 3.0},
+        "self": {"risk_products": []},
+    }
+    idx_baseline = compute_health_index(baseline)
+    idx_spiked = compute_health_index(spiked)
+    assert idx_baseline - idx_spiked > 15, \
+        f"Index drop too small: {idx_baseline} → {idx_spiked} (diff {idx_baseline - idx_spiked})"
 
 
 def test_kpi_cards_value_class_competitive_gap():

@@ -488,6 +488,24 @@ def test_build_report_analytics_includes_chart_data(analytics_db):
         assert len(rd["categories"]) == len(rd["competitor_values"])
 
 
+def test_sample_avg_rating_computed_from_reviews(analytics_db):
+    """sample_avg_rating should be the mean of own review ratings, not the site rating."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    snapshot = _build_snapshot(1, "2026-04-01")
+    # Set specific ratings on own reviews to verify computation
+    own_reviews = [r for r in snapshot["reviews"] if r.get("ownership") == "own"]
+    for i, r in enumerate(own_reviews):
+        r["rating"] = 2 + i  # e.g., 2, 3, 4...
+
+    analytics = build_report_analytics(snapshot)
+    sample_avg = analytics["kpis"].get("sample_avg_rating")
+    assert sample_avg is not None, "sample_avg_rating should be computed"
+    expected = round(sum(r["rating"] for r in own_reviews) / len(own_reviews), 2)
+    assert abs(sample_avg - expected) < 0.01, \
+        f"Expected {expected}, got {sample_avg}"
+
+
 def test_risk_products_ignores_high_rating_reviews(analytics_db):
     """Reviews with rating > LOW_RATING_THRESHOLD should not contribute to risk_score."""
     from qbu_crawler.server.report_analytics import _risk_products, _build_labeled_reviews
