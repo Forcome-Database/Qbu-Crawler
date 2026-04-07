@@ -31,6 +31,45 @@ _LABEL_DISPLAY = {
 _PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 _SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 
+# ── Metric tooltip explanations (Chinese) ────────────────────────────────────
+# Keys match KPI card labels, table headers, and issue card stats.
+# Used by PDF and email templates to render hover/title tooltips.
+
+METRIC_TOOLTIPS = {
+    # KPI cards (P1)
+    "健康指数": "综合评分 = 20%站点评分 + 25%样本评分 + 35%(1−差评率) + 20%(1−高风险占比)，满分100",
+    "差评率": "自有产品 ≤{threshold}星评论数 ÷ 自有评论总数",
+    "自有评论": "本期采集窗口内入库的自有产品评论行数（按抓取时间计）",
+    "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
+    "竞品差距指数": "各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
+    # Product health matrix (P2)
+    "评分": "站点展示的综合评分（历史累积，非本期样本）",
+    "差评率_产品": "该产品 ≤{low_rating}星评论数 ÷ 该产品采集评论总数",
+    "风险分": "低分评论×2 + 含图评论×1 + 各标签严重度累加；仅计 ≤{low_rating}星评论",
+    # Issue cards (P3)
+    "评论数": "匹配该问题标签的评论条数（关键词+词边界匹配）",
+    "涉及产品数": "出现该问题的不同产品（SKU）数量",
+    # Gap analysis table (P4)
+    "竞品好评": "竞品在该维度被正面标签命中的评论数",
+    "自有差评": "自有产品在该维度被负面标签命中的评论数",
+    "差距": "竞品好评数 − 自有差评数",
+}
+
+
+def _resolve_tooltip(key: str, threshold=None, **kw) -> str:
+    """Resolve a tooltip template with runtime threshold values."""
+    text = METRIC_TOOLTIPS.get(key, "")
+    if not text:
+        return ""
+    try:
+        return text.format(
+            threshold=threshold or config.NEGATIVE_THRESHOLD,
+            low_rating=config.LOW_RATING_THRESHOLD,
+            high_risk=config.HIGH_RISK_THRESHOLD,
+        )
+    except (KeyError, IndexError):
+        return text
+
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -708,30 +747,35 @@ def normalize_deep_report_analytics(analytics):
             "value": kpis.get("health_index", "—"),
             "delta_display": kpis.get("health_index_delta_display", ""),
             "delta_class": "neutral",
+            "tooltip": _resolve_tooltip("健康指数"),
         },
         {
             "label": "差评率",
             "value": kpis.get("own_negative_review_rate_display", "—"),
             "delta_display": kpis.get("negative_review_rows_delta_display", ""),
             "delta_class": "up" if (kpis.get("negative_review_rows_delta", 0) or 0) > 0 else "neutral",
+            "tooltip": _resolve_tooltip("差评率"),
         },
         {
             "label": "自有评论",
             "value": kpis.get("own_review_rows", 0),
             "delta_display": kpis.get("ingested_review_rows_delta_display", ""),
             "delta_class": "neutral",
+            "tooltip": _resolve_tooltip("自有评论"),
         },
         {
             "label": "高风险产品",
             "value": kpis.get("high_risk_count", 0),
             "delta_display": "",
             "delta_class": "up" if kpis.get("high_risk_count", 0) > 0 else "neutral",
+            "tooltip": _resolve_tooltip("高风险产品"),
         },
         {
             "label": "竞品差距指数",
             "value": kpis.get("competitive_gap_index", "—"),
             "delta_display": kpis.get("competitive_gap_index_delta_display", ""),
             "delta_class": "neutral",
+            "tooltip": _resolve_tooltip("竞品差距指数"),
         },
     ]
 
@@ -752,6 +796,9 @@ def normalize_deep_report_analytics(analytics):
             card.setdefault("value_class", "")
 
     normalized["kpi_cards"] = kpi_cards
+
+    # ── Resolved tooltip dict for templates (table headers, issue stats) ──
+    normalized["tooltips"] = {k: _resolve_tooltip(k) for k in METRIC_TOOLTIPS}
 
     # ── Build issue_cards from top_negative_clusters ─────────────────────
     report_priorities = (normalized.get("report_copy") or {}).get("improvement_priorities") or []

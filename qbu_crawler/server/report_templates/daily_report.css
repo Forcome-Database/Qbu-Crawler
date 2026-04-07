@@ -1043,3 +1043,123 @@ ol {
 .mt-md         { margin-top: var(--sp-md); }
 .mt-lg         { margin-top: var(--sp-lg); }
 .mt-xl         { margin-top: var(--sp-xl); }
+
+/* ==========================================================================
+   26. METRIC TOOLTIPS
+   Progressive enhancement: CSS hover bubble on capable renderers,
+   HTML title attribute as fallback (PDF viewers, email clients).
+   ========================================================================== */
+
+/* Tooltip wrapper — inline, positioned relative for bubble anchor */
+.tip-wrap {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+  vertical-align: middle;
+}
+
+/* ⓘ icon (full-size — KPI labels, table headers) */
+.tip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.tip-wrap:hover .tip-icon {
+  opacity: 1;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ⓘ icon (compact — inside issue stats) */
+.tip-icon-sm {
+  display: inline-block;
+  font-size: 8px;
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: help;
+  vertical-align: middle;
+}
+
+/* Tooltip bubble — hidden by default, shown on hover */
+.tip-bubble {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Arrow pointing down */
+.tip-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--ink);
+}
+
+/* Show on hover */
+.tip-wrap:hover .tip-bubble {
+  display: block;
+}
+
+/* Right-edge guard: first/last cards may clip */
+.kpi-grid .metric-card:last-child .tip-bubble {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.kpi-grid .metric-card:last-child .tip-bubble::after {
+  left: auto;
+  right: 12px;
+  transform: none;
+}
+
+/* Table header tooltips: ensure visible above header bg */
+.data-table th .tip-wrap {
+  white-space: nowrap;
+}
+
+.data-table th .tip-bubble {
+  min-width: 180px;
+}
+
+/* Print: hide interactive bubbles, keep icon as visual cue */
+@media print {
+  .tip-bubble { display: none !important; }
+  .tip-icon { opacity: 0.4; }
+  .tip-icon-sm { opacity: 0.3; }
+}

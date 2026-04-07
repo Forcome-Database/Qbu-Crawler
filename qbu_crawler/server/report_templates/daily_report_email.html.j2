@@ -37,7 +37,7 @@
   {% endif %}
   <tr>
     <td style="background:{{ hero_bg }};padding:28px 24px 20px;text-align:center;">
-      <div style="font-size:10px;color:{{ hero_color }};letter-spacing:0.15em;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">产品健康指数</div>
+      <div style="font-size:10px;color:{{ hero_color }};letter-spacing:0.15em;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">产品健康指数 <span title="{{ analytics.tooltips['健康指数'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:rgba(255,255,255,0.3);font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
       <div style="font-size:56px;font-weight:900;color:{{ hero_color }};line-height:1;margin-bottom:6px;">{{ analytics.kpis.health_index | default('—') }}</div>
       <div style="font-size:13px;color:{{ hero_color }};opacity:0.7;">/ 100 &nbsp;·&nbsp; {{ analytics.mode_display | default('深度日报') }}</div>
     </td>
@@ -75,7 +75,7 @@
         <tr>
           <!-- Card: 自有评论 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有评论</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有评论 <span title="{{ analytics.tooltips['自有评论'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
             <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_review_rows | default(0) }}</div>
             {% if analytics.kpis.ingested_review_rows_delta_display is defined and analytics.kpis.ingested_review_rows_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.ingested_review_rows_delta_display }}</div>
@@ -84,7 +84,7 @@
           <td width="2%"></td>
           <!-- Card: 自有差评 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评 <span title="{{ analytics.tooltips['差评率'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
             <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.own_negative_review_rows | default(analytics.kpis.negative_review_rows | default(0)) }}</div>
             {% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rows_delta_display }}</div>
@@ -93,7 +93,7 @@
           <td width="2%"></td>
           <!-- Card: 自有差评率 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评率</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评率 <span title="{{ analytics.tooltips['差评率'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
             <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_negative_review_rate_display | default(analytics.kpis.negative_review_rate_display | default('—')) }}</div>
             {% if analytics.kpis.negative_review_rate_delta_display is defined and analytics.kpis.negative_review_rate_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rate_delta_display }}</div>
@@ -110,14 +110,14 @@
         <tr>
           <!-- Card: 高风险产品 -->
           <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">高风险产品</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">高风险产品 <span title="{{ analytics.tooltips['高风险产品'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
             <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ analytics.kpis.high_risk_count | default(0) }}</div>
             <div style="font-size:10px;color:#766d62;margin-top:4px;">自有 {{ analytics.kpis.own_product_count | default(0) }} / 竞品 {{ analytics.kpis.competitor_product_count | default(0) }}</div>
           </td>
           <td width="2%"></td>
           <!-- Card: 竞品差距 -->
           <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">竞品差距指数</div>
+            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">竞品差距指数 <span title="{{ analytics.tooltips['竞品差距指数'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
             <div style="font-size:26px;font-weight:800;color:#345f57;line-height:1;">{{ analytics.kpis.competitive_gap_index | default('—') }}</div>
             {% if analytics.kpis.competitive_gap_index_delta_display is defined and analytics.kpis.competitive_gap_index_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.competitive_gap_index_delta_display }}</div>
@@ -157,7 +157,7 @@
         <tr>
           <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;border-radius:4px 0 0 0;">产品名称</td>
           <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;">主要问题</td>
-          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;border-radius:0 4px 0 0;white-space:nowrap;">差评数</td>
+          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;border-radius:0 4px 0 0;white-space:nowrap;" title="{{ analytics.tooltips['差评率'] }}">差评数 <span style="font-size:8px;opacity:0.7;">ⓘ</span></td>
         </tr>
         {% for item in analytics.self.risk_products[:3] %}
         <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">

@@ -36,7 +36,7 @@
       <div class="kpi-grid">
         {% for card in analytics.kpi_cards %}
         <div class="metric-card">
-          <span class="metric-label">{{ card.label }}</span>
+          <span class="metric-label">{{ card.label }}{% if card.tooltip %}<span class="tip-wrap" title="{{ card.tooltip }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ card.tooltip }}</span></span>{% endif %}</span>
           <strong class="metric-value {{ card.value_class or '' }}">{{ card.value }}</strong>
           {% if card.delta_display %}
           <span class="delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>
@@ -92,9 +92,9 @@
           <tr>
             <th>产品</th>
             <th>SKU</th>
-            <th>评分</th>
-            <th>差评率</th>
-            <th>风险分</th>
+            <th>评分 <span class="tip-wrap" title="{{ analytics.tooltips['评分'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['评分'] }}</span></span></th>
+            <th>差评率 <span class="tip-wrap" title="{{ analytics.tooltips['差评率_产品'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['差评率_产品'] }}</span></span></th>
+            <th>风险分 <span class="tip-wrap" title="{{ analytics.tooltips['风险分'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['风险分'] }}</span></span></th>
             <th>主要问题</th>
             <th>趋势</th>
           </tr>
@@ -156,9 +156,9 @@
 
         {# Stats row #}
         <div class="issue-stats">
-          <span>评论 {{ item.review_count }} 条</span>
+          <span title="{{ analytics.tooltips['评论数'] }}">评论 {{ item.review_count }} 条 <span class="tip-icon-sm">ⓘ</span></span>
           {% if item.affected_product_count is defined %}
-          <span>涉及 {{ item.affected_product_count }} 个产品</span>
+          <span title="{{ analytics.tooltips['涉及产品数'] }}">涉及 {{ item.affected_product_count }} 个产品 <span class="tip-icon-sm">ⓘ</span></span>
           {% endif %}
         </div>
 
@@ -238,9 +238,9 @@
         <thead>
           <tr>
             <th>维度</th>
-            <th>竞品好评</th>
-            <th>自有差评</th>
-            <th>差距</th>
+            <th>竞品好评 <span class="tip-wrap" title="{{ analytics.tooltips['竞品好评'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['竞品好评'] }}</span></span></th>
+            <th>自有差评 <span class="tip-wrap" title="{{ analytics.tooltips['自有差评'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['自有差评'] }}</span></span></th>
+            <th>差距 <span class="tip-wrap" title="{{ analytics.tooltips['差距'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['差距'] }}</span></span></th>
             <th>优先级</th>
           </tr>
         </thead>
