@@ -494,3 +494,48 @@ def test_gap_analysis_has_gap_and_priority_display():
     assert g["own_negative_count"] == 6
     assert g["gap"] == 10 - 6
     assert g["priority_display"] in ("高", "中", "低")
+
+
+# ---------------------------------------------------------------------------
+# Tests for _duration_display with relative dates and MM/DD/YYYY
+# ---------------------------------------------------------------------------
+
+
+def test_duration_display_relative_dates():
+    """_duration_display handles relative dates like 'X months ago'."""
+    from qbu_crawler.server.report_common import _duration_display
+    # Relative dates: "a year ago" is ~365 days, "2 months ago" is ~60 days → ~10 months apart
+    result = _duration_display("a year ago", "2 months ago")
+    assert result is not None
+    assert "月" in result or "年" in result
+
+    # MM/DD/YYYY dates: 01/01/2025 to 06/15/2025 → ~5 months
+    result2 = _duration_display("01/01/2025", "06/15/2025")
+    assert result2 is not None
+    assert "月" in result2
+
+    # Mixed formats: MM/DD/YYYY and ISO
+    result3 = _duration_display("01/01/2025", "2026-06-15")
+    assert result3 is not None
+
+    # None inputs still return None
+    assert _duration_display(None, "2026-01-01") is None
+    assert _duration_display("2026-01-01", None) is None
+
+
+def test_duration_display_year_display():
+    """_duration_display renders '约 X 年' for long durations."""
+    from qbu_crawler.server.report_common import _duration_display
+    # 2 years apart
+    result = _duration_display("2023-01-01", "2025-01-01")
+    assert result is not None
+    assert "年" in result
+
+
+def test_duration_display_abs_order_invariant():
+    """_duration_display returns same result regardless of argument order."""
+    from qbu_crawler.server.report_common import _duration_display
+    r1 = _duration_display("2026-01-01", "2026-04-01")
+    r2 = _duration_display("2026-04-01", "2026-01-01")
+    assert r1 == r2
+    assert r1 is not None
