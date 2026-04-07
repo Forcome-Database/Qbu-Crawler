@@ -88,11 +88,26 @@ def _competitor_gap_analysis(normalized):
     gap_codes = set(comp_positive) & set(own_negative)
     gaps = []
     for code in gap_codes:
+        comp_cnt = comp_positive[code].get("review_count", 0)
+        own_cnt = own_negative[code].get("review_count", 0)
+        gap_val = comp_cnt - own_cnt
+        if own_cnt >= 5:
+            priority = "high"
+            priority_display = "高"
+        elif own_cnt >= 2:
+            priority = "medium"
+            priority_display = "中"
+        else:
+            priority = "low"
+            priority_display = "低"
         gaps.append({
             "label_code": code,
             "label_display": _LABEL_DISPLAY.get(code, code),
-            "competitor_positive_count": comp_positive[code].get("review_count", 0),
-            "own_negative_count": own_negative[code].get("review_count", 0),
+            "competitor_positive_count": comp_cnt,
+            "own_negative_count": own_cnt,
+            "gap": gap_val,
+            "priority": priority,
+            "priority_display": priority_display,
         })
     return sorted(gaps, key=lambda g: g["own_negative_count"], reverse=True)
 

@@ -467,3 +467,26 @@ def test_risk_products_has_rating_avg_and_negative_rate():
     assert p["rating_avg"] == 3.5          # from snapshot_products
     assert p["negative_rate"] == pytest.approx(1 / 20)  # 1 negative / 20 site total
     assert "top_features_display" in p
+
+
+def test_gap_analysis_has_gap_and_priority_display():
+    """Gap analysis items must include 'gap' and 'priority_display'."""
+    normalized = {
+        "competitor": {
+            "top_positive_themes": [
+                {"label_code": "solid_build", "review_count": 10}
+            ]
+        },
+        "self": {
+            "top_negative_clusters": [
+                {"label_code": "solid_build", "review_count": 6, "severity": "high"}
+            ]
+        },
+    }
+    gaps = _competitor_gap_analysis(normalized)
+    assert len(gaps) == 1
+    g = gaps[0]
+    assert "gap" in g
+    assert "priority_display" in g
+    assert g["gap"] == 10 - 6    # 4
+    assert g["priority_display"] in ("高", "中", "低")
