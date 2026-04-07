@@ -99,6 +99,10 @@ _DIMENSION_DISPLAY = {
 
 def _competitor_gap_analysis(normalized):
     """Find dimensions where competitors are praised but our products are criticised."""
+    kpis = normalized.get("kpis", {})
+    competitor_total = kpis.get("competitor_review_rows", 0) or 1
+    own_total = kpis.get("own_review_rows", 0) or 1
+
     comp_positive = {
         t["label_code"]: t
         for t in normalized.get("competitor", {}).get("top_positive_themes", [])
@@ -134,6 +138,8 @@ def _competitor_gap_analysis(normalized):
             "label_display": _DIMENSION_DISPLAY.get(dim, _LABEL_DISPLAY.get(dim, dim)),
             "competitor_positive_count": comp_cnt,
             "own_negative_count": own_cnt,
+            "competitor_total": competitor_total,
+            "own_total": own_total,
             "gap": gap_val,
             "priority": priority,
             "priority_display": priority_display,
@@ -345,11 +351,25 @@ def compute_health_index(analytics: dict) -> float:
 
 
 def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:
-    """Scalar competitive gap index: sum of all dimension gaps."""
-    return sum(
-        (g.get("competitor_positive_count", 0) + g.get("own_negative_count", 0))
-        for g in gap_analysis
-    )
+    """Rate-based competitive gap index (0-100 scale).
+
+    For each dimension: gap_rate = (comp_pos_rate + own_neg_rate) / 2
+    where each rate = count / total (capped at 1.0).
+    Final index = average across dimensions × 100.
+    """
+    if not gap_analysis:
+        return 0
+    dimension_scores = []
+    for g in gap_analysis:
+        comp_pos = g.get("competitor_positive_count", 0)
+        own_neg = g.get("own_negative_count", 0)
+        comp_total = g.get("competitor_total", 0) or max(comp_pos, 1)
+        own_total = g.get("own_total", 0) or max(own_neg, 1)
+        comp_rate = min(comp_pos / max(comp_total, 1), 1.0)
+        own_rate = min(own_neg / max(own_total, 1), 1.0)
+        dimension_scores.append((comp_rate + own_rate) / 2)
+    avg = sum(dimension_scores) / len(dimension_scores) if dimension_scores else 0
+    return round(avg * 100)
 
 
 # ── Previous analytics loader ───────────────────────────────────────────────
@@ -679,7 +699,7 @@ def normalize_deep_report_analytics(analytics):
         elif label == "高风险产品" and isinstance(val, (int, float)):
             card["value_class"] = "severity-high" if val > 0 else ""
         elif label == "竞品差距指数" and isinstance(val, (int, float)):
-            card["value_class"] = "severity-high" if val > 50 else ("severity-medium" if val > 20 else "")
+            card["value_class"] = "severity-high" if val > 60 else ("severity-medium" if val > 30 else "")
         else:
             card.setdefault("value_class", "")
 

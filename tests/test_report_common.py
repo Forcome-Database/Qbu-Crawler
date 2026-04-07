@@ -351,14 +351,38 @@ def test_compute_health_index_worst():
 
 def test_compute_competitive_gap_index():
     gaps = [
-        {"competitor_positive_count": 10, "own_negative_count": 5},
-        {"competitor_positive_count": 8, "own_negative_count": 3},
+        {"competitor_positive_count": 10, "own_negative_count": 5,
+         "competitor_total": 100, "own_total": 100},
+        {"competitor_positive_count": 8, "own_negative_count": 3,
+         "competitor_total": 100, "own_total": 100},
     ]
-    assert report_common.compute_competitive_gap_index(gaps) == 26
+    # dim1: (10/100 + 5/100) / 2 = 0.075
+    # dim2: (8/100 + 3/100) / 2 = 0.055
+    # avg = (0.075 + 0.055) / 2 = 0.065 → round(6.5) = 6
+    assert report_common.compute_competitive_gap_index(gaps) == 6
 
 
 def test_compute_competitive_gap_index_empty():
     assert report_common.compute_competitive_gap_index([]) == 0
+
+
+def test_competitive_gap_index_normalized():
+    """Gap index should be rate-based, not inflated by sample size."""
+    from qbu_crawler.server.report_common import compute_competitive_gap_index
+
+    small_sample = [
+        {"competitor_positive_count": 5, "own_negative_count": 3,
+         "competitor_total": 10, "own_total": 10},
+    ]
+    large_sample = [
+        {"competitor_positive_count": 50, "own_negative_count": 30,
+         "competitor_total": 100, "own_total": 100},
+    ]
+    idx_small = compute_competitive_gap_index(small_sample)
+    idx_large = compute_competitive_gap_index(large_sample)
+    # Same proportions → same index
+    assert idx_small == idx_large, \
+        f"Same proportions should yield equal index: {idx_small} vs {idx_large}"
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +729,9 @@ def test_alert_level_ignores_competitor_negative_delta():
 
 
 def test_kpi_cards_value_class_competitive_gap():
-    """KPI cards should assign status colors based on competitive_gap_index thresholds."""
+    """KPI cards should assign status colors based on competitive_gap_index thresholds (0-100 scale)."""
+    # severity-high: index > 60
+    # Rate-based: (80/100 + 70/100) / 2 = 0.75 → 75 > 60 → severity-high
     analytics = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -722,8 +748,8 @@ def test_kpi_cards_value_class_competitive_gap():
             "benchmark_examples": [],
             "negative_opportunities": [],
             "gap_analysis": [
-                # High gaps add up to trigger severity-high
-                {"competitor_positive_count": 30, "own_negative_count": 25},  # Total gap = 55 > 50
+                {"competitor_positive_count": 80, "own_negative_count": 70,
+                 "competitor_total": 100, "own_total": 100},
             ],
         },
     }
@@ -731,7 +757,8 @@ def test_kpi_cards_value_class_competitive_gap():
     gap_card = [c for c in result["kpi_cards"] if c["label"] == "竞品差距指数"][0]
     assert gap_card["value_class"] == "severity-high"
 
-    # Test middle range: total gaps 20-50 → severity-medium
+    # severity-medium: 30 < index <= 60
+    # Rate-based: (40/100 + 30/100) / 2 = 0.35 → 35 → severity-medium
     analytics2 = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -748,7 +775,8 @@ def test_kpi_cards_value_class_competitive_gap():
             "benchmark_examples": [],
             "negative_opportunities": [],
             "gap_analysis": [
-                {"competitor_positive_count": 15, "own_negative_count": 20},  # Total gap = 35
+                {"competitor_positive_count": 40, "own_negative_count": 30,
+                 "competitor_total": 100, "own_total": 100},
             ],
         },
     }
@@ -756,7 +784,8 @@ def test_kpi_cards_value_class_competitive_gap():
     gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "竞品差距指数"][0]
     assert gap_card2["value_class"] == "severity-medium"
 
-    # Test good range: total gaps <= 20 → no class
+    # no class: index <= 30
+    # Rate-based: (8/100 + 7/100) / 2 = 0.075 → 8 → no class
     analytics3 = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -773,7 +802,8 @@ def test_kpi_cards_value_class_competitive_gap():
             "benchmark_examples": [],
             "negative_opportunities": [],
             "gap_analysis": [
-                {"competitor_positive_count": 8, "own_negative_count": 7},  # Total gap = 15
+                {"competitor_positive_count": 8, "own_negative_count": 7,
+                 "competitor_total": 100, "own_total": 100},
             ],
         },
     }
