@@ -951,10 +951,10 @@ def build_report_analytics(snapshot):
                 1 for review in snapshot_reviews if (review.get("rating") or 0) <= negative_threshold
             ),
             "own_negative_review_rows": sum(
-                1 for review in own_reviews if (review.get("rating") or 0) <= negative_threshold
+                1 for r in own_reviews if (r.get("review", {}).get("rating") or 0) <= negative_threshold
             ),
             "own_negative_review_rate": (
-                sum(1 for r in own_reviews if (r.get("rating") or 0) <= negative_threshold)
+                sum(1 for r in own_reviews if (r.get("review", {}).get("rating") or 0) <= negative_threshold)
                 / max(len(own_reviews), 1)
             ),
             "low_rating_review_rows": sum(
