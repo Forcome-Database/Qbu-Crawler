@@ -575,6 +575,10 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         review = item["review"]
         if review.get("ownership") != "own":
             continue
+        # Rating gate: only reviews at or below threshold contribute to risk
+        rating = float(review.get("rating") or 0)
+        if rating > config.LOW_RATING_THRESHOLD:
+            continue
         negative_labels = [label for label in item["labels"] if label["label_polarity"] == "negative"]
         if not negative_labels:
             continue

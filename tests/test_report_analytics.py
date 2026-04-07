@@ -486,3 +486,32 @@ def test_build_report_analytics_includes_chart_data(analytics_db):
         rd = result["_radar_data"]
         assert len(rd["categories"]) == len(rd["own_values"])
         assert len(rd["categories"]) == len(rd["competitor_values"])
+
+
+def test_risk_products_ignores_high_rating_reviews(analytics_db):
+    """Reviews with rating > LOW_RATING_THRESHOLD should not contribute to risk_score."""
+    from qbu_crawler.server.report_analytics import _risk_products, _build_labeled_reviews
+
+    snapshot = {
+        "products": [
+            {"name": "Test Product", "sku": "TP-1", "ownership": "own",
+             "rating": 4.5, "review_count": 10, "site": "basspro"},
+        ],
+        "reviews": [
+            # 5-star review that contains a negative keyword
+            {"product_name": "Test Product", "product_sku": "TP-1", "ownership": "own",
+             "rating": 5, "headline": "poor finish on the handle but works great", "body": "",
+             "headline_cn": "", "body_cn": "", "images": None},
+            # 1-star review — should count
+            {"product_name": "Test Product", "product_sku": "TP-1", "ownership": "own",
+             "rating": 1, "headline": "broke after one use", "body": "",
+             "headline_cn": "", "body_cn": "", "images": None},
+        ],
+    }
+    labeled = _build_labeled_reviews(snapshot)
+    risk = _risk_products(labeled, snapshot_products=snapshot["products"])
+
+    if risk:
+        product = risk[0]
+        assert product["negative_review_rows"] == 1, \
+            f"Expected 1 negative review (only low-rating), got {product['negative_review_rows']}"
