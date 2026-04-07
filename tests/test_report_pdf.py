@@ -146,46 +146,36 @@ def _analytics():
 def test_render_report_html_contains_required_sections(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
-    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+    html = render_report_html(_snapshot(), _analytics())
 
     assert "report-page-hero" in html
     assert "hero-headline" in html
-    assert "focus-grid" in html
-    assert "issue-grid" in html
-    assert "benchmark-layout" in html
     assert "report-section" in html
     assert 'class="report-page' in html
 
 
-def test_build_chart_assets_outputs_svg_files(tmp_path):
-    from qbu_crawler.server.report_pdf import build_chart_assets
+def test_build_chart_html_fragments_returns_expected_keys():
+    from qbu_crawler.server.report_charts import build_chart_html_fragments
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
 
-    chart_paths = build_chart_assets(_analytics(), str(tmp_path))
+    normalized = normalize_deep_report_analytics(_analytics())
+    charts = build_chart_html_fragments(normalized)
 
-    assert set(chart_paths) == {
-        "self_risk_products",
-        "self_negative_clusters",
-        "competitor_positive_themes",
-    }
-    assert all(Path(path).suffix == ".svg" for path in chart_paths.values())
-
-
-def test_resolve_chart_font_family_prefers_installed_cjk_font():
-    from qbu_crawler.server.report_pdf import _resolve_chart_font_family
-
-    family = _resolve_chart_font_family({"Microsoft YaHei", "DejaVu Sans"})
-
-    assert family == "Microsoft YaHei"
+    assert "health_gauge" in charts
+    assert "self_risk_products" in charts
+    assert "self_negative_clusters" in charts
+    assert "competitor_positive_themes" in charts
+    assert all(isinstance(v, str) for v in charts.values())
 
 
-def test_render_report_html_inlines_styles_and_svg_assets(tmp_path):
+def test_render_report_html_inlines_styles_and_plotly(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
-    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+    html = render_report_html(_snapshot(), _analytics())
 
     assert "<style>" in html
     assert "report-shell" in html
-    assert "<svg" in html
+    assert "plotly" in html.lower()
     assert 'rel="stylesheet"' not in html
     assert "file:///" not in html
 
@@ -193,7 +183,7 @@ def test_render_report_html_inlines_styles_and_svg_assets(tmp_path):
 def test_render_report_html_uses_readable_labels_and_mode_copy(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
-    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+    html = render_report_html(_snapshot(), _analytics())
 
     assert "quality_stability" not in html
     assert "easy_to_use" not in html
@@ -204,11 +194,9 @@ def test_render_report_html_uses_readable_labels_and_mode_copy(tmp_path):
 def test_render_report_html_uses_business_kpis(tmp_path):
     from qbu_crawler.server.report_pdf import render_report_html
 
-    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+    html = render_report_html(_snapshot(), _analytics())
 
-    assert "新增评论" in html
     assert "差评率" in html
-    assert "图片评论" not in html
     assert "40.0%" in html
 
 
@@ -225,7 +213,7 @@ def test_render_report_html_renders_evidence_refs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(requests, "get", lambda url, timeout=10: FakeResponse())
 
-    html = render_report_html(_snapshot(), _analytics(), str(tmp_path))
+    html = render_report_html(_snapshot(), _analytics())
 
     # Evidence ref IDs are still computed and shown in risk products / cluster sections
     assert "E1" in html

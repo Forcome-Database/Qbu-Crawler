@@ -438,7 +438,11 @@ def render_daily_email_html(snapshot, analytics):
     _ensure_humanized_bullets(normalized)
     env = _report_template_env()
     template = env.get_template("daily_report_email.html.j2")
-    return template.render(snapshot=snapshot, analytics=normalized)
+    return template.render(
+        snapshot=snapshot,
+        analytics=normalized,
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
 
 
 def _build_email_subject(normalized, logical_date):
@@ -468,6 +472,7 @@ def build_daily_deep_report_email(snapshot, analytics):
     body = template_env.get_template("daily_report_email_body.txt.j2").render(
         snapshot=snapshot,
         analytics=normalized,
+        threshold=config.NEGATIVE_THRESHOLD,
     ).strip()
     return subject, f"{body}\n"
 

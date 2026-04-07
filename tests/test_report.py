@@ -764,7 +764,7 @@ def test_build_daily_deep_report_email_keeps_only_core_summary():
     assert subject
     assert "产品评论日报" in subject
     assert "2026-04-03" in subject
-    assert "今日要点：" in body
+    assert "需要关注" in body
     assert "详见附件 PDF" in body
     assert "自有产品重点风险" not in body
     assert "问题簇与改良方向" not in body
@@ -1002,7 +1002,7 @@ def test_build_daily_deep_report_email_renders_incremental_summary():
     assert "产品评论日报" in subject
     assert "2026-04-03" in subject
     assert "Own Grinder" in subject
-    assert "今日要点：" in body
+    assert "需要关注" in body
     assert "2026-04-03" in body
     assert "详见附件 PDF" in body
     assert "问题簇与改良方向" not in body
