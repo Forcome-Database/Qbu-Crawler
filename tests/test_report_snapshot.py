@@ -186,7 +186,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
@@ -269,40 +269,13 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "run_llm_report_analysis",
-        lambda snapshot, analytics: {"candidate_pools": {}, "llm_findings": {}, "report_copy": {}},
-    )
-    monkeypatch.setattr(
-        report_snapshot.report_llm,
-        "validate_findings",
-        lambda snapshot, analytics, llm_result: {
-            "self_negative_clusters": analytics["self"]["top_negative_clusters"],
-            "competitor_positive_themes": analytics["competitor"]["top_positive_themes"],
-            "own_image_evidence": [],
-            "competitor_negative_opportunities": analytics["competitor"]["negative_opportunities"],
-            "competitor_benchmark_examples": analytics["competitor"]["benchmark_examples"],
-            "recommendations": analytics["self"]["recommendations"],
-        },
-    )
-    monkeypatch.setattr(
-        report_snapshot.report_llm,
-        "merge_final_analytics",
-        lambda analytics, llm_result, validated_result: {
-            **analytics,
-            "self": {
-                **analytics["self"],
-                "top_negative_clusters": validated_result["self_negative_clusters"],
-                "recommendations": validated_result["recommendations"],
-            },
-            "competitor": {
-                **analytics["competitor"],
-                "top_positive_themes": validated_result["competitor_positive_themes"],
-                "benchmark_examples": validated_result["competitor_benchmark_examples"],
-                "negative_opportunities": validated_result["competitor_negative_opportunities"],
-            },
-            "appendix": {"image_reviews": validated_result["own_image_evidence"]},
-            "validated_findings": validated_result,
-            "report_copy": llm_result["report_copy"],
+        "generate_report_insights",
+        lambda analytics: {
+            "hero_headline": "",
+            "executive_summary": "",
+            "executive_bullets": [],
+            "improvement_priorities": [],
+            "competitive_insight": "",
         },
     )
     pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
@@ -348,7 +321,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     assert "产品评论日报" in captured["subject"]
     assert "2026-03-27" in captured["subject"]
     assert "Own Stuffer" in captured["subject"]
-    assert "今日要点：" in captured["body_text"]
+    assert "需要关注" in captured["body_text"]
     assert "详见附件 PDF" in captured["body_text"]
     assert captured["attachment_path"] is None
     assert captured["attachment_paths"] == [str(excel_path), str(pdf_path)]
@@ -366,13 +339,24 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
         lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        lambda analytics: {
+            "hero_headline": "",
+            "executive_summary": "",
+            "executive_bullets": [],
+            "improvement_priorities": [],
+            "competitive_insight": "",
+        },
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -400,7 +384,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     assert Path(result["analytics_path"]).is_file()
 
 
-def test_generate_full_report_from_snapshot_uses_merged_analytics_from_report_llm(tmp_path, monkeypatch):
+def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp_path, monkeypatch):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
@@ -414,7 +398,7 @@ def test_generate_full_report_from_snapshot_uses_merged_analytics_from_report_ll
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
@@ -431,29 +415,17 @@ def test_generate_full_report_from_snapshot_uses_merged_analytics_from_report_ll
 
     captured = {}
 
-    def fake_run_llm_report_analysis(snapshot, analytics):
-        captured["analytics_before_merge"] = analytics
+    def fake_generate_report_insights(analytics):
+        captured["analytics_for_insights"] = analytics
         return {
-            "candidate_pools": {},
-            "llm_findings": {},
-            "report_copy": {"hero_headline": "聚焦可靠性"},
+            "hero_headline": "聚焦可靠性",
+            "executive_summary": "测试摘要",
+            "executive_bullets": ["要点一"],
+            "improvement_priorities": [],
+            "competitive_insight": "",
         }
 
-    def fake_merge_final_analytics(analytics, llm_result, validated_result):
-        merged = dict(analytics)
-        merged["self"] = {"top_negative_clusters": [{"label_code": "quality_stability", "example_reviews": [{"id": 99}]}]}
-        merged["competitor"] = {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []}
-        merged["appendix"] = {"image_reviews": [{"id": 77}]}
-        merged["validated_findings"] = validated_result
-        merged["report_copy"] = llm_result["report_copy"]
-        return merged
-
-    def fake_validate_findings(snapshot, analytics, llm_result):
-        return {"own_image_evidence": [{"id": 77}]}
-
-    monkeypatch.setattr(report_snapshot.report_llm, "run_llm_report_analysis", fake_run_llm_report_analysis)
-    monkeypatch.setattr(report_snapshot.report_llm, "validate_findings", fake_validate_findings)
-    monkeypatch.setattr(report_snapshot.report_llm, "merge_final_analytics", fake_merge_final_analytics)
+    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", fake_generate_report_insights)
 
     def fake_generate_pdf_report(snapshot, analytics, output_path):
         captured["pdf_analytics"] = analytics
@@ -492,9 +464,11 @@ def test_generate_full_report_from_snapshot_uses_merged_analytics_from_report_ll
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["pdf_path"] == str(pdf_path)
-    assert captured["pdf_analytics"]["self"]["top_negative_clusters"][0]["example_reviews"][0]["id"] == 99
-    assert captured["email_analytics"]["appendix"]["image_reviews"][0]["id"] == 77
-    assert json.loads(Path(result["analytics_path"]).read_text(encoding="utf-8"))["report_copy"]["hero_headline"] == "聚焦可靠性"
+    # The analytics passed to PDF should have report_copy from generate_report_insights
+    assert captured["pdf_analytics"]["report_copy"]["hero_headline"] == "聚焦可靠性"
+    # The analytics JSON should be persisted with the insights
+    saved = json.loads(Path(result["analytics_path"]).read_text(encoding="utf-8"))
+    assert saved["report_copy"]["hero_headline"] == "聚焦可靠性"
 
 
 def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp_path):
@@ -511,13 +485,18 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
         lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -572,13 +551,18 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
         lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -634,13 +618,18 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
         lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -673,6 +662,44 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     assert result["pdf_path"] == str(pdf_path)
 
 
+def test_freeze_snapshot_reviews_enriched_with_analysis_fields(snapshot_db):
+    """After freezing, snapshot reviews contain analysis_features when review_analysis exists."""
+    import json
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+    from qbu_crawler import models
+
+    run_id = snapshot_db["run"]["id"]
+
+    # Get review id from DB (snapshot_db fixture inserts exactly one review)
+    conn = _get_test_conn(snapshot_db["db_file"])
+    review_id = conn.execute("SELECT id FROM reviews LIMIT 1").fetchone()["id"]
+    conn.close()
+
+    # Insert a review_analysis record
+    models.save_review_analysis(
+        review_id=review_id,
+        sentiment="negative",
+        sentiment_score=0.9,
+        labels=[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}],
+        features=["手柄松动"],
+        insight_cn="产品质量问题",
+        insight_en="quality issue",
+        llm_model="gpt-4o-mini",
+        prompt_version="v1",
+        token_usage=100,
+    )
+
+    run = freeze_report_snapshot(run_id)
+    from pathlib import Path
+    snapshot = json.loads(Path(run["snapshot_path"]).read_text(encoding="utf-8"))
+
+    enriched = [r for r in snapshot["reviews"] if r.get("id") == review_id]
+    assert enriched, "review not found in snapshot"
+    r = enriched[0]
+    assert r.get("analysis_features") is not None, "analysis_features should be set after enrichment"
+    assert "手柄松动" in (r.get("analysis_features") or "")
+
+
 def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch, tmp_path):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
@@ -688,13 +715,18 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     monkeypatch.setattr(
         report,
         "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None: str(excel_path),
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
     )
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
         lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,

@@ -43,6 +43,22 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         item.setdefault("headline_cn", "")
         item.setdefault("body_cn", "")
 
+    # ── Enrich reviews with review_analysis fields (LLM analysis data) ──
+    _review_ids = [r["id"] for r in reviews if r.get("id")]
+    if _review_ids:
+        _enriched_map = {
+            ea["id"]: ea
+            for ea in models.get_reviews_with_analysis(review_ids=_review_ids)
+        }
+        for r in reviews:
+            ea = _enriched_map.get(r.get("id"))
+            if ea:
+                r.setdefault("sentiment", ea.get("sentiment"))
+                r.setdefault("analysis_features", ea.get("analysis_features"))
+                r.setdefault("analysis_labels", ea.get("analysis_labels"))
+                r.setdefault("analysis_insight_cn", ea.get("analysis_insight_cn"))
+                r.setdefault("analysis_insight_en", ea.get("analysis_insight_en"))
+
     translated_count = sum(1 for item in reviews if item.get("translate_status") == "done")
     snapshot_at = now or config.now_shanghai().isoformat()
     snapshot = {
@@ -129,9 +145,11 @@ def generate_full_report_from_snapshot(
     try:
         report_analytics.sync_review_labels(snapshot)
         analytics = report_analytics.build_report_analytics(snapshot)
-        llm_result = report_llm.run_llm_report_analysis(snapshot, analytics)
-        validated_result = report_llm.validate_findings(snapshot, analytics, llm_result)
-        analytics = report_llm.merge_final_analytics(analytics, llm_result, validated_result)
+
+        # New: LLM-generated insights (single call, replaces old 3-function chain)
+        insights = report_llm.generate_report_insights(analytics)
+        analytics["report_copy"] = insights
+
         Path(analytics_path).write_text(
             json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
@@ -142,6 +160,7 @@ def generate_full_report_from_snapshot(
             snapshot["reviews"],
             report_date=report_date,
             output_path=output_path,
+            analytics=analytics,
         )
         pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, pdf_output_path)
     except Exception as exc:
