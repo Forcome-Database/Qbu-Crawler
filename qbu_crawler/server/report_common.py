@@ -150,7 +150,8 @@ def _compute_kpi_deltas(current_kpis, prev_analytics):
         return {}
     prev_kpis = prev_analytics.get("kpis", {})
     deltas = {}
-    for key in ("negative_review_rows", "ingested_review_rows", "product_count"):
+    for key in ("negative_review_rows", "own_negative_review_rows",
+                "ingested_review_rows", "product_count"):
         curr = current_kpis.get(key, 0) or 0
         prev = prev_kpis.get(key, 0) or 0
         diff = curr - prev
@@ -178,7 +179,7 @@ def _generate_hero_headline(normalized):
     cluster_code = top_labels[0].get("label_code") if top_labels else ""
     cluster_name = _LABEL_DISPLAY.get(cluster_code, cluster_code)
 
-    neg_delta = normalized.get("kpis", {}).get("negative_review_rows_delta")
+    neg_delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta")
     total_reviews = top.get("total_reviews") or 0
     neg_count = top.get("negative_review_rows", 0)
 
@@ -196,7 +197,7 @@ def _compute_alert_level(normalized):
     """Return ``(level, text)`` where *level* is ``"red"``/``"yellow"``/``"green"``."""
     top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
     high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
-    delta = normalized.get("kpis", {}).get("negative_review_rows_delta", 0) or 0
+    delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta", 0) or 0
     health = normalized.get("kpis", {}).get("health_index")
 
     # Red conditions
@@ -207,7 +208,7 @@ def _compute_alert_level(normalized):
 
     # Yellow conditions
     if delta > 0:
-        return "yellow", "差评数较上期有所上升，请持续关注"
+        return "yellow", "自有产品差评数较上期有所上升，请持续关注"
     if health is not None and health < config.HEALTH_YELLOW:
         return "yellow", f"健康指数 {health} 偏低，请持续关注"
 
@@ -282,7 +283,7 @@ def _humanize_bullets(normalized):
         total = top.get("total_reviews") or 0
         neg = top.get("negative_review_rows", 0)
         rate_str = f"（差评率 {neg/total:.0%}）" if total else ""
-        neg_delta = normalized.get("kpis", {}).get("negative_review_rows_delta", 0) or 0
+        neg_delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta", 0) or 0
         delta_str = f"，较上期新增 {neg_delta} 条" if neg_delta > 0 else ""
         bullets.append(
             f"自有产品 {top['product_name']} 累计 {neg} 条差评"

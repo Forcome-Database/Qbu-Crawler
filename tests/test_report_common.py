@@ -250,7 +250,7 @@ def test_hero_headline_with_delta():
                                      "total_reviews": 50, "top_labels": [{"label_code": "quality_stability", "count": 14}]}],
                  "top_negative_clusters": []},
         "competitor": {"top_positive_themes": []},
-        "kpis": {"negative_review_rows_delta": 12},
+        "kpis": {"own_negative_review_rows_delta": 12},
     }
     result = _generate_hero_headline(normalized)
     assert "环比" in result
@@ -287,7 +287,7 @@ def test_alert_level_red():
 def test_alert_level_yellow():
     normalized = {
         "self": {"top_negative_clusters": [{"severity": "medium", "review_count": 3}]},
-        "kpis": {"negative_review_rows_delta": 5},
+        "kpis": {"own_negative_review_rows_delta": 5},
     }
     level, _ = _compute_alert_level(normalized)
     assert level == "yellow"
@@ -306,7 +306,7 @@ def test_humanize_bullets_with_rate_and_delta():
         "competitor": {"top_positive_themes": [{"label_display": "做工扎实", "review_count": 69, "label_code": "solid_build"}],
                        "gap_analysis": []},
         "kpis": {"product_count": 9, "ingested_review_rows": 636, "untranslated_count": 0,
-                 "negative_review_rows_delta": 5, "translation_completion_rate": 1.0},
+                 "own_negative_review_rows_delta": 5, "translation_completion_rate": 1.0},
     }
     bullets = _humanize_bullets(normalized)
     assert len(bullets) == 3
@@ -675,6 +675,33 @@ def test_kpi_cards_value_class_high_risk_products():
     result2 = normalize_deep_report_analytics(analytics2)
     risk_card2 = [c for c in result2["kpi_cards"] if c["label"] == "高风险产品"][0]
     assert risk_card2["value_class"] == ""
+
+
+def test_alert_level_ignores_competitor_negative_delta():
+    """Competitor negative review growth must NOT trigger own-product yellow/red alert."""
+    from qbu_crawler.server.report_common import _compute_alert_level, normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 50,
+            "negative_review_rows": 20,
+            "own_negative_review_rows": 2,
+            "own_review_rows": 20,
+            "competitor_review_rows": 30,
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 4.5,
+            "translated_count": 50,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    normalized = normalize_deep_report_analytics(analytics)
+    # Simulate previous run had 10 total negatives (mostly competitor)
+    normalized["kpis"]["negative_review_rows_delta"] = 10
+    normalized["kpis"]["own_negative_review_rows_delta"] = 0
+
+    level, _ = _compute_alert_level(normalized)
+    assert level == "green", f"Expected green but got {level} — competitor delta is inflating alert"
 
 
 def test_kpi_cards_value_class_competitive_gap():
