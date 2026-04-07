@@ -592,6 +592,30 @@ def test_kpi_cards_value_class_health_index():
     # Verify that the card has value_class set (it should be one of the severity classes)
     assert health_card["value_class"] in ["severity-high", "severity-medium", "severity-low"]
 
+
+# ---------------------------------------------------------------------------
+# Tests for _parse_date_flexible month/year precision
+# ---------------------------------------------------------------------------
+
+
+def test_parse_date_flexible_month_precision():
+    """'5 months ago' from 2026-04-07 should be 2025-11-07, not 2025-11-08 (timedelta drift)."""
+    from unittest.mock import patch
+    from datetime import date as real_date
+    from qbu_crawler.server import report_common
+
+    class FakeDate(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 4, 7)
+
+    with patch.object(report_common, "date", FakeDate):
+        result = report_common._parse_date_flexible("5 months ago")
+
+    assert result is not None
+    assert result == real_date(2025, 11, 7), \
+        f"Expected 2025-11-07 but got {result}"
+
     # Create analytics with high health (> 80)
     analytics2 = {
         "kpis": {

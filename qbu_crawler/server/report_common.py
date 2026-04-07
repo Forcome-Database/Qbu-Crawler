@@ -1,7 +1,10 @@
 """Shared constants and helper functions used by report.py and report_pdf.py."""
 
+import calendar
 import json
 import os
+import re
+from datetime import date, datetime, timedelta
 
 from qbu_crawler import config
 from qbu_crawler.server import report_analytics
@@ -225,7 +228,6 @@ def _parse_date_flexible(value: str | None):
     """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago')."""
     if not value:
         return None
-    from datetime import date, timedelta
     s = value.strip()
     # ISO format: "2026-01-01" or "2026-01-01T..."
     try:
@@ -234,12 +236,10 @@ def _parse_date_flexible(value: str | None):
         pass
     # MM/DD/YYYY format
     try:
-        from datetime import datetime
         return datetime.strptime(s, "%m/%d/%Y").date()
     except ValueError:
         pass
     # Relative format: "X days/months/years ago", "a month ago", "a year ago"
-    import re
     today = date.today()
     m = re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, re.IGNORECASE)
     if m:
@@ -250,9 +250,21 @@ def _parse_date_flexible(value: str | None):
         elif unit == "week":
             return today - timedelta(weeks=amount)
         elif unit == "month":
-            return today - timedelta(days=amount * 30)
+            # Calendar-aware: subtract months, clamp day
+            month = today.month - amount
+            year = today.year
+            while month <= 0:
+                month += 12
+                year -= 1
+            max_day = calendar.monthrange(year, month)[1]
+            day = min(today.day, max_day)
+            return date(year, month, day)
         elif unit == "year":
-            return today - timedelta(days=amount * 365)
+            try:
+                return today.replace(year=today.year - amount)
+            except ValueError:
+                # Feb 29 → Feb 28
+                return today.replace(year=today.year - amount, day=28)
     return None
 
 
