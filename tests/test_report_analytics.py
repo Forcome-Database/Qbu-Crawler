@@ -450,3 +450,19 @@ def test_build_report_analytics_includes_own_avg_rating(analytics_db):
     assert "own_avg_rating" in analytics["kpis"]
     # Own Grinder has rating 3.7
     assert analytics["kpis"]["own_avg_rating"] == 3.7
+
+
+def test_build_report_analytics_includes_products_for_charts(analytics_db):
+    """_products_for_charts must be present in analytics for the quadrant chart."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_snapshot(run["id"], "2026-03-29")
+    result = build_report_analytics(snapshot)
+    assert "_products_for_charts" in result
+    pfc = result["_products_for_charts"]
+    assert isinstance(pfc, list)
+    assert len(pfc) >= 1
+    assert "name" in pfc[0]
+    assert "price" in pfc[0]
+    assert "ownership" in pfc[0]

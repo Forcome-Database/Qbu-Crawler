@@ -767,6 +767,19 @@ def build_report_analytics(snapshot):
     # Use config.NEGATIVE_THRESHOLD for negative review counting
     negative_threshold = config.NEGATIVE_THRESHOLD
 
+    # _products_for_charts: used by price-rating quadrant chart
+    products_for_charts = [
+        {
+            "name": p.get("name", ""),
+            "sku": p.get("sku", ""),
+            "price": float(p.get("price") or 0),
+            "rating": float(p.get("rating") or 0),
+            "ownership": p.get("ownership", "competitor"),
+        }
+        for p in (snapshot.get("products") or [])
+        if p.get("price") and p.get("rating")
+    ]
+
     return {
         "run_id": snapshot.get("run_id"),
         "logical_date": snapshot["logical_date"],
@@ -777,6 +790,7 @@ def build_report_analytics(snapshot):
         "taxonomy_version": TAXONOMY_VERSION,
         "label_mode": config.REPORT_LABEL_MODE,
         "generated_at": config.now_shanghai().isoformat(),
+        "_products_for_charts": products_for_charts,
         "metric_semantics": {
             "ingested_review_rows": "reviews 实际入库行数",
             "site_reported_review_total_current": "products.review_count 当前站点展示总评论数",
