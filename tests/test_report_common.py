@@ -39,6 +39,57 @@ def test_normalize_computes_rates():
     assert result["kpis"]["translation_completion_rate_display"] == "90.0%"
 
 
+def test_issue_cards_complete_fields():
+    """issue_cards must carry all fields required by the P3 template."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+    analytics = {
+        "logical_date": "2026-04-07",
+        "mode": "baseline",
+        "snapshot_hash": "abc",
+        "kpis": {"ingested_review_rows": 5},
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [
+                {
+                    "label_code": "quality_stability",
+                    "review_count": 3,
+                    "severity": "high",
+                    "affected_product_count": 1,
+                    "first_seen": "2026-01-01",
+                    "last_seen": "2026-04-01",
+                    "image_review_count": 1,
+                    "example_reviews": [
+                        {"product_name": "P", "rating": 1, "headline": "bad",
+                         "headline_cn": "差", "body": "broke", "body_cn": "坏了",
+                         "images": ["https://example.com/img1.jpg"],
+                         "author": "A", "date_published": "2026-01-01"}
+                    ],
+                }
+            ],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+        "report_copy": {
+            "improvement_priorities": [
+                {"rank": 1, "target": "P", "issue": "手柄松动", "action": "加强出厂耐久测试", "evidence_count": 3}
+            ]
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    card = result["self"]["issue_cards"][0]
+    assert card["first_seen"] == "2026-01-01"
+    assert card["last_seen"] == "2026-04-01"
+    assert card["duration_display"] is not None
+    assert "月" in card["duration_display"] or "天" in card["duration_display"]
+    assert len(card["example_reviews"]) == 1
+    assert len(card["image_evidence"]) == 1
+    assert card["image_evidence"][0]["url"] == "https://example.com/img1.jpg"
+    assert card["image_evidence"][0]["evidence_id"] == "I1"
+    assert card["image_evidence"][0]["data_uri"] is None  # data_uri is None pre-render (render_report_html converts it)
+    assert card["recommendation"] == "加强出厂耐久测试"
+
+
 # ---------------------------------------------------------------------------
 # Tests for _cluster_summary_items and _risk_products (report_analytics)
 # ---------------------------------------------------------------------------

@@ -170,6 +170,24 @@ def _compute_alert_level(normalized):
     return "green", "无新增高风险信号"
 
 
+def _duration_display(first_seen: str | None, last_seen: str | None) -> str | None:
+    """Human-readable duration from ISO date strings."""
+    if not first_seen or not last_seen:
+        return None
+    try:
+        from datetime import date
+        d1 = date.fromisoformat(first_seen[:10])
+        d2 = date.fromisoformat(last_seen[:10])
+        days = (d2 - d1).days
+        if days <= 0:
+            return None
+        if days < 30:
+            return f"{days} 天"
+        return f"约 {days // 30} 个月"
+    except Exception:
+        return None
+
+
 def _humanize_bullets(normalized):
     """Generate up to 3 natural-language conclusions for the executive summary."""
     bullets = []
@@ -566,8 +584,20 @@ def normalize_deep_report_analytics(analytics):
     normalized["kpi_cards"] = kpi_cards
 
     # ── Build issue_cards from top_negative_clusters ─────────────────────
+    report_priorities = (normalized.get("report_copy") or {}).get("improvement_priorities") or []
+    priority_by_rank = {p.get("rank", i + 1): p.get("action", "") for i, p in enumerate(report_priorities)}
+
     issue_cards = []
-    for cluster in normalized["self"]["top_negative_clusters"]:
+    for i, cluster in enumerate(normalized["self"]["top_negative_clusters"]):
+        # Collect image URLs from example_reviews (max 3 unique)
+        image_evidence = []
+        seen_urls: set[str] = set()
+        for ex in cluster.get("example_reviews") or []:
+            for url in ex.get("images") or []:
+                if url and url not in seen_urls and len(image_evidence) < 3:
+                    seen_urls.add(url)
+                    image_evidence.append({"url": url, "data_uri": None,
+                                            "evidence_id": f"I{len(image_evidence)+1}"})
         issue_cards.append({
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
             "label_display": cluster.get("label_display", ""),
@@ -575,6 +605,13 @@ def normalize_deep_report_analytics(analytics):
             "severity": cluster.get("severity", "low"),
             "severity_display": cluster.get("severity_display", ""),
             "affected_product_count": cluster.get("affected_product_count", 0),
+            "first_seen": cluster.get("first_seen"),
+            "last_seen": cluster.get("last_seen"),
+            "duration_display": _duration_display(cluster.get("first_seen"), cluster.get("last_seen")),
+            "image_review_count": cluster.get("image_review_count", 0),
+            "example_reviews": cluster.get("example_reviews") or [],
+            "image_evidence": image_evidence,
+            "recommendation": priority_by_rank.get(i + 1, ""),
         })
     normalized["self"]["issue_cards"] = issue_cards
 
