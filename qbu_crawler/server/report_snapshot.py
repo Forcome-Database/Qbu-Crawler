@@ -143,8 +143,8 @@ def generate_full_report_from_snapshot(
     pdf_path = None
 
     try:
-        report_analytics.sync_review_labels(snapshot)
-        analytics = report_analytics.build_report_analytics(snapshot)
+        synced_labels = report_analytics.sync_review_labels(snapshot)
+        analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced_labels)
 
         # New: LLM-generated insights (single call, replaces old 3-function chain)
         insights = report_llm.generate_report_insights(analytics)

@@ -533,3 +533,69 @@ def test_risk_products_ignores_high_rating_reviews(analytics_db):
         product = risk[0]
         assert product["negative_review_rows"] == 1, \
             f"Expected 1 negative review (only low-rating), got {product['negative_review_rows']}"
+
+
+def _insert_snapshot_reviews_into_db(snapshot):
+    """Insert products and reviews from snapshot into DB so sync_review_labels can persist labels."""
+    conn = models.get_conn()
+    try:
+        review_ids = []
+        product_ids = {}
+        for p in snapshot.get("products") or []:
+            conn.execute(
+                """INSERT INTO products (url, site, name, sku, price, stock_status, rating, review_count, ownership, scraped_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (p["url"], p["site"], p["name"], p["sku"], p["price"],
+                 p["stock_status"], p["rating"], p["review_count"],
+                 p["ownership"], p["scraped_at"]),
+            )
+            pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            product_ids[p["sku"]] = pid
+        for r in snapshot.get("reviews") or []:
+            pid = product_ids.get(r["product_sku"])
+            if not pid:
+                continue
+            body = r.get("body") or ""
+            conn.execute(
+                """INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, images, scraped_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (pid, r["author"], r["headline"], body,
+                 f"hash-{r['author'].lower()}", r["rating"],
+                 r.get("date_published"), "[]", "2026-03-29 09:05:00"),
+            )
+            rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            review_ids.append(rid)
+        conn.commit()
+    finally:
+        conn.close()
+    return review_ids
+
+
+def test_build_report_analytics_uses_synced_labels(analytics_db, monkeypatch):
+    """build_report_analytics should use labels from sync, not re-classify."""
+    from qbu_crawler.server import report_analytics
+
+    call_count = {"classify": 0}
+    original_classify = report_analytics.classify_review_labels
+
+    def counting_classify(review):
+        call_count["classify"] += 1
+        return original_classify(review)
+
+    monkeypatch.setattr(report_analytics, "classify_review_labels", counting_classify)
+
+    snapshot = _build_snapshot(1, "2026-04-01")
+    # Insert real DB records and assign IDs to snapshot reviews
+    review_ids = _insert_snapshot_reviews_into_db(snapshot)
+    for i, review in enumerate(snapshot["reviews"]):
+        review["id"] = review_ids[i]
+
+    # First: sync persists labels and returns them
+    synced = report_analytics.sync_review_labels(snapshot)
+    initial_count = call_count["classify"]
+
+    # Second: build_report_analytics should NOT re-classify
+    call_count["classify"] = 0
+    analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced)
+    assert call_count["classify"] == 0, \
+        f"classify_review_labels called {call_count['classify']} times during build_report_analytics"

@@ -192,7 +192,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {
+        lambda snapshot, synced_labels=None: {
             "mode": "baseline",
             "kpis": {
                 "product_count": 40,
@@ -345,7 +345,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+        lambda snapshot, synced_labels=None: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
@@ -404,7 +404,7 @@ def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {
+        lambda snapshot, synced_labels=None: {
             "mode": "baseline",
             "kpis": {},
             "self": {"top_negative_clusters": [{"label_code": "quality_stability", "example_reviews": [{"id": 1}]}]},
@@ -491,7 +491,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+        lambda snapshot, synced_labels=None: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
@@ -557,7 +557,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+        lambda snapshot, synced_labels=None: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
@@ -624,7 +624,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+        lambda snapshot, synced_labels=None: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
@@ -721,7 +721,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     monkeypatch.setattr(
         report_snapshot.report_analytics,
         "build_report_analytics",
-        lambda snapshot: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
+        lambda snapshot, synced_labels=None: {"mode": "baseline", "kpis": {}, "self": {}, "competitor": {}, "appendix": {}},
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,

@@ -476,13 +476,18 @@ def sync_review_labels(snapshot):
     return models.list_review_issue_labels(list(candidate_labels))
 
 
-def _build_labeled_reviews(snapshot):
+def _build_labeled_reviews(snapshot, synced_labels=None):
     products = _group_products(snapshot.get("products") or [])
     labeled_reviews = []
     for review in snapshot.get("reviews") or []:
         product_key = _product_key(review.get("product_name"), review.get("product_sku"))
         product = products.get(product_key, {})
-        labels = classify_review_labels(review)
+        # Use synced labels if available, otherwise classify
+        review_id = _review_id(review)
+        if synced_labels and review_id and review_id in synced_labels:
+            labels = synced_labels[review_id]
+        else:
+            labels = classify_review_labels(review)
         labeled_reviews.append(
             {
                 "review": review,
@@ -909,9 +914,9 @@ def _compute_chart_data(labeled_reviews, snapshot):
     return result
 
 
-def build_report_analytics(snapshot):
+def build_report_analytics(snapshot, synced_labels=None):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
-    labeled_reviews = _build_labeled_reviews(snapshot)
+    labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
 
     # Determine if review_analysis data is available for feature-based clustering
     snapshot_reviews = snapshot.get("reviews") or []
