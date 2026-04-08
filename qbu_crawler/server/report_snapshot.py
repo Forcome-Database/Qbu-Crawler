@@ -121,6 +121,9 @@ def generate_full_report_from_snapshot(
     send_email: bool = True,
     output_path: str | None = None,
 ) -> dict:
+    if not snapshot.get("reviews"):
+        return {"status": "completed_no_change", "reason": "No new reviews"}
+
     report_date = datetime.fromisoformat(
         snapshot.get("data_since") or f"{snapshot['logical_date']}T00:00:00+08:00"
     )
