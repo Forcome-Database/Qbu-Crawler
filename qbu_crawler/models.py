@@ -1847,3 +1847,23 @@ def get_reviews_with_analysis(
         return [dict(r) for r in rows]
     finally:
         conn.close()
+
+
+def get_product_snapshots(sku, days=30):
+    """Get recent product snapshots by SKU, ordered chronologically."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT ps.price, ps.stock_status, ps.review_count, ps.rating, ps.scraped_at
+            FROM product_snapshots ps
+            JOIN products p ON ps.product_id = p.id
+            WHERE p.sku = ?
+              AND ps.scraped_at >= datetime('now', ? || ' days')
+            ORDER BY ps.scraped_at ASC
+            """,
+            (sku, f"-{days}"),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()

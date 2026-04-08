@@ -1071,6 +1071,29 @@ def _compute_chart_data(labeled_reviews, snapshot):
     return result
 
 
+def _build_trend_data(products, days=30):
+    """Build per-product time series from product_snapshots."""
+    result = []
+    for product in products:
+        sku = product.get("sku", "")
+        snapshots = models.get_product_snapshots(sku, days=days) if sku else []
+        result.append({
+            "product_name": product.get("name", ""),
+            "product_sku": sku,
+            "series": [
+                {
+                    "date": s.get("scraped_at", ""),
+                    "price": s.get("price"),
+                    "rating": s.get("rating"),
+                    "review_count": s.get("review_count"),
+                    "stock_status": s.get("stock_status"),
+                }
+                for s in snapshots
+            ],
+        })
+    return result
+
+
 def build_report_analytics(snapshot, synced_labels=None):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
@@ -1213,4 +1236,5 @@ def build_report_analytics(snapshot, synced_labels=None):
             },
         },
         **chart_data,
+        "_trend_data": _build_trend_data(snapshot.get("products") or [], days=30),
     }

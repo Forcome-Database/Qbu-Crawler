@@ -851,3 +851,44 @@ def test_extract_validated_llm_labels_empty_input():
     assert _extract_validated_llm_labels({}) == []
     assert _extract_validated_llm_labels({"analysis_labels": None}) == []
     assert _extract_validated_llm_labels({"analysis_labels": "[]"}) == []
+
+
+def test_build_trend_data_returns_time_series(analytics_db):
+    """_build_trend_data should return per-product time series from snapshots."""
+    from qbu_crawler.server.report_analytics import _build_trend_data
+
+    conn = models.get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO products (url, site, name, sku, price, stock_status, rating, review_count, ownership, scraped_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("https://example.com/p1", "basspro", "Product 1", "SKU1", 100, "in_stock", 4.0, 10, "own", "2026-04-01 10:00:00"),
+        )
+        pid = conn.execute("SELECT id FROM products WHERE sku='SKU1'").fetchone()["id"]
+        for day in range(1, 4):
+            conn.execute(
+                "INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, scraped_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (pid, 100.0 + day, "in_stock", 10 + day, 4.0 + day * 0.1, f"2026-04-0{day} 10:00:00"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    products = [{"name": "Product 1", "sku": "SKU1"}]
+    trend = _build_trend_data(products, days=30)
+    assert len(trend) == 1
+    assert trend[0]["product_name"] == "Product 1"
+    assert trend[0]["product_sku"] == "SKU1"
+    series = trend[0]["series"]
+    assert len(series) == 3
+    assert series[0]["price"] == 101.0
+    assert series[2]["price"] == 103.0
+
+
+def test_build_trend_data_empty_snapshots(analytics_db):
+    """Products with no snapshots should return empty series."""
+    from qbu_crawler.server.report_analytics import _build_trend_data
+
+    products = [{"name": "Ghost Product", "sku": "GHOST"}]
+    trend = _build_trend_data(products, days=30)
+    assert len(trend) == 1
+    assert trend[0]["series"] == []
