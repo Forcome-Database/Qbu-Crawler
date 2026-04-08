@@ -147,6 +147,43 @@ def test_build_chart_html_fragments_with_data():
     assert "competitor_positive_themes" in fragments
 
 
+def test_heatmap_produces_continuous_values():
+    """Heatmap z values should not all collapse to -1/0/1."""
+    from qbu_crawler.server.report_analytics import _compute_chart_data
+
+    labeled = []
+    # Product 1: 3 positive solid_build + 2 negative quality_stability
+    for _ in range(3):
+        labeled.append({"review": {"ownership": "own", "product_sku": "S1", "product_name": "Cabela's Commercial-Grade Sausage Stuffer"},
+                        "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+                        "images": [], "product": {}})
+    for _ in range(2):
+        labeled.append({"review": {"ownership": "own", "product_sku": "S1", "product_name": "Cabela's Commercial-Grade Sausage Stuffer"},
+                        "labels": [{"label_code": "quality_stability", "label_polarity": "negative", "severity": "high", "confidence": 0.9}],
+                        "images": [], "product": {}})
+    # Product 2: 1 positive
+    labeled.append({"review": {"ownership": "own", "product_sku": "S2", "product_name": "Cabela's Heavy-Duty Sausage Stuffer"},
+                    "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+                    "images": [], "product": {}})
+
+    snapshot = {"products": [
+        {"name": "Cabela's Commercial-Grade Sausage Stuffer", "sku": "S1", "ownership": "own", "price": 349.99, "rating": 3.6, "review_count": 88},
+        {"name": "Cabela's Heavy-Duty Sausage Stuffer", "sku": "S2", "ownership": "own", "price": 169.99, "rating": 3.3, "review_count": 79},
+    ]}
+    charts = _compute_chart_data(labeled, snapshot)
+    heatmap = charts.get("_heatmap_data")
+    assert heatmap is not None
+
+    # y_labels should use smart truncation (not mid-word cut)
+    for label in heatmap["y_labels"]:
+        assert not label.endswith("Sausa"), f"Label truncated mid-word: {label}"
+
+    # At least one z value should be between -1 and 1 (continuous, not ternary)
+    all_z = [v for row in heatmap["z"] for v in row if v != 0.0]
+    has_continuous = any(-1 < v < 1 for v in all_z)
+    assert has_continuous, f"All z values are ternary: {all_z}"
+
+
 def test_radar_uses_unified_dimensions():
     """Radar chart should use 5 unified dimensions with continuous values."""
     from qbu_crawler.server.report_common import CODE_TO_DIMENSION

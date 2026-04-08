@@ -1031,6 +1031,10 @@ def _compute_chart_data(labeled_reviews, snapshot):
         if item["review"].get("ownership") == "own"
         for label in item["labels"]
     ))
+    # Build SKU → review_count lookup from snapshot products
+    sku_review_count = {}
+    for p in own_products:
+        sku_review_count[p.get("sku", "")] = p.get("review_count", 0) or 0
     if len(own_products) >= 2 and len(heatmap_dims) >= 2:
         y_labels = []
         z = []
@@ -1051,14 +1055,22 @@ def _compute_chart_data(labeled_reviews, snapshot):
                                 pos += 1
                             else:
                                 neg += 1
-                total = pos + neg
-                if total > 0:
+                if pos + neg > 0:
                     has_data = True
-                    row.append(round((pos - neg) / total, 2))
+                    total_reviews = max(sku_review_count.get(psku, pos + neg), pos + neg)
+                    row.append(round((pos - neg) / total_reviews, 2))
                 else:
                     row.append(0.0)
             if has_data:
-                y_labels.append(pname[:25])
+                # Smart truncation: remove brand prefix, truncate at word boundary
+                short_name = pname
+                for prefix in ("Cabela's ", "Cabela\u2019s "):
+                    if short_name.startswith(prefix):
+                        short_name = short_name[len(prefix):]
+                        break
+                if len(short_name) > 25:
+                    short_name = short_name[:25].rsplit(" ", 1)[0]
+                y_labels.append(short_name)
                 z.append(row)
 
         if len(y_labels) >= 2:
