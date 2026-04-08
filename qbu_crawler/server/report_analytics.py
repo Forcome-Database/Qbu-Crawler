@@ -833,6 +833,35 @@ def _negative_opportunities(labeled_reviews):
     return items[:5]
 
 
+def _select_diverse_examples(reviews, max_count=3):
+    """Select diverse example reviews: lowest-rated + with-image + mid-range."""
+    if len(reviews) <= max_count:
+        return sorted(reviews, key=lambda r: r.get("rating", 5))
+
+    selected = []
+    remaining = list(reviews)
+
+    # 1. Lowest rated
+    remaining.sort(key=lambda r: r.get("rating", 5))
+    selected.append(remaining.pop(0))
+
+    # 2. Prefer one with images (if not already selected)
+    img_candidates = [r for r in remaining if r.get("images")]
+    if img_candidates:
+        pick = min(img_candidates, key=lambda r: r.get("rating", 5))
+        selected.append(pick)
+        remaining.remove(pick)
+    elif remaining:
+        selected.append(remaining.pop(0))
+
+    # 3. Highest-rated among remaining (for diversity)
+    if remaining and len(selected) < max_count:
+        pick = max(remaining, key=lambda r: r.get("rating", 5))
+        selected.append(pick)
+
+    return selected[:max_count]
+
+
 def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="negative"):
     """Aggregate reviews into clusters grouped by ``label_code``.
 
@@ -918,6 +947,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             if feat:
                 bucket["sub_features"][feat] += 1
 
+    from collections import Counter
+
     result = []
     for code, data in clusters.items():
         reviews = data["reviews"]
@@ -930,6 +961,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             for feat, cnt in sorted(data["sub_features"].items(), key=lambda x: -x[1])
         ]
 
+        rating_counts = Counter(r.get("rating", 0) for r in reviews)
+
         result.append({
             "label_code": code,
             "feature_display": display,
@@ -941,7 +974,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "severity_display": {"high": "高", "medium": "中", "low": "低"}.get(max_sev, max_sev),
             "first_seen": sorted(dates, key=_date_sort_key)[0] if dates else None,
             "last_seen": sorted(dates, key=_date_sort_key)[-1] if dates else None,
-            "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
+            "example_reviews": _select_diverse_examples(reviews, max_count=3),
+            "rating_breakdown": {f"{star}星": rating_counts.get(star, 0) for star in range(1, 6) if rating_counts.get(star, 0) > 0},
             "image_review_count": sum(1 for r in reviews if r.get("images")),
             "sub_features": sub_features,
             "affected_products": sorted(data["product_names"] - {""})[:5],

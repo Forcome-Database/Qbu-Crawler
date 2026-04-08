@@ -947,3 +947,20 @@ def test_image_reviews_expanded_to_20(analytics_db):
     assert len(image_reviews) == 20  # expanded from 10
     # Own products should come first
     assert image_reviews[0]["ownership"] == "own"
+
+
+def test_example_reviews_diverse_selection():
+    """example_reviews should include diverse ratings, not just lowest."""
+    from qbu_crawler.server.report_analytics import _select_diverse_examples
+    reviews_data = [
+        {"rating": 1, "headline": "terrible", "body": "worst", "images": [], "date_published_parsed": "2026-01-01", "product_name": "P"},
+        {"rating": 1, "headline": "awful", "body": "bad too", "images": [], "date_published_parsed": "2026-01-02", "product_name": "P"},
+        {"rating": 1, "headline": "poor", "body": "bad three", "images": ["img.jpg"], "date_published_parsed": "2026-01-03", "product_name": "P"},
+        {"rating": 2, "headline": "mediocre", "body": "could be better", "images": [], "date_published_parsed": "2026-01-04", "product_name": "P"},
+        {"rating": 3, "headline": "ok", "body": "mixed feelings", "images": [], "date_published_parsed": "2026-02-01", "product_name": "P"},
+    ]
+    selected = _select_diverse_examples(reviews_data, max_count=3)
+    ratings = [r["rating"] for r in selected]
+    assert max(ratings) >= 2, f"All examples are 1-star: {ratings}"
+    has_image = any(r.get("images") for r in selected)
+    assert has_image, "Should include at least one review with images"
