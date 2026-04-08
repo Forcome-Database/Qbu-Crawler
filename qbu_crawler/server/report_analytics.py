@@ -855,6 +855,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             continue
 
         # Find primary label_code: highest-confidence label matching target polarity
+        # Also validates against _POLARITY_WHITELIST to reject LLM mis-assignments
+        # (e.g., strong_performance/negative — strong_performance is positive-only)
         primary_code = None
         primary_severity = "low"
         best_confidence = -1.0
@@ -866,6 +868,10 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             if not code:
                 continue
             if lab_polarity and lab_polarity != polarity:
+                continue
+            # Reject codes that don't belong to the target polarity per taxonomy
+            allowed = _POLARITY_WHITELIST.get(code)
+            if allowed and polarity not in allowed:
                 continue
             confidence = label.get("confidence", 0.0)
             if confidence > best_confidence:

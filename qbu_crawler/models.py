@@ -364,12 +364,24 @@ def save_reviews(product_id: int, reviews: list) -> int:
         body = r.get("body") or ""
         bh = _body_hash(body)
         images = r.get("images")
+        date_pub = r.get("date_published")
+        # Parse date_published at insert time with today as anchor
+        date_parsed = None
+        if date_pub:
+            try:
+                from qbu_crawler.server.report_common import _parse_date_flexible
+                from datetime import date as _date
+                parsed_obj = _parse_date_flexible(date_pub, anchor_date=_date.today())
+                date_parsed = parsed_obj.isoformat() if parsed_obj else None
+            except Exception:
+                pass
         try:
             conn.execute(f"""
-                INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, images, scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
+                INSERT INTO reviews (product_id, author, headline, body, body_hash, rating,
+                                     date_published, date_published_parsed, images, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
             """, (product_id, r.get("author"), r.get("headline"), body, bh,
-                  r.get("rating"), r.get("date_published"), images))
+                  r.get("rating"), date_pub, date_parsed, images))
             new_count += 1
         except sqlite3.IntegrityError:
             # 已存在：如果新数据有图片而旧数据没有，更新图片
