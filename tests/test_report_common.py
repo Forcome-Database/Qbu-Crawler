@@ -227,14 +227,55 @@ def test_competitor_gap_analysis_finds_intersection():
     assert gaps[0]["own_negative_count"] == 20  # 13 + 7 aggregated under solid_build
 
 
-def test_competitor_gap_analysis_empty():
-    # service_fulfillment has no positive counterpart in _NEGATIVE_TO_POSITIVE_DIMENSION → no gap
+def test_competitor_gap_analysis_one_sided_competitor():
+    # service_fulfillment has no positive counterpart in _NEGATIVE_TO_POSITIVE_DIMENSION
+    # but solid_build from competitor still appears via union
     normalized = {
         "self": {"top_negative_clusters": [{"label_code": "service_fulfillment", "review_count": 7}]},
         "competitor": {"top_positive_themes": [{"label_code": "solid_build", "review_count": 69}]},
     }
     gaps = _competitor_gap_analysis(normalized)
-    assert len(gaps) == 0
+    assert len(gaps) == 1
+    assert gaps[0]["label_code"] == "solid_build"
+    assert gaps[0]["own_negative_count"] == 0
+    assert gaps[0]["gap_type"] == "竞品领先"
+    assert gaps[0]["priority"] == "low"  # own_cnt == 0 → low
+
+
+def test_gap_analysis_includes_one_sided_dimensions():
+    """Gap analysis should include dimensions where only one side has data."""
+    normalized = {
+        "kpis": {"competitor_review_rows": 36, "own_review_rows": 112},
+        "competitor": {
+            "top_positive_themes": [
+                {"label_code": "solid_build", "review_count": 9},
+            ],
+        },
+        "self": {
+            "top_negative_clusters": [
+                {"label_code": "noise_power", "review_count": 8},
+            ],
+        },
+    }
+    gaps = _competitor_gap_analysis(normalized)
+    # Should include dimensions from BOTH sides
+    codes = [g["label_code"] for g in gaps]
+    # solid_build from competitor positive, strong_performance from noise_power mapping
+    assert "solid_build" in codes
+    assert "strong_performance" in codes
+    assert len(gaps) >= 2
+    # Verify gap_type is present
+    for g in gaps:
+        assert "gap_type" in g
+        assert g["gap_type"] in ("双侧差距", "竞品领先", "自有短板")
+    # solid_build has only competitor data → 竞品领先
+    sb = next(g for g in gaps if g["label_code"] == "solid_build")
+    assert sb["gap_type"] == "竞品领先"
+    assert sb["own_negative_count"] == 0
+    # strong_performance has only own negative data → 自有短板
+    sp = next(g for g in gaps if g["label_code"] == "strong_performance")
+    assert sp["gap_type"] == "自有短板"
+    assert sp["competitor_positive_count"] == 0
 
 
 def test_compute_kpi_deltas_normal():
@@ -1260,3 +1301,31 @@ def test_issue_card_recency_display():
     assert "recency_display" in card
     # 2026-02-15 and 2026-03-20 are within 90 days of 2026-04-08
     assert "2" in card["recency_display"]
+
+
+def test_issue_card_translation_warning():
+    """Issue card should show translation warning when coverage < 50%."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+    analytics = {
+        "mode": "baseline",
+        "kpis": {"ingested_review_rows": 5},
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [{
+                "label_code": "quality_stability",
+                "review_count": 4,
+                "severity": "high",
+                "affected_product_count": 1,
+                "example_reviews": [],
+                "translated_rate": 0.25,
+            }],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+        "report_copy": {"improvement_priorities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    card = result["self"]["issue_cards"][0]
+    assert card["translation_warning"] is True
+    assert card["translated_rate_display"] == "25%"

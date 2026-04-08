@@ -179,17 +179,27 @@ def _competitor_gap_analysis(normalized):
         dimension_own_negative[pos_dim] = dimension_own_negative.get(pos_dim, 0) + (c.get("review_count") or 0)
         dimension_neg_codes.setdefault(pos_dim, []).append(neg_code)
 
-    # Find dimensions where competitor has positive AND own has negative
-    gap_dims = set(comp_positive) & set(dimension_own_negative)
+    # Find dimensions where competitor has positive OR own has negative
+    gap_dims = set(comp_positive) | set(dimension_own_negative)
     gaps = []
     for dim in gap_dims:
-        comp_cnt = comp_positive[dim].get("review_count", 0)
-        own_cnt = dimension_own_negative[dim]
+        comp_theme = comp_positive.get(dim)
+        comp_cnt = comp_theme.get("review_count", 0) if comp_theme else 0
+        own_cnt = dimension_own_negative.get(dim, 0)
         # Rate-based gap: how prevalent is the signal relative to each side's total
         comp_rate = comp_cnt / max(competitor_total, 1)
         own_rate = own_cnt / max(own_total, 1)
-        gap_rate = round((comp_rate + own_rate) / 2 * 100)  # 0-100 scale
-        if own_rate >= 0.15:
+        # gap_rate: weight by half when only one side has data
+        if comp_cnt > 0 and own_cnt > 0:
+            gap_rate = round((comp_rate + own_rate) / 2 * 100)
+        elif comp_cnt > 0:
+            gap_rate = round(comp_rate * 50)
+        else:
+            gap_rate = round(own_rate * 50)
+        gap_type = "双侧差距" if comp_cnt > 0 and own_cnt > 0 else ("竞品领先" if comp_cnt > 0 else "自有短板")
+        if own_cnt == 0:
+            priority, priority_display = "low", "低"
+        elif own_rate >= 0.15:
             priority, priority_display = "high", "高"
         elif own_rate >= 0.05:
             priority, priority_display = "medium", "中"
@@ -206,6 +216,7 @@ def _competitor_gap_analysis(normalized):
             "own_total": own_total,
             "gap": comp_cnt - own_cnt,
             "gap_rate": gap_rate,
+            "gap_type": gap_type,
             "priority": priority,
             "priority_display": priority_display,
         })
@@ -898,6 +909,7 @@ def normalize_deep_report_analytics(analytics):
                     seen_urls.add(url)
                     image_evidence.append({"url": url, "data_uri": None,
                                             "evidence_id": f"I{len(image_evidence)+1}"})
+        translated_rate = cluster.get("translated_rate", 1.0)
         lookup_key = cluster.get("label_code", "") if _label_key else (i + 1)
         issue_cards.append({
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
@@ -913,6 +925,8 @@ def normalize_deep_report_analytics(analytics):
             "example_reviews": cluster.get("example_reviews") or [],
             "image_evidence": image_evidence,
             "recommendation": priority_by_label.get(lookup_key, ""),
+            "translated_rate_display": f"{translated_rate * 100:.0f}%",
+            "translation_warning": translated_rate < 0.5,
         })
         # ── 90-day recency indicator ──
         review_dates = cluster.get("review_dates") or []
