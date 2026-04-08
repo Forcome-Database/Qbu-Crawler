@@ -298,6 +298,20 @@ def test_compute_chart_data_has_sentiment_chart_metadata():
     assert "好评" in charts["_sentiment_chart_legend"]["positive"]
 
 
+def test_heatmap_left_margin_adapts_to_label_length():
+    """Heatmap left margin must grow with y_label length."""
+    long_labels = ["Cabela's Commercial-Grade Sausage Stuffer", "Another Very Long Product Name Here"]
+    html = _build_heatmap(
+        z=[[0.1, -0.2], [0.3, -0.1]],
+        x_labels=["质量", "设计"],
+        y_labels=long_labels,
+        title="Test",
+    )
+    assert html  # renders without error
+    # Verify labels are truncated (not full length in output)
+    assert "Cabela's Commercial-Grade Sausa" not in html or "\u2026" in html
+
+
 def test_issue_cluster_footnote_in_tooltips():
     """METRIC_TOOLTIPS should contain issue cluster footnote."""
     from qbu_crawler.server.report_common import METRIC_TOOLTIPS

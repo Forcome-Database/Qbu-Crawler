@@ -145,6 +145,17 @@ def _build_heatmap(
     title: str,
 ) -> str:
     """Feature x Product sentiment heatmap with diverging colors."""
+    # Truncate long y-axis labels for readability
+    max_label_len = 30
+    display_labels = [
+        (label[: max_label_len - 1] + "\u2026" if len(label) > max_label_len else label)
+        for label in y_labels
+    ]
+
+    # Dynamic left margin based on longest displayed label
+    longest = max((len(label) for label in display_labels), default=5)
+    left_margin = max(40, min(longest * 7, 220))
+
     # Build annotation text (1 decimal)
     annotations = []
     for i, row in enumerate(z):
@@ -152,7 +163,7 @@ def _build_heatmap(
             annotations.append(
                 dict(
                     x=x_labels[j],
-                    y=y_labels[i],
+                    y=display_labels[i],
                     text=f"{val:.1f}",
                     showarrow=False,
                     font=dict(size=11, color=_INK),
@@ -163,7 +174,7 @@ def _build_heatmap(
         go.Heatmap(
             z=z,
             x=x_labels,
-            y=y_labels,
+            y=display_labels,
             zmid=0,
             zmin=-1,
             zmax=1,
@@ -187,7 +198,7 @@ def _build_heatmap(
         height=height,
         annotations=annotations,
         xaxis=dict(side="bottom"),
-        margin=dict(l=10, r=10, t=36, b=10),
+        margin=dict(l=left_margin, r=10, t=36, b=10),
     )
     return _to_html(fig)
 
