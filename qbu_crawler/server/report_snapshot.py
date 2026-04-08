@@ -154,8 +154,12 @@ def generate_full_report_from_snapshot(
         synced_labels = report_analytics.sync_review_labels(snapshot)
         analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced_labels)
 
-        # New: LLM-generated insights (single call, replaces old 3-function chain)
-        insights = report_llm.generate_report_insights(analytics)
+        # Pre-normalize so LLM gets gap_analysis, enriched clusters, and top_symptoms
+        from qbu_crawler.server.report_common import normalize_deep_report_analytics
+        pre_normalized = normalize_deep_report_analytics(analytics)
+
+        # LLM insights with full context (gap_analysis, top_symptoms, etc.)
+        insights = report_llm.generate_report_insights(pre_normalized)
         analytics["report_copy"] = insights
 
         Path(analytics_path).write_text(

@@ -714,6 +714,10 @@ def _risk_products(labeled_reviews, snapshot_products=None):
     )
     from qbu_crawler.server.report_common import _join_label_counts
 
+    # Compute max possible score per review for normalization
+    # Worst case: rating<=2(+2), has_image(+1), 3 high-severity labels(+9) = 12
+    max_per_review = 2 + 1 + _SEVERITY_SCORE["high"] * _MAX_LABELS_PER_REVIEW  # 12
+
     for item in items:
         label_counts = item.pop("top_labels")
         item["top_labels"] = [
@@ -725,6 +729,12 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         item["negative_rate"] = neg / total if total else None
         ingested = item.get("ingested_reviews", 0)
         item["coverage_rate"] = ingested / total if total else None
+        # Normalize risk_score to 0-100: average severity per negative review
+        item["risk_score_raw"] = item["risk_score"]
+        if neg > 0:
+            item["risk_score"] = round(min(item["risk_score_raw"] / (neg * max_per_review), 1.0) * 100, 1)
+        else:
+            item["risk_score"] = 0
         item["top_features_display"] = _join_label_counts(item["top_labels"])
     return items
 
@@ -753,12 +763,19 @@ def _recommendations(top_negative_clusters):
                 seen_products.add(pname)
                 affected_products.append(pname)
 
+        # Use top sub_features for product-specific actionable detail
+        sub_features = cluster.get("sub_features") or []
+        top_symptoms = "、".join(
+            sf["feature"] for sf in sub_features[:5] if sf.get("feature")
+        )
+
         items.append(
             {
                 "label_code": cluster["label_code"],
                 "priority": "high" if cluster["severity"] == "high" else "medium",
                 "possible_cause_boundary": content["possible_cause_boundary"],
                 "improvement_direction": content["improvement_direction"],
+                "top_symptoms": top_symptoms,
                 "evidence_count": cluster["review_count"],
                 "top_complaint": top_complaint,
                 "affected_products": affected_products[:3],

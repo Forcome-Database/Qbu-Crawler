@@ -240,7 +240,7 @@
             <th>维度</th>
             <th>竞品好评 <span class="tip-wrap" title="{{ analytics.tooltips['竞品好评'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['竞品好评'] }}</span></span></th>
             <th>自有差评 <span class="tip-wrap" title="{{ analytics.tooltips['自有差评'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['自有差评'] }}</span></span></th>
-            <th>差距 <span class="tip-wrap" title="{{ analytics.tooltips['差距'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['差距'] }}</span></span></th>
+            <th>差距指数 <span class="tip-wrap" title="基于比率的差距指数(0-100)：(竞品好评率+自有差评率)/2×100，越高差距越大"><span class="tip-icon">ⓘ</span><span class="tip-bubble">基于比率的差距指数(0-100)：(竞品好评率+自有差评率)/2×100，越高差距越大</span></span></th>
             <th>优先级</th>
           </tr>
         </thead>
@@ -248,9 +248,9 @@
           {% for gap in analytics.competitor.gap_analysis %}
           <tr>
             <td>{{ gap.label_display }}</td>
-            <td>{{ gap.competitor_positive_count }}</td>
-            <td>{{ gap.own_negative_count }}</td>
-            <td>{{ gap.gap }}</td>
+            <td>{{ gap.competitor_positive_count }} <span class="text-muted">({{ gap.competitor_positive_rate }}%)</span></td>
+            <td>{{ gap.own_negative_count }} <span class="text-muted">({{ gap.own_negative_rate }}%)</span></td>
+            <td>{{ gap.gap_rate }}</td>
             <td><span class="badge severity-{{ gap.priority or 'medium' }}">{{ gap.priority_display }}</span></td>
           </tr>
           {% endfor %}

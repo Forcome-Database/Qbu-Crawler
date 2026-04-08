@@ -270,7 +270,10 @@ _INSIGHTS_KEYS = (
 
 
 def _build_insights_prompt(analytics):
-    """Build a concise prompt summarizing analytics for LLM executive insights."""
+    """Build a concise prompt summarizing analytics for LLM executive insights.
+
+    Expects pre-normalized analytics with gap_analysis, enriched clusters, etc.
+    """
     kpis = analytics.get("kpis", {})
     own_count = kpis.get("own_product_count", 0)
     comp_count = kpis.get("competitor_product_count", 0)
@@ -279,48 +282,88 @@ def _build_insights_prompt(analytics):
     rate = kpis.get("negative_review_rate", 0)
     health = kpis.get("health_index", "N/A")
 
-    # Top issues
+    # Top issues with concrete symptoms from sub_features
     clusters = analytics.get("self", {}).get("top_negative_clusters", [])
     issue_lines = []
     for c in clusters[:8]:
         display = c.get("feature_display") or c.get("label_display", "")
         count = c.get("review_count", 0)
         sev = c.get("severity_display") or c.get("severity", "")
-        issue_lines.append(f"  - {display}：{count} 条评论，严重度 {sev}")
+        line = f"  - {display}：{count} 条评论，严重度 {sev}"
+        # Add top symptoms for product-specific context
+        sub_features = c.get("sub_features") or []
+        if sub_features:
+            symptoms = "、".join(sf["feature"] for sf in sub_features[:5] if sf.get("feature"))
+            if symptoms:
+                line += f"（具体表现：{symptoms}）"
+        issue_lines.append(line)
     issues_text = "\n".join(issue_lines) if issue_lines else "  暂无显著问题"
 
-    # Gap analysis
+    # Recommendations with concrete symptoms
+    recs = analytics.get("self", {}).get("recommendations", [])
+    rec_lines = []
+    for r in recs[:5]:
+        top_symptoms = r.get("top_symptoms", "")
+        symptom_text = f"（高频表现：{top_symptoms}）" if top_symptoms else ""
+        rec_lines.append(
+            f"  - {r.get('label_code', '')}{symptom_text}: "
+            f"{r.get('improvement_direction', '')}"
+        )
+    recs_text = "\n".join(rec_lines) if rec_lines else "  暂无"
+
+    # Gap analysis with rates (from pre-normalized data)
     gaps = analytics.get("competitor", {}).get("gap_analysis", [])
     gap_lines = []
     for g in gaps[:5]:
         gap_lines.append(
-            f"  - {g.get('label_display', '')}：竞品好评 {g.get('competitor_positive_count', 0)} 条，"
-            f"自有差评 {g.get('own_negative_count', 0)} 条"
+            f"  - {g.get('label_display', '')}：竞品好评率 {g.get('competitor_positive_rate', 0)}%"
+            f"（{g.get('competitor_positive_count', 0)}/{g.get('competitor_total', 0)}），"
+            f"自有差评率 {g.get('own_negative_rate', 0)}%"
+            f"（{g.get('own_negative_count', 0)}/{g.get('own_total', 0)}），"
+            f"差距指数 {g.get('gap_rate', 0)}"
         )
     gaps_text = "\n".join(gap_lines) if gap_lines else "  暂无明显差距"
 
+    # Risk products
+    risk_products = analytics.get("self", {}).get("risk_products", [])
+    risk_lines = []
+    for p in risk_products[:3]:
+        risk_lines.append(
+            f"  - {p.get('product_name', '')}：风险分 {p.get('risk_score', 0)}/100，"
+            f"差评率 {(p.get('negative_rate') or 0) * 100:.0f}%，"
+            f"主要问题 {p.get('top_features_display', '')}"
+        )
+    risk_text = "\n".join(risk_lines) if risk_lines else "  暂无高风险产品"
+
     return f"""你是一位高级产品分析师。基于以下产品评论分析数据，生成执行摘要和改良建议。
+注意：你的分析必须基于下方提供的数据，不要编造数据或做无依据的推断。
 
 数据概要：
 - 自有产品 {own_count} 个，竞品 {comp_count} 个
 - 总评论 {total} 条，差评 {neg} 条（差评率 {rate * 100:.1f}%）
 - 健康指数：{health}/100
 
-主要问题（按影响排序）：
+高风险产品：
+{risk_text}
+
+主要问题（按影响排序，含用户原话高频表现）：
 {issues_text}
 
-竞品差距（我方短板 vs 竞品优势）：
+当前改进建议（含具体症状）：
+{recs_text}
+
+竞品差距（基于比率对比，差距指数 0-100，越高差距越大）：
 {gaps_text}
 
 请返回 JSON（不要包含 markdown 代码块标记）：
 {{
-  "hero_headline": "一句话核心结论（不超过40字）",
-  "executive_summary": "3-5句执行摘要",
-  "executive_bullets": ["第一条要点", "第二条要点", "第三条要点"],
+  "hero_headline": "一句话核心结论（不超过40字，必须引用具体数据）",
+  "executive_summary": "3-5句执行摘要，引用具体数字和产品名",
+  "executive_bullets": ["要点1（含数据）", "要点2（含数据）", "要点3（含数据）"],
   "improvement_priorities": [
-    {{"rank": 1, "target": "产品名", "issue": "具体问题", "action": "建议行动", "evidence_count": N}}
+    {{"rank": 1, "target": "产品名", "issue": "引用上方具体症状", "action": "建议行动", "evidence_count": N}}
   ],
-  "competitive_insight": "一段竞品洞察"
+  "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据"
 }}"""
 
 

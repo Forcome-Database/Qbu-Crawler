@@ -69,7 +69,7 @@ METRIC_TOOLTIPS = {
     # Gap analysis table (P4)
     "竞品好评": "竞品在该维度被正面标签命中的评论数",
     "自有差评": "自有产品在该维度被负面标签命中的评论数",
-    "差距": "竞品好评数 − 自有差评数",
+    "差距": "基于比率的差距指数(0-100)：(竞品好评率+自有差评率)/2×100",
 }
 
 
@@ -185,10 +185,13 @@ def _competitor_gap_analysis(normalized):
     for dim in gap_dims:
         comp_cnt = comp_positive[dim].get("review_count", 0)
         own_cnt = dimension_own_negative[dim]
-        gap_val = comp_cnt - own_cnt
-        if own_cnt >= 5:
+        # Rate-based gap: how prevalent is the signal relative to each side's total
+        comp_rate = comp_cnt / max(competitor_total, 1)
+        own_rate = own_cnt / max(own_total, 1)
+        gap_rate = round((comp_rate + own_rate) / 2 * 100)  # 0-100 scale
+        if own_rate >= 0.15:
             priority, priority_display = "high", "高"
-        elif own_cnt >= 2:
+        elif own_rate >= 0.05:
             priority, priority_display = "medium", "中"
         else:
             priority, priority_display = "low", "低"
@@ -196,14 +199,17 @@ def _competitor_gap_analysis(normalized):
             "label_code": dim,
             "label_display": _DIMENSION_DISPLAY.get(dim, _LABEL_DISPLAY.get(dim, dim)),
             "competitor_positive_count": comp_cnt,
+            "competitor_positive_rate": round(comp_rate * 100, 1),
             "own_negative_count": own_cnt,
+            "own_negative_rate": round(own_rate * 100, 1),
             "competitor_total": competitor_total,
             "own_total": own_total,
-            "gap": gap_val,
+            "gap": comp_cnt - own_cnt,
+            "gap_rate": gap_rate,
             "priority": priority,
             "priority_display": priority_display,
         })
-    return sorted(gaps, key=lambda g: g["own_negative_count"], reverse=True)
+    return sorted(gaps, key=lambda g: g["gap_rate"], reverse=True)
 
 
 # ── KPI delta computation ───────────────────────────────────────────────────
