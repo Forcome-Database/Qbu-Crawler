@@ -961,18 +961,31 @@ def _generate_analytical_excel(
 
     # ── Sheet 6: Trend Data ───────────────────────────────────────────────
     ws_trend = wb.create_sheet("Trend Data")
-    trend_data = analytics.get("_trend_data") or []
+    # _trend_series: per-product nested format from _build_trend_data
+    # Flatten to rows for Excel display
+    trend_series = analytics.get("_trend_series") or []
+    trend_rows = []
+    for product in trend_series:
+        for s in product.get("series") or []:
+            trend_rows.append({
+                "date": s.get("date", ""),
+                "product_name": product.get("product_name", ""),
+                "rating": s.get("rating", ""),
+                "negative_rate": "",
+                "negative_count": "",
+                "review_count": s.get("review_count", 0),
+            })
 
     trend_headers = ["日期", "产品", "评分", "差评率", "差评数", "评论量"]
     ws_trend.append(trend_headers)
     _style_header_row(ws_trend, len(trend_headers))
 
-    if not trend_data:
+    if not trend_rows:
         ws_trend.cell(row=2, column=1, value="数据积累中 — 多日采集后将显示趋势")
     else:
-        for row_idx, t in enumerate(trend_data, start=2):
+        for row_idx, t in enumerate(trend_rows, start=2):
             ws_trend.cell(row=row_idx, column=1, value=t.get("date", ""))
-            ws_trend.cell(row=row_idx, column=2, value=t.get("product_name") or t.get("name", ""))
+            ws_trend.cell(row=row_idx, column=2, value=t.get("product_name", ""))
             ws_trend.cell(row=row_idx, column=3, value=t.get("rating", ""))
             ws_trend.cell(row=row_idx, column=4, value=t.get("negative_rate", ""))
             ws_trend.cell(row=row_idx, column=5, value=t.get("negative_count", 0))

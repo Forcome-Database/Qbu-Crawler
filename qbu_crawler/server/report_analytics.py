@@ -1105,13 +1105,20 @@ def _compute_chart_data(labeled_reviews, snapshot):
 
 
 def _build_trend_data(products, days=30):
-    """Build per-product time series from product_snapshots."""
+    """Build per-product time series from product_snapshots.
+
+    Returns a list of per-product series dicts. Each consumer is responsible
+    for flattening to its own format (e.g., Excel rows, chart points).
+    Stored under ``_trend_series`` key — NOT ``_trend_data`` which is
+    reserved for ``report_charts.py``'s line chart format.
+    """
     result = []
     for product in products:
         sku = product.get("sku", "")
+        name = product.get("name", "")
         snapshots = models.get_product_snapshots(sku, days=days) if sku else []
         result.append({
-            "product_name": product.get("name", ""),
+            "product_name": name,
             "product_sku": sku,
             "series": [
                 {
@@ -1193,6 +1200,9 @@ def build_report_analytics(snapshot, synced_labels=None):
 
     # Chart-specific analytics data (radar, heatmap, sentiment distribution)
     chart_data = _compute_chart_data(labeled_reviews, snapshot)
+
+    # Trend data from product_snapshots (stored as _trend_series, NOT _trend_data)
+    _trend_series = _build_trend_data(snapshot.get("products") or [], days=30)
 
     # Compute recently_published_count: reviews published within 30 days of logical_date
     from qbu_crawler.server.report_common import _parse_date_flexible
@@ -1276,5 +1286,5 @@ def build_report_analytics(snapshot, synced_labels=None):
             },
         },
         **chart_data,
-        "_trend_data": _build_trend_data(snapshot.get("products") or [], days=30),
+        "_trend_series": _trend_series,
     }

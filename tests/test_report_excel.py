@@ -408,14 +408,13 @@ def test_trend_data_shows_note_when_empty(tmp_path, monkeypatch):
 def test_trend_data_with_data(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
-    analytics["_trend_data"] = [
+    analytics["_trend_series"] = [
         {
-            "date": "2026-04-01",
             "product_name": "Test Grinder",
-            "rating": 4.2,
-            "negative_rate": "25%",
-            "negative_count": 5,
-            "review_count": 20,
+            "product_sku": "SKU-1",
+            "series": [
+                {"date": "2026-04-01", "price": 100, "rating": 4.2, "review_count": 20, "stock_status": "in_stock"},
+            ],
         },
     ]
     path = report._generate_analytical_excel([], [], analytics=analytics)
