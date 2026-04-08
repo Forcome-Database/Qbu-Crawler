@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qbu-crawler"
-version = "0.1.38"
+version = "0.1.42"
 description = "多站点产品数据爬虫 — 基于 DrissionPage，支持 Bass Pro / Walton's / Meat Your Maker 等站点"
 readme = "README.md"
 license = {text = "MIT"}
@@ -65,7 +65,9 @@ qbu = "qbu_crawler.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["qbu_crawler"]
-include = ["qbu_crawler/server/report_templates/**/*"]
+
+[tool.hatch.build]
+artifacts = ["qbu_crawler/server/report_templates/**/*"]
 
 [tool.hatch.build.targets.sdist]
 include = [
