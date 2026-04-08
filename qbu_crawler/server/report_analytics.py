@@ -598,8 +598,9 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
             )
             cluster["review_count"] += 1
             cluster["affected_products"].add(review.get("product_sku") or review.get("product_name"))
-            if review.get("date_published"):
-                cluster["dates"].append(review["date_published"])
+            pub_date = review.get("date_published_parsed") or review.get("date_published")
+            if pub_date:
+                cluster["dates"].append(pub_date)
             if item["images"]:
                 cluster["image_review_count"] += 1
             cluster["severity_score"] = max(cluster["severity_score"], _SEVERITY_SCORE[label["severity"]])
@@ -654,6 +655,14 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         sku_to_review_count[sku] = p.get("review_count") or 0
         sku_to_rating[sku] = p.get("rating")
 
+    # Count all ingested own reviews per SKU (before rating/label filtering)
+    ingested_by_sku = {}
+    for item in labeled_reviews:
+        review = item["review"]
+        sku = review.get("product_sku", "")
+        if sku and review.get("ownership") == "own":
+            ingested_by_sku[sku] = ingested_by_sku.get(sku, 0) + 1
+
     grouped = {}
     for item in labeled_reviews:
         review = item["review"]
@@ -676,8 +685,10 @@ def _risk_products(labeled_reviews, snapshot_products=None):
                 "image_review_rows": 0,
                 "risk_score": 0,
                 "total_reviews": sku_to_review_count.get(review.get("product_sku", ""), 0),
+                "ingested_reviews": ingested_by_sku.get(review.get("product_sku", ""), 0),
                 "rating_avg": sku_to_rating.get(review.get("product_sku", "")),
                 "negative_rate": None,
+                "coverage_rate": None,
                 "top_labels": {},
             },
         )
@@ -712,6 +723,8 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         total = item.get("total_reviews") or 0
         neg = item.get("negative_review_rows", 0)
         item["negative_rate"] = neg / total if total else None
+        ingested = item.get("ingested_reviews", 0)
+        item["coverage_rate"] = ingested / total if total else None
         item["top_features_display"] = _join_label_counts(item["top_labels"])
     return items
 
@@ -883,7 +896,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
     result = []
     for code, data in clusters.items():
         reviews = data["reviews"]
-        dates = [r.get("date_published") for r in reviews if r.get("date_published")]
+        dates = [r.get("date_published_parsed") or r.get("date_published") for r in reviews if r.get("date_published_parsed") or r.get("date_published")]
         max_sev = max(data["severities"], key=lambda s: _SEVERITY_SCORE.get(s, 0), default="low")
         display = _LABEL_DISPLAY.get(code, code)
 
@@ -1021,6 +1034,14 @@ def _compute_chart_data(labeled_reviews, snapshot):
                 "neutral": neu_counts,
                 "negative": neg_counts,
             }
+
+    # Display hints for templates consuming chart data
+    result["_sentiment_chart_title"] = "评分分布"
+    result["_sentiment_chart_legend"] = {
+        "positive": "好评(≥4星)",
+        "neutral": "中评(3星)",
+        "negative": "差评(≤2星)",
+    }
 
     # ── Heatmap: product × dimension sentiment score (-1 to 1) ─────────
     # Only for own products with at least some labels
@@ -1180,7 +1201,8 @@ def build_report_analytics(snapshot, synced_labels=None):
     recent_cutoff = logical - _timedelta(days=30)
     recently_published_count = 0
     for review in snapshot_reviews:
-        pub_date = _parse_date_flexible(review.get("date_published"))
+        raw_parsed = review.get("date_published_parsed")
+        pub_date = (_parse_date_flexible(raw_parsed) if raw_parsed else None) or _parse_date_flexible(review.get("date_published"))
         if pub_date and pub_date >= recent_cutoff:
             recently_published_count += 1
 

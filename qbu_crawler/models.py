@@ -263,7 +263,39 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_review ON review_analysis(review_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_sentiment ON review_analysis(sentiment)")
+
+    # Backfill date_published_parsed for existing reviews
+    _backfill_date_published_parsed(conn)
+
     conn.close()
+
+
+def _backfill_date_published_parsed(conn):
+    """One-time backfill of date_published_parsed from date_published + scraped_at anchor."""
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    rows = conn.execute(
+        "SELECT id, date_published, scraped_at FROM reviews "
+        "WHERE date_published_parsed IS NULL AND date_published IS NOT NULL"
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        anchor = None
+        if row["scraped_at"]:
+            try:
+                anchor = datetime.fromisoformat(
+                    str(row["scraped_at"]).replace(" ", "T")
+                ).date()
+            except (ValueError, TypeError):
+                pass
+        parsed = _parse_date_flexible(row["date_published"], anchor_date=anchor)
+        if parsed:
+            conn.execute(
+                "UPDATE reviews SET date_published_parsed = ? WHERE id = ?",
+                (parsed.isoformat(), row["id"]),
+            )
+    conn.commit()
 
 
 def _body_hash(body: str | None) -> str:

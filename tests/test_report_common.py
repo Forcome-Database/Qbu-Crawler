@@ -521,6 +521,55 @@ def test_risk_products_has_rating_avg_and_negative_rate():
     assert "top_features_display" in p
 
 
+def test_risk_products_has_coverage_rate():
+    """_risk_products should compute per-product coverage_rate (ingested/total)."""
+    from qbu_crawler.server.report_analytics import _risk_products
+
+    labeled_reviews = [
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 1},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                        "severity": "high", "confidence": 0.9}],
+            "images": [],
+        },
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 5},
+            "labels": [],
+            "images": [],
+        },
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 4},
+            "labels": [{"label_code": "easy_to_use", "label_polarity": "positive",
+                        "severity": "low", "confidence": 0.8}],
+            "images": [],
+        },
+    ]
+    snapshot_products = [{"sku": "SKU1", "rating": 3.5, "review_count": 100}]
+    result = _risk_products(labeled_reviews, snapshot_products=snapshot_products)
+    assert len(result) == 1
+    p = result[0]
+    # ingested = 3 (all own reviews for SKU1), total = 100 (site-reported)
+    assert p["ingested_reviews"] == 3
+    assert p["coverage_rate"] == pytest.approx(3 / 100)
+
+
+def test_risk_products_coverage_rate_none_when_no_total():
+    """coverage_rate should be None when site-reported total is 0."""
+    from qbu_crawler.server.report_analytics import _risk_products
+
+    labeled_reviews = [
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 1},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                        "severity": "high", "confidence": 0.9}],
+            "images": [],
+        },
+    ]
+    result = _risk_products(labeled_reviews, snapshot_products=[])
+    assert len(result) == 1
+    assert result[0]["coverage_rate"] is None
+
+
 def test_gap_analysis_has_gap_and_priority_display():
     """Gap analysis items must include 'gap' and 'priority_display'."""
     # material_finish maps to solid_build via _NEGATIVE_TO_POSITIVE_DIMENSION
@@ -829,6 +878,75 @@ def test_date_published_parsed_column_exists(tmp_path, monkeypatch):
     # Should not raise
     conn.execute("SELECT date_published_parsed FROM reviews LIMIT 1")
     conn.close()
+
+
+def test_date_published_parsed_backfill(tmp_path, monkeypatch):
+    """init_db should backfill date_published_parsed from date_published + scraped_at anchor."""
+    from qbu_crawler import config, models
+    import sqlite3
+
+    db_file = str(tmp_path / "test_backfill.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+
+    def _get_conn():
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(models, "get_conn", _get_conn)
+    models.init_db()
+
+    # Insert a product and a review with date_published but no date_published_parsed
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO products (url, site, name, sku, price, stock_status, rating, review_count, ownership) "
+        "VALUES ('http://x.com/p1', 'basspro', 'P1', 'S1', 10, 'in_stock', 4.0, 5, 'own')"
+    )
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, scraped_at) "
+        "VALUES (1, 'A1', 'H1', 'B1', 'h1', 5, '3 months ago', '2026-03-15 10:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Re-run init_db to trigger backfill
+    models.init_db()
+
+    conn = _get_conn()
+    row = conn.execute("SELECT date_published_parsed FROM reviews WHERE id = 1").fetchone()
+    conn.close()
+    assert row["date_published_parsed"] is not None
+    assert row["date_published_parsed"] == "2025-12-15"
+
+
+def test_cluster_summary_prefers_date_published_parsed():
+    """_cluster_summary_items should prefer date_published_parsed over date_published."""
+    from qbu_crawler.server.report_analytics import _cluster_summary_items
+
+    labeled_reviews = [
+        {
+            "review": {
+                "product_sku": "SKU1",
+                "product_name": "P1",
+                "ownership": "own",
+                "rating": 1,
+                "date_published": "3 months ago",
+                "date_published_parsed": "2026-01-08",
+            },
+            "labels": [
+                {"label_code": "quality_stability", "label_polarity": "negative",
+                 "severity": "high", "confidence": 0.9}
+            ],
+            "images": [],
+        },
+    ]
+    items = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
+    assert len(items) == 1
+    # The parsed date should be used instead of the relative string
+    assert items[0]["first_seen"] == "2026-01-08"
+    assert items[0]["last_seen"] == "2026-01-08"
 
 
 def test_health_index_sensitive_to_negative_spike():

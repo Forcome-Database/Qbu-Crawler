@@ -76,7 +76,8 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
             """
             SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
-                   r.date_published, r.images, p.ownership,
+                   r.date_published, r.date_published_parsed, r.images,
+                   p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status
             FROM reviews r
             JOIN products p ON r.product_id = p.id
@@ -264,6 +265,14 @@ def generate_excel(
     images_col = len(review_headers)  # "照片" is the last column
     images_col_letter = get_column_letter(images_col)
 
+    # Pre-fetch all review images in parallel
+    _all_image_urls = set()
+    for _r in reviews:
+        for _url in (_r.get("images") or []):
+            if isinstance(_url, str) and _url.startswith("http"):
+                _all_image_urls.add(_url)
+    _prefetched = _download_images_parallel(list(_all_image_urls)) if _all_image_urls else {}
+
     # Write review rows with embedded images
     for row_idx, r in enumerate(reviews, start=2):
         ws_reviews.cell(row=row_idx, column=1, value=_cell_value(r.get("product_name")))
@@ -286,7 +295,9 @@ def generate_excel(
 
         embedded_count = 0
         for img_idx, url in enumerate(image_urls):
-            xl_img = _download_and_resize(url)
+            xl_img = _prefetched.get(url) if isinstance(url, str) else None
+            if xl_img is None and isinstance(url, str) and url.startswith("http"):
+                xl_img = _download_and_resize(url)
             if xl_img:
                 y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
                 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
@@ -865,6 +876,14 @@ def _generate_analytical_excel(
     images_col = len(review_headers) - 1  # "图片" is column 11 (1-indexed)
     images_col_letter = get_column_letter(images_col)
 
+    # Pre-fetch all review images in parallel
+    _all_image_urls_analytical = set()
+    for _r in reviews:
+        for _url in (_r.get("images") or []):
+            if isinstance(_url, str) and _url.startswith("http"):
+                _all_image_urls_analytical.add(_url)
+    _prefetched_analytical = _download_images_parallel(list(_all_image_urls_analytical)) if _all_image_urls_analytical else {}
+
     for row_idx, r in enumerate(reviews, start=2):
         ws_reviews.cell(row=row_idx, column=1, value=_cell_value(r.get("product_name")))
         ws_reviews.cell(row=row_idx, column=2, value=_cell_value(r.get("product_sku")))
@@ -895,7 +914,9 @@ def _generate_analytical_excel(
 
         embedded_count = 0
         for img_idx, url in enumerate(image_urls):
-            xl_img = _download_and_resize(url)
+            xl_img = _prefetched_analytical.get(url) if isinstance(url, str) else None
+            if xl_img is None and isinstance(url, str) and url.startswith("http"):
+                xl_img = _download_and_resize(url)
             if xl_img:
                 y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
                 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
@@ -1003,7 +1024,8 @@ def query_report_data(
             """
             SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
-                   r.date_published, r.images, p.ownership,
+                   r.date_published, r.date_published_parsed, r.images,
+                   p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status
             FROM reviews r
             JOIN products p ON r.product_id = p.id
@@ -1078,7 +1100,8 @@ def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
             f"""
             SELECT p.name AS product_name, p.sku AS product_sku,
                    r.author, r.headline, r.body, r.rating,
-                   r.date_published, r.images, p.ownership,
+                   r.date_published, r.date_published_parsed, r.images,
+                   p.ownership,
                    r.headline_cn, r.body_cn, r.translate_status
             FROM reviews r
             JOIN products p ON r.product_id = p.id
