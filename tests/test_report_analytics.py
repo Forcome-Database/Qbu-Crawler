@@ -892,3 +892,40 @@ def test_build_trend_data_empty_snapshots(analytics_db):
     trend = _build_trend_data(products, days=30)
     assert len(trend) == 1
     assert trend[0]["series"] == []
+
+
+def test_image_reviews_expanded_to_20(analytics_db):
+    """appendix.image_reviews should allow up to 20 items, prioritized by ownership and rating."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    # Build snapshot with many image reviews
+    reviews = []
+    for i in range(25):
+        reviews.append({
+            "product_name": "Own Product", "product_sku": "OWN-1",
+            "author": f"Author-{i}", "headline": f"Review {i}",
+            "body": f"This product broke. Body {i}",
+            "rating": (i % 5) + 1, "date_published": "2026-03-28",
+            "images": [f"https://img.example.com/{i}.jpg"],
+            "ownership": "own" if i < 15 else "competitor",
+            "headline_cn": "", "body_cn": "", "translate_status": "done",
+        })
+
+    snapshot = {
+        "run_id": 1, "logical_date": "2026-04-08",
+        "snapshot_hash": "test-hash",
+        "products": [
+            {"url": "https://example.com/own-1", "name": "Own Product", "sku": "OWN-1",
+             "price": 100, "stock_status": "in_stock", "rating": 3.0, "review_count": 25,
+             "scraped_at": "2026-04-08 10:00:00", "site": "basspro", "ownership": "own"},
+        ],
+        "reviews": reviews,
+        "products_count": 1, "reviews_count": 25,
+        "translated_count": 25, "untranslated_count": 0,
+    }
+
+    result = build_report_analytics(snapshot)
+    image_reviews = result["appendix"]["image_reviews"]
+    assert len(image_reviews) == 20  # expanded from 10
+    # Own products should come first
+    assert image_reviews[0]["ownership"] == "own"

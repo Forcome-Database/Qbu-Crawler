@@ -258,6 +258,8 @@ def _generate_hero_headline(normalized):
 
 def _compute_alert_level(normalized):
     """Return ``(level, text)`` where *level* is ``"red"``/``"yellow"``/``"green"``."""
+    if normalized.get("mode") == "baseline":
+        return "green", "首次基线采集完成，环比预警将在第 4 期后启用"
     top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
     high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
     delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta", 0) or 0

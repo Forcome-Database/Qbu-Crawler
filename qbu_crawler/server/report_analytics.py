@@ -1239,7 +1239,13 @@ def build_report_analytics(snapshot, synced_labels=None):
             "negative_opportunities": _negative_opportunities(labeled_reviews),
         },
         "appendix": {
-            "image_reviews": image_reviews[:10],
+            "image_reviews": sorted(
+                image_reviews,
+                key=lambda r: (
+                    0 if r.get("ownership") == "own" else 1,
+                    r.get("rating") or 5,
+                ),
+            )[:20],
             "coverage": {
                 "own_products": len(own_products),
                 "competitor_products": len(competitor_products),

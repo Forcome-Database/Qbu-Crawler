@@ -1057,3 +1057,19 @@ def test_risk_score_tooltip_mentions_threshold():
     from qbu_crawler.server.report_common import METRIC_TOOLTIPS
     tooltip = METRIC_TOOLTIPS.get("风险分", "")
     assert "≤" in tooltip or "星" in tooltip, f"Risk tooltip missing threshold info: {tooltip}"
+
+
+def test_alert_level_green_for_baseline():
+    """Baseline mode should always return green regardless of data severity."""
+    from qbu_crawler.server.report_common import _compute_alert_level
+
+    normalized = {
+        "mode": "baseline",
+        "kpis": {"own_negative_review_rows_delta": 50, "health_index": 30},
+        "self": {"top_negative_clusters": [
+            {"severity": "high", "review_count": 20}
+        ]},
+    }
+    level, text = _compute_alert_level(normalized)
+    assert level == "green"
+    assert "基线" in text
