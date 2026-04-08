@@ -94,6 +94,7 @@
             <th>SKU</th>
             <th>评分 <span class="tip-wrap" title="{{ analytics.tooltips['评分'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['评分'] }}</span></span></th>
             <th>差评率 <span class="tip-wrap" title="{{ analytics.tooltips['差评率_产品'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['差评率_产品'] }}</span></span></th>
+            <th>差评数 <span class="tip-wrap" title="该产品 ≤3星且含负面标签的评论条数"><span class="tip-icon">ⓘ</span><span class="tip-bubble">该产品 ≤3星且含负面标签的评论条数</span></span></th>
             <th>风险分 <span class="tip-wrap" title="{{ analytics.tooltips['风险分'] }}"><span class="tip-icon">ⓘ</span><span class="tip-bubble">{{ analytics.tooltips['风险分'] }}</span></span></th>
             <th>主要问题</th>
             <th>趋势</th>
@@ -106,6 +107,7 @@
             <td>{{ item.product_sku }}</td>
             <td>{% if item.rating_avg is defined and item.rating_avg is not none %}{{ "%.1f" | format(item.rating_avg) }}{% else %}—{% endif %}</td>
             <td>{% if item.negative_rate is defined and item.negative_rate is not none %}{{ "%.0f%%" | format(item.negative_rate * 100) }}{% else %}—{% endif %}</td>
+            <td>{{ item.negative_review_rows or 0 }}</td>
             <td class="fw-bold {% if item.risk_score is defined and item.risk_score >= 80 %}severity-high{% elif item.risk_score is defined and item.risk_score >= 50 %}severity-medium{% else %}severity-low{% endif %}">{{ item.risk_score }}</td>
             <td>{{ item.top_features_display or '—' }}</td>
             <td>{{ item.trend_display or '—' }}</td>
