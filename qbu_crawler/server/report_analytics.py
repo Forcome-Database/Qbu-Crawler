@@ -963,6 +963,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
 
         rating_counts = Counter(r.get("rating", 0) for r in reviews)
 
+        translated = sum(1 for r in reviews if r.get("body_cn") or r.get("headline_cn"))
+
         result.append({
             "label_code": code,
             "feature_display": display,
@@ -977,6 +979,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "example_reviews": _select_diverse_examples(reviews, max_count=3),
             "rating_breakdown": {f"{star}星": rating_counts.get(star, 0) for star in range(1, 6) if rating_counts.get(star, 0) > 0},
             "image_review_count": sum(1 for r in reviews if r.get("images")),
+            "translated_rate": translated / max(len(reviews), 1),
             "sub_features": sub_features,
             "affected_products": sorted(data["product_names"] - {""})[:5],
             "review_dates": sorted(dates),
