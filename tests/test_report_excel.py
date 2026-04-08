@@ -507,3 +507,39 @@ def test_download_images_parallel_empty_list():
 
     results = _download_images_parallel([], global_timeout=5)
     assert results == {}
+
+
+def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
+    """Legacy generate_excel should call _download_images_parallel for pre-fetching."""
+    from qbu_crawler.server import report
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    prefetch_calls = []
+    original_parallel = report._download_images_parallel
+
+    def mock_parallel(urls, **kwargs):
+        prefetch_calls.append(urls)
+        return {url: None for url in urls}
+
+    monkeypatch.setattr(report, "_download_images_parallel", mock_parallel)
+    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+
+    reviews_with_images = [
+        {
+            "product_name": "P1",
+            "product_sku": "SKU1",
+            "author": "A1",
+            "headline": "Great",
+            "body": "Body",
+            "headline_cn": "",
+            "body_cn": "",
+            "rating": 5,
+            "date_published": "2026-01-01",
+            "images": ["https://img.example.com/a.jpg", "https://img.example.com/b.jpg"],
+        },
+    ]
+    report._legacy_generate_excel([], reviews_with_images)
+
+    assert len(prefetch_calls) == 1
+    assert set(prefetch_calls[0]) == {"https://img.example.com/a.jpg", "https://img.example.com/b.jpg"}
