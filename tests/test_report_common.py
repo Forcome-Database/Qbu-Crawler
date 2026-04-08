@@ -442,10 +442,11 @@ def test_normalize_injects_kpi_cards():
     }
     result = normalize_deep_report_analytics(analytics)
     assert "kpi_cards" in result
-    assert len(result["kpi_cards"]) == 5
+    assert len(result["kpi_cards"]) == 6
     labels = [c["label"] for c in result["kpi_cards"]]
     assert "健康指数" in labels
     assert "竞品差距指数" in labels
+    assert "样本覆盖率" in labels
 
 
 def test_normalize_injects_issue_cards():
@@ -959,3 +960,48 @@ def test_evidence_refs_use_primary_label():
                   if c.get("label_code") == "material_finish"][0]
     assert not mf_cluster["evidence_refs"], \
         "Secondary label cluster should NOT have evidence from primary-only linking"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Coverage rate KPI card and metric caliber annotations
+# ---------------------------------------------------------------------------
+
+def test_normalize_adds_coverage_rate_kpi():
+    """KPI cards should include a coverage rate card."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 148,
+            "site_reported_review_total_current": 223,
+            "translated_count": 148,
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    card_labels = [c["label"] for c in result["kpi_cards"]]
+    assert "样本覆盖率" in card_labels
+    coverage_card = next(c for c in result["kpi_cards"] if c["label"] == "样本覆盖率")
+    assert coverage_card["value"] == "66%"
+
+
+def test_coverage_rate_missing_site_total():
+    """When site_reported_review_total_current is absent, show '—'."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "translated_count": 100,
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    coverage_card = next((c for c in result["kpi_cards"] if c["label"] == "样本覆盖率"), None)
+    assert coverage_card is not None
+    assert coverage_card["value"] == "—"
+
+
+def test_risk_score_tooltip_mentions_threshold():
+    """Risk score tooltip should specify the rating threshold used."""
+    from qbu_crawler.server.report_common import METRIC_TOOLTIPS
+    tooltip = METRIC_TOOLTIPS.get("风险分", "")
+    assert "≤" in tooltip or "星" in tooltip, f"Risk tooltip missing threshold info: {tooltip}"

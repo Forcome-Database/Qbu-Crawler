@@ -56,6 +56,7 @@ METRIC_TOOLTIPS = {
     "自有评论": "本期采集窗口内入库的自有产品评论行数（按抓取时间计）",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
     "竞品差距指数": "各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
+    "样本覆盖率": "实际入库评论数 ÷ 站点展示总评论数。受 MAX_REVIEWS 上限和翻页限制影响，部分产品覆盖率 <100% 属正常",
     # Product health matrix (P2)
     "评分": "站点展示的综合评分（历史累积，非本期样本）",
     "差评率_产品": "该产品 ≤{low_rating}星评论数 ÷ 该产品采集评论总数",
@@ -795,6 +796,20 @@ def normalize_deep_report_analytics(analytics):
             "tooltip": _resolve_tooltip("竞品差距指数"),
         },
     ]
+
+    # Coverage rate card
+    site_total = kpis.get("site_reported_review_total_current", 0) or 0
+    ingested = kpis.get("ingested_review_rows", 0) or 0
+    coverage_rate = ingested / max(site_total, 1) if site_total > 0 else 0
+    kpis["coverage_rate"] = coverage_rate
+    kpi_cards.append({
+        "label": "样本覆盖率",
+        "value": f"{coverage_rate:.0%}" if site_total > 0 else "—",
+        "delta_display": "",
+        "delta_class": "neutral",
+        "tooltip": _resolve_tooltip("样本覆盖率"),
+        "value_class": "severity-medium" if 0 < coverage_rate < 0.5 else "",
+    })
 
     # ── Assign status color classes to KPI values ────────────────────
     for card in kpi_cards:
