@@ -722,6 +722,25 @@ def normalize_deep_report_analytics(analytics):
         image_reviews.append(review)
     normalized["appendix"]["image_reviews"] = image_reviews
 
+    # Build trend lookup from _trend_series
+    trend_lookup = {}
+    for ts in (analytics.get("_trend_series") or []):
+        sku = ts.get("product_sku", "")
+        series = ts.get("series") or []
+        if sku and len(series) >= 2:
+            first = series[0]
+            last = series[-1]
+            r_old = first.get("rating") or 0
+            r_new = last.get("rating") or 0
+            rc_old = first.get("review_count") or 0
+            rc_new = last.get("review_count") or 0
+            r_arrow = "↑" if r_new > r_old + 0.1 else ("↓" if r_new < r_old - 0.1 else "→")
+            rc_delta = rc_new - rc_old
+            parts = [f"评分{r_arrow}{r_new:.1f}"]
+            if rc_delta != 0:
+                parts.append(f"评论{'+' if rc_delta > 0 else ''}{rc_delta}")
+            trend_lookup[sku] = " ".join(parts)
+
     risk_products = []
     for item in normalized["self"]["risk_products"]:
         product = dict(item)
@@ -738,6 +757,9 @@ def normalize_deep_report_analytics(analytics):
                     break
             if product["focus_summary"]:
                 break
+        product["trend_display"] = trend_lookup.get(
+            product.get("product_sku", ""), product.get("trend_display") or "—"
+        )
         risk_products.append(product)
     normalized["self"]["risk_products"] = risk_products
 
@@ -849,7 +871,13 @@ def normalize_deep_report_analytics(analytics):
 
     # ── Build issue_cards from top_negative_clusters ─────────────────────
     report_priorities = (normalized.get("report_copy") or {}).get("improvement_priorities") or []
-    priority_by_rank = {p.get("rank", i + 1): p.get("action", "") for i, p in enumerate(report_priorities)}
+    # Match by label_code for semantic alignment; fall back to rank-based for legacy data
+    priority_by_label = {p["label_code"]: p.get("action", "") for p in report_priorities if p.get("label_code")}
+    if not priority_by_label:
+        priority_by_label = {p.get("rank", i + 1): p.get("action", "") for i, p in enumerate(report_priorities)}
+        _label_key = False
+    else:
+        _label_key = True
 
     issue_cards = []
     for i, cluster in enumerate(normalized["self"]["top_negative_clusters"]):
@@ -862,6 +890,7 @@ def normalize_deep_report_analytics(analytics):
                     seen_urls.add(url)
                     image_evidence.append({"url": url, "data_uri": None,
                                             "evidence_id": f"I{len(image_evidence)+1}"})
+        lookup_key = cluster.get("label_code", "") if _label_key else (i + 1)
         issue_cards.append({
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
             "label_display": cluster.get("label_display", ""),
@@ -875,7 +904,7 @@ def normalize_deep_report_analytics(analytics):
             "image_review_count": cluster.get("image_review_count", 0),
             "example_reviews": cluster.get("example_reviews") or [],
             "image_evidence": image_evidence,
-            "recommendation": priority_by_rank.get(i + 1, ""),
+            "recommendation": priority_by_label.get(lookup_key, ""),
         })
     normalized["self"]["issue_cards"] = issue_cards
 

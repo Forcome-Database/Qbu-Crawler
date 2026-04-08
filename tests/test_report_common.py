@@ -72,7 +72,7 @@ def test_issue_cards_complete_fields():
         "appendix": {"image_reviews": []},
         "report_copy": {
             "improvement_priorities": [
-                {"rank": 1, "target": "P", "issue": "手柄松动", "action": "加强出厂耐久测试", "evidence_count": 3}
+                {"label_code": "quality_stability", "action": "加强出厂耐久测试", "evidence_count": 3}
             ]
         },
     }
@@ -1191,3 +1191,43 @@ def test_alert_level_green_for_baseline():
     level, text = _compute_alert_level(normalized)
     assert level == "green"
     assert "基线" in text
+
+
+# ---------------------------------------------------------------------------
+# Task 4: trend_display populated from _trend_series
+# ---------------------------------------------------------------------------
+
+
+def test_risk_product_trend_display_populated():
+    """trend_display should show direction arrow when _trend_series has data."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+    analytics = {
+        "mode": "baseline",
+        "kpis": {"ingested_review_rows": 10},
+        "self": {
+            "risk_products": [
+                {"product_name": "P", "product_sku": "SKU1", "risk_score": 80,
+                 "top_labels": [], "negative_rate": 0.4, "rating_avg": 3.5},
+            ],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+        "report_copy": {"improvement_priorities": []},
+        "_trend_series": [
+            {
+                "product_sku": "SKU1",
+                "product_name": "P",
+                "series": [
+                    {"date": "2026-03-01", "rating": 3.0, "review_count": 80, "price": 100, "stock_status": "in_stock"},
+                    {"date": "2026-04-01", "rating": 3.5, "review_count": 100, "price": 100, "stock_status": "in_stock"},
+                ],
+            }
+        ],
+    }
+    result = normalize_deep_report_analytics(analytics)
+    product = result["self"]["risk_products"][0]
+    assert product["trend_display"] != "—"
+    assert product["trend_display"] != ""
+    assert "↑" in product["trend_display"] or "↓" in product["trend_display"] or "→" in product["trend_display"]
