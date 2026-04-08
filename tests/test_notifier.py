@@ -569,6 +569,24 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
+        (
+            "workflow_full_report",
+            {
+                "logical_date": "2026-03-31",
+                "run_id": 8,
+                "excel_path": "./reports/workflow-run-8-full-report.xlsx",
+                "email_status": "skipped",
+            },
+            (
+                "## ✅ 每日完整报告已生成\n\n"
+                "- **日期**：2026-03-31\n"
+                "- **状态**：完整报告已生成\n"
+                "- **workflow**：8\n"
+                "- **附件**：./reports/workflow-run-8-full-report.xlsx\n"
+                "- **邮件发送**：已跳过（无新增评论）\n\n"
+                "如需，我可以继续补充差评、价格波动和竞品对比解读。"
+            ),
+        ),
     ],
 )
 def test_bridge_workflow_templates_use_icon_markdown_style(

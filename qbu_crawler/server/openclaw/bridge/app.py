@@ -260,6 +260,8 @@ def _display_email_status(status: str) -> str:
         return "已发送"
     if value == "failed":
         return "发送失败"
+    if value == "skipped":
+        return "已跳过（无新增评论）"
     return status
 
 

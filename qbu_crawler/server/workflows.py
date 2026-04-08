@@ -586,7 +586,11 @@ class WorkflowWorker:
         if run.get("report_phase") == "full_pending":
             try:
                 snapshot = load_report_snapshot(run["snapshot_path"])
-                full_report = generate_full_report_from_snapshot(snapshot, send_email=True)
+                should_send_email = _should_send_workflow_email(task_rows, snapshot)
+                full_report = generate_full_report_from_snapshot(
+                    snapshot,
+                    send_email=should_send_email,
+                )
             except FullReportGenerationError as exc:
                 models.update_workflow_run(
                     run_id,
@@ -612,7 +616,7 @@ class WorkflowWorker:
                 analytics_path=analytics_path,
                 pdf_path=pdf_path,
             )
-            if not email_ok:
+            if should_send_email and not email_ok:
                 self._move_run_to_attention(
                     run,
                     now,
@@ -704,6 +708,25 @@ def _workflow_email_status(email_success: bool | None, untranslated_count: int) 
     if untranslated_count > 0:
         return f"已发送（{untranslated_count} 条评论仍在翻译中）"
     return "success"
+
+
+def _should_send_workflow_email(task_rows: list[dict], snapshot: dict) -> bool:
+    reviews_saved = _workflow_reviews_saved(task_rows)
+    if reviews_saved is not None:
+        return reviews_saved > 0
+    if snapshot.get("reviews_count") is None:
+        return True
+    return int(snapshot.get("reviews_count") or 0) > 0
+
+
+def _workflow_reviews_saved(task_rows: list[dict]) -> int | None:
+    total = 0
+    for row in task_rows:
+        result = row.get("result") or {}
+        if result.get("reviews_saved") is None:
+            return None
+        total += int(result.get("reviews_saved") or 0)
+    return total
 
 
 def _maybe_trigger_ai_digest(run_id: int, run: dict, snapshot: dict, full_report: dict):

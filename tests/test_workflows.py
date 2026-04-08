@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from threading import Event
@@ -31,6 +32,11 @@ _FEATURE_FLAG_KEYS = (
 @pytest.fixture(autouse=True)
 def _isolate_workflow_config(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.setitem(
+        sys.modules,
+        "json_repair",
+        SimpleNamespace(repair_json=lambda value, **kwargs: value),
+    )
 
     import qbu_crawler.config as config_module
 
@@ -999,6 +1005,107 @@ class TestWorkflowReconcile:
         full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
         assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
         assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
+
+    def test_reconcile_skips_email_when_workflow_tasks_have_no_new_reviews(
+        self,
+        workflow_db,
+        monkeypatch,
+        tmp_path,
+    ):
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.workflows import WorkflowWorker
+
+        _save_task(
+            "task-no-new-reviews",
+            status="completed",
+            last_progress_at="2026-03-29T08:05:00+08:00",
+            finished_at="2026-03-29T08:05:00+08:00",
+        )
+        task = models.get_task("task-no-new-reviews")
+        task["result"] = {"products_saved": 1, "reviews_saved": 0}
+        models.save_task(task)
+
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "submitted",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:no-new-reviews",
+                "data_since": "2026-03-29T00:00:00+08:00",
+                "data_until": "2026-03-30T00:00:00+08:00",
+                "requested_by": "systemd",
+                "service_version": "test",
+            }
+        )
+        models.attach_task_to_workflow(
+            run_id=run["id"],
+            task_id="task-no-new-reviews",
+            task_type="scrape",
+            site="basspro",
+            ownership="own",
+        )
+
+        snapshot_path = str(tmp_path / "snapshot.json")
+        Path(snapshot_path).write_text(
+            '{"run_id": 1, "logical_date": "2026-03-29", "snapshot_hash": "hash-zero", "products_count": 1, "reviews_count": 3, "translated_count": 3, "untranslated_count": 0}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
+        monkeypatch.setattr(
+            workflows_module,
+            "freeze_report_snapshot",
+            lambda run_id, now=None: models.update_workflow_run(
+                run_id,
+                snapshot_path=snapshot_path,
+                snapshot_hash="hash-zero",
+                snapshot_at=now,
+            ),
+        )
+        monkeypatch.setattr(
+            workflows_module,
+            "load_report_snapshot",
+            lambda path: {
+                "run_id": run["id"],
+                "logical_date": "2026-03-29",
+                "snapshot_hash": "hash-zero",
+                "products_count": 1,
+                "reviews_count": 3,
+                "translated_count": 3,
+                "untranslated_count": 0,
+            },
+        )
+        monkeypatch.setattr(workflows_module, "build_fast_report", lambda snapshot: dict(snapshot))
+
+        captured = {}
+
+        def fake_generate_full_report(snapshot, send_email=True):
+            captured["send_email"] = send_email
+            return {
+                "snapshot_hash": snapshot["snapshot_hash"],
+                "excel_path": str(tmp_path / "full.xlsx"),
+                "analytics_path": str(tmp_path / "analytics.json"),
+                "pdf_path": str(tmp_path / "full.pdf"),
+                "email": None,
+            }
+
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_full_report_from_snapshot",
+            fake_generate_full_report,
+        )
+
+        worker = WorkflowWorker(task_stale_seconds=60)
+        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+
+        refreshed = models.get_workflow_run(run["id"])
+        notifications = models.list_notifications(statuses=["pending"])
+        full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
+
+        assert captured["send_email"] is False
+        assert refreshed["status"] == "completed"
+        assert refreshed["report_phase"] == "full_sent"
+        assert refreshed["error"] is None
+        assert full_report["payload"]["email_status"] == "skipped"
 
     def test_reconcile_waits_for_translation_before_freezing_snapshot(self, workflow_db, monkeypatch):
         from qbu_crawler.server import workflows as workflows_module
