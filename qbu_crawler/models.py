@@ -17,6 +17,54 @@ _TIME_AXIS_FIELDS = {
 }
 
 
+import calendar as _calendar
+import re as _re
+
+
+def _parse_date_published(value):
+    """Parse date_published to ISO string. Handles MM/DD/YYYY and relative formats.
+
+    Lightweight inline version to avoid importing from server.report_common.
+    """
+    if not value:
+        return None
+    s = value.strip()
+    # ISO: "2026-01-01"
+    try:
+        return date.fromisoformat(s[:10]).isoformat()
+    except (ValueError, IndexError):
+        pass
+    # MM/DD/YYYY: "01/18/2024"
+    try:
+        return datetime.strptime(s, "%m/%d/%Y").date().isoformat()
+    except ValueError:
+        pass
+    # Relative: "3 months ago", "a year ago"
+    today = date.today()
+    m = _re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, _re.IGNORECASE)
+    if m:
+        amount = int(m.group(1)) if m.group(1) else 1
+        unit = m.group(2).lower()
+        if unit == "day":
+            return (today - timedelta(days=amount)).isoformat()
+        if unit == "week":
+            return (today - timedelta(weeks=amount)).isoformat()
+        if unit == "month":
+            month = today.month - amount
+            year = today.year
+            while month <= 0:
+                month += 12
+                year -= 1
+            max_day = _calendar.monthrange(year, month)[1]
+            return date(year, month, min(today.day, max_day)).isoformat()
+        if unit == "year":
+            try:
+                return today.replace(year=today.year - amount).isoformat()
+            except ValueError:
+                return today.replace(year=today.year - amount, day=28).isoformat()
+    return None
+
+
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -365,16 +413,8 @@ def save_reviews(product_id: int, reviews: list) -> int:
         bh = _body_hash(body)
         images = r.get("images")
         date_pub = r.get("date_published")
-        # Parse date_published at insert time with today as anchor
-        date_parsed = None
-        if date_pub:
-            try:
-                from qbu_crawler.server.report_common import _parse_date_flexible
-                from datetime import date as _date
-                parsed_obj = _parse_date_flexible(date_pub, anchor_date=_date.today())
-                date_parsed = parsed_obj.isoformat() if parsed_obj else None
-            except Exception:
-                pass
+        # Parse date_published at insert time — inline to avoid cross-layer import
+        date_parsed = _parse_date_published(date_pub)
         try:
             conn.execute(f"""
                 INSERT INTO reviews (product_id, author, headline, body, body_hash, rating,

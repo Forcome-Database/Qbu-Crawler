@@ -7,6 +7,7 @@ Supports concurrent LLM calls via TRANSLATE_WORKERS config.
 
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Event, Thread
 
@@ -42,8 +43,6 @@ def _strip_markdown_json(text: str) -> str:
         text = "\n".join(inner).strip()
     return text
 
-
-import re
 
 # Control characters that are invalid/problematic in JSON strings,
 # excluding \t (0x09), \n (0x0A), \r (0x0D) which are legal.
@@ -260,7 +259,7 @@ class TranslationWorker:
             f"输入：\n{json.dumps(items_payload, ensure_ascii=False)}"
         )
 
-    def _analyze_and_translate_batch(self, reviews: list) -> tuple[int, int] | None:
+    def _analyze_and_translate_batch(self, reviews: list, _split_depth: int = 0) -> tuple[int, int] | None:
         """Translate and analyze a single sub-batch in one LLM call.
 
         Returns (translated_count, skipped_count) on success, None on transient error.
@@ -376,16 +375,18 @@ class TranslationWorker:
 
             # 400 Bad Request with batch > 1: split in half and retry each half
             # This isolates the problematic review(s) without burning retries
+            # Depth-limited to prevent excessive API calls (max ~10 levels for batch_size 1024)
             if (isinstance(exc, APIStatusError)
                     and exc.status_code == 400
-                    and len(reviews) > 1):
+                    and len(reviews) > 1
+                    and _split_depth < 8):
                 logger.warning(
-                    "TranslationWorker: batch of %d got 400, splitting in half to isolate bad review",
-                    len(reviews),
+                    "TranslationWorker: batch of %d got 400 (depth=%d), splitting to isolate bad review",
+                    len(reviews), _split_depth,
                 )
                 mid = len(reviews) // 2
-                r1 = self._analyze_and_translate_batch(reviews[:mid])
-                r2 = self._analyze_and_translate_batch(reviews[mid:])
+                r1 = self._analyze_and_translate_batch(reviews[:mid], _split_depth=_split_depth + 1)
+                r2 = self._analyze_and_translate_batch(reviews[mid:], _split_depth=_split_depth + 1)
                 t = (r1[0] if r1 else 0) + (r2[0] if r2 else 0)
                 s = (r1[1] if r1 else mid) + (r2[1] if r2 else len(reviews) - mid)
                 return (t, s)

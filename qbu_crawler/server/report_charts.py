@@ -519,14 +519,20 @@ def build_chart_html_fragments(analytics: dict) -> dict[str, str]:
             title="竞品评分分布",
         )
 
-    # ── Rating trend line ────────────────────────────────────────────────────
-    trend_data = analytics.get("_trend_data")
-    if trend_data:
-        fragments["rating_trend"] = _build_trend_line(
-            dates=trend_data["dates"],
-            values=trend_data["values"],
-            title="评分趋势",
-            y_label="评分",
-        )
+    # ── Rating trend line (from _trend_series per-product data) ────────────
+    trend_series = analytics.get("_trend_series") or []
+    # Build chart from own products with ≥2 data points
+    for ts in trend_series:
+        series = ts.get("series") or []
+        if len(series) >= 2:
+            dates = [s.get("date", "")[:10] for s in series]
+            values = [s.get("rating") or 0 for s in series]
+            fragments["rating_trend"] = _build_trend_line(
+                dates=dates,
+                values=values,
+                title=f"评分趋势 — {ts.get('product_name', '')}",
+                y_label="评分",
+            )
+            break  # show first product with enough data
 
     return fragments
