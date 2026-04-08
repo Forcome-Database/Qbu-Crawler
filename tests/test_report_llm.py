@@ -533,3 +533,23 @@ def test_insights_prompt_uses_own_kpis():
     assert "不要引用" in prompt or "不要使用" in prompt, (
         "Prompt should instruct LLM NOT to use global/total data in hero_headline"
     )
+
+
+def test_insights_prompt_includes_affected_products():
+    """Prompt must include affected product names per cluster."""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = _insights_analytics()
+    analytics["self"]["top_negative_clusters"] = [{
+        "label_code": "quality_stability",
+        "feature_display": "质量稳定性",
+        "review_count": 10,
+        "severity": "high",
+        "severity_display": "高",
+        "sub_features": [{"feature": "手柄松动", "count": 5}, {"feature": "螺丝断裂", "count": 3}],
+        "affected_products": ["Cabela's Heavy-Duty Sausage Stuffer", "Cabela's Commercial-Grade"],
+    }]
+    prompt = _build_insights_prompt(analytics)
+    assert "手柄松动" in prompt
+    assert "5" in prompt  # count should appear
+    assert "Cabela's Heavy-Duty" in prompt or "Heavy-Duty" in prompt

@@ -850,6 +850,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
     clusters = defaultdict(lambda: {
         "reviews": [],
         "products": set(),
+        "product_names": set(),
         "severities": [],
         "sub_features": defaultdict(int),
     })
@@ -909,6 +910,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
         bucket = clusters[primary_code]
         bucket["reviews"].append(r)
         bucket["products"].add(r.get("product_sku") or r.get("product_name", ""))
+        bucket["product_names"].add(r.get("product_name") or "")
         bucket["severities"].append(primary_severity)
 
         for feat in features:
@@ -942,6 +944,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
             "image_review_count": sum(1 for r in reviews if r.get("images")),
             "sub_features": sub_features,
+            "affected_products": sorted(data["product_names"] - {""})[:5],
         })
 
     result.sort(key=lambda c: (

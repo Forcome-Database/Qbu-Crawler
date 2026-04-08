@@ -776,6 +776,24 @@ def test_feature_clusters_merge_by_label_code():
     assert mf_cluster["review_count"] == 1
 
 
+def test_feature_cluster_has_affected_products():
+    """Clusters must include affected_products list with product names."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [{
+        "product_name": "Cabela's Heavy-Duty", "product_sku": "SKU1", "ownership": "own",
+        "rating": 1, "headline": "bad", "body": "broke",
+        "sentiment": "negative",
+        "analysis_features": '["handle broke"]',
+        "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+    }]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+    assert len(clusters) >= 1
+    cluster = clusters[0]
+    assert "affected_products" in cluster
+    assert "Cabela's Heavy-Duty" in cluster["affected_products"]
+
+
 def test_feature_clusters_uncategorized_fallback():
     """Reviews with no matching-polarity labels go to _uncategorized."""
     from qbu_crawler.server.report_analytics import _build_feature_clusters

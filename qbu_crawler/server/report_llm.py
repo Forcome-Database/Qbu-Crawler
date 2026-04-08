@@ -299,9 +299,14 @@ def _build_insights_prompt(analytics):
         # Add top symptoms for product-specific context
         sub_features = c.get("sub_features") or []
         if sub_features:
-            symptoms = "、".join(sf["feature"] for sf in sub_features[:5] if sf.get("feature"))
+            symptoms = "、".join(
+                f"{sf['feature']}({sf['count']}条)" for sf in sub_features[:5] if sf.get("feature")
+            )
             if symptoms:
-                line += f"（具体表现：{symptoms}）"
+                line += f"\n    高频表现：{symptoms}"
+        affected = c.get("affected_products") or []
+        if affected:
+            line += f"\n    涉及产品：{'、'.join(affected[:3])}"
         issue_lines.append(line)
     issues_text = "\n".join(issue_lines) if issue_lines else "  暂无显著问题"
 
@@ -368,7 +373,7 @@ def _build_insights_prompt(analytics):
   "executive_summary": "3-5句执行摘要，引用具体数字和产品名",
   "executive_bullets": ["要点1（含数据）", "要点2（含数据）", "要点3（含数据）"],
   "improvement_priorities": [
-    {{"label_code": "上方问题列表中方括号内的标识（如 packaging_shipping）", "action": "针对该类问题的具体改进建议，必须紧扣该类别的用户投诉症状", "evidence_count": N}}
+    {{"label_code": "上方问题列表中方括号内的标识（如 packaging_shipping）", "action": "引用该类别的具体高频表现和涉及产品，给出针对性改进建议（如：针对 XX 产品的 YY 问题(N条)，建议...）", "evidence_count": N}}
   ],
   "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据"
 }}
