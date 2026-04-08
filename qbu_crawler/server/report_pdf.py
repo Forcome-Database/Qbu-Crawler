@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from playwright.sync_api import sync_playwright
-except ModuleNotFoundError:
+except (ImportError, OSError):
     sync_playwright = None
 
 
@@ -207,7 +207,11 @@ def generate_pdf_report(snapshot, analytics, output_path):
 
     runtime_sync_playwright = sync_playwright
     if runtime_sync_playwright is None:
-        from playwright.sync_api import sync_playwright as runtime_sync_playwright
+        try:
+            from playwright.sync_api import sync_playwright as runtime_sync_playwright
+        except (ImportError, OSError) as exc:
+            logger.warning("Playwright unavailable, skipping PDF generation: %s", exc)
+            return None
 
     with runtime_sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

@@ -10,6 +10,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Event, Thread
 
+from json_repair import repair_json
 from openai import APIStatusError, APIConnectionError, APITimeoutError, OpenAI
 
 from qbu_crawler import config, models
@@ -225,8 +226,8 @@ class TranslationWorker:
             "## 标签分类（Label Taxonomy）\n"
             f"  负面: {', '.join(_LABEL_TAXONOMY['negative'])}\n"
             f"  正面: {', '.join(_LABEL_TAXONOMY['positive'])}\n\n"
-            "## 输出格式\n"
-            "以 JSON 数组返回，每个元素包含以下字段：\n"
+            '## 输出格式\n'
+            '返回一个 JSON 对象 {"results": [...]}, 数组中每个元素包含：\n'
             "- index: 对应输入的序号\n"
             "- headline_cn: 中文标题\n"
             "- body_cn: 中文正文\n"
@@ -237,7 +238,7 @@ class TranslationWorker:
             "- features: [\"中文特征短语\", ...]\n"
             "- insight_cn: 一句话中文洞察\n"
             "- insight_en: 一句话英文洞察\n\n"
-            "不要返回其他内容，只返回 JSON 数组。\n\n"
+            '不要返回其他内容，只返回 JSON 对象。\n\n'
             f"输入：\n{json.dumps(items_payload, ensure_ascii=False)}"
         )
 
@@ -263,13 +264,22 @@ class TranslationWorker:
         try:
             raw = self._call_llm(self._client, [{"role": "user", "content": prompt}])
             cleaned = _strip_markdown_json(raw)
-            results = json.loads(cleaned)
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                logger.debug("TranslationWorker: raw JSON invalid, attempting repair")
+                parsed = json.loads(repair_json(cleaned))
+            results = parsed.get("results", parsed) if isinstance(parsed, dict) else parsed
+            if not isinstance(results, list):
+                raise ValueError(f"Expected list of results, got {type(results).__name__}")
 
             translated_count = 0
             empty_indices = []
             for item in results:
+                if not isinstance(item, dict):
+                    continue
                 idx = item.get("index")
-                if idx is None or idx >= len(reviews):
+                if not isinstance(idx, int) or idx < 0 or idx >= len(reviews):
                     continue
                 # --- Translation (priority) ---
                 headline_cn = (item.get("headline_cn") or "").strip()
@@ -371,9 +381,9 @@ class TranslationWorker:
         )
         # Standard OpenAI SDK response object
         if hasattr(response, "choices"):
-            content = response.choices[0].message.content or ""
-            if not content.strip():
-                raise ValueError(f"LLM returned empty content in choices object")
+            content = (response.choices[0].message.content or "").strip()
+            if not content:
+                raise ValueError("LLM returned empty content in choices object")
             return content
         # Some compatible APIs return raw dict or JSON string
         if isinstance(response, str):

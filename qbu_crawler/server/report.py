@@ -131,8 +131,14 @@ def _download_and_resize(url: str) -> XlImage | None:
     only sets the display dimensions to thumbnail size in Excel.
     """
     try:
-        resp = requests.get(url, timeout=_IMG_DOWNLOAD_TIMEOUT)
-        resp.raise_for_status()
+        for _attempt in range(2):
+            try:
+                resp = requests.get(url, timeout=_IMG_DOWNLOAD_TIMEOUT)
+                resp.raise_for_status()
+                break
+            except requests.RequestException:
+                if _attempt == 1:
+                    raise
         buf = BytesIO(resp.content)
         # Read original dimensions for aspect ratio calculation
         img = PILImage.open(buf)

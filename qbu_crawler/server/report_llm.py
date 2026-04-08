@@ -2,6 +2,8 @@ import copy
 import json
 import logging
 
+from json_repair import repair_json
+
 from qbu_crawler import config
 from qbu_crawler.server import report_analytics
 
@@ -345,6 +347,8 @@ def _fallback_insights(analytics):
 def _parse_llm_response(text):
     """Parse LLM response text into a dict, handling markdown code blocks."""
     text = text.strip()
+    if not text:
+        raise ValueError("LLM returned empty response")
     # Strip markdown code block if present
     if text.startswith("```"):
         lines = text.split("\n")
@@ -353,7 +357,14 @@ def _parse_llm_response(text):
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-    return json.loads(text)
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        logger.debug("report_llm: raw JSON invalid, attempting repair")
+        result = json.loads(repair_json(text))
+    if not isinstance(result, dict):
+        raise ValueError(f"Expected JSON object, got {type(result).__name__}")
+    return result
 
 
 _MAX_HEADLINE_LEN = 80
@@ -380,7 +391,10 @@ def _validate_insights(llm_output: dict, analytics: dict) -> dict:
     total_negative = sum(cluster_counts.values())
 
     for p in result.get("improvement_priorities") or []:
-        claimed = p.get("evidence_count", 0) or 0
+        try:
+            claimed = int(p.get("evidence_count", 0) or 0)
+        except (TypeError, ValueError):
+            claimed = 0
         p["evidence_count"] = min(claimed, total_negative)
 
     return result
@@ -411,10 +425,8 @@ def generate_report_insights(analytics):
         response = client.chat.completions.create(
             model=config.LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1500,
         )
-        raw = response.choices[0].message.content or ""
+        raw = (response.choices[0].message.content or "").strip()
         result = _parse_llm_response(raw)
 
         # Validate required keys
