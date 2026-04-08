@@ -37,3 +37,5 @@ node_modules/
 .python-version
 */openclaw/old/
 .pytest_tmp/*
+.tmp-*
+/日报PDF与邮件功能评审报告.md
