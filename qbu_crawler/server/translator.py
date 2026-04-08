@@ -43,6 +43,24 @@ def _strip_markdown_json(text: str) -> str:
     return text
 
 
+import re
+
+# Control characters that are invalid/problematic in JSON strings,
+# excluding \t (0x09), \n (0x0A), \r (0x0D) which are legal.
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffe\uffff]')
+
+
+def _sanitize_text(text: str | None) -> str:
+    """Remove control characters and invalid Unicode from text before LLM prompt."""
+    if not text:
+        return ""
+    # Strip control chars (keep \t \n \r)
+    text = _CONTROL_CHAR_RE.sub("", text)
+    # Remove surrogate pairs (invalid in JSON)
+    text = text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    return text
+
+
 _VALID_SENTIMENTS = {"positive", "negative", "mixed", "neutral"}
 
 # Label taxonomy for combined translation + analysis prompt
@@ -252,10 +270,10 @@ class TranslationWorker:
         items_payload = [
             {
                 "index": i,
-                "headline": r.get("headline") or "",
-                "body": r.get("body") or "",
+                "headline": _sanitize_text(r.get("headline")),
+                "body": _sanitize_text(r.get("body")),
                 "rating": r.get("rating"),
-                "product_name": r.get("product_name") or "",
+                "product_name": _sanitize_text(r.get("product_name")),
             }
             for i, r in enumerate(reviews)
         ]
@@ -355,6 +373,22 @@ class TranslationWorker:
                 )
                 self._stop_event.wait(timeout=delay)
                 return None  # signal transient error
+
+            # 400 Bad Request with batch > 1: split in half and retry each half
+            # This isolates the problematic review(s) without burning retries
+            if (isinstance(exc, APIStatusError)
+                    and exc.status_code == 400
+                    and len(reviews) > 1):
+                logger.warning(
+                    "TranslationWorker: batch of %d got 400, splitting in half to isolate bad review",
+                    len(reviews),
+                )
+                mid = len(reviews) // 2
+                r1 = self._analyze_and_translate_batch(reviews[:mid])
+                r2 = self._analyze_and_translate_batch(reviews[mid:])
+                t = (r1[0] if r1 else 0) + (r2[0] if r2 else 0)
+                s = (r1[1] if r1 else mid) + (r2[1] if r2 else len(reviews) - mid)
+                return (t, s)
 
             # Non-transient error (bad JSON, LLM refused, etc.)
             logger.warning("TranslationWorker: batch failed — %s", exc)
