@@ -266,6 +266,7 @@ _INSIGHTS_KEYS = (
     "executive_bullets",
     "improvement_priorities",
     "competitive_insight",
+    "benchmark_takeaway",
 )
 
 
@@ -335,6 +336,15 @@ def _build_insights_prompt(analytics):
         )
     gaps_text = "\n".join(gap_lines) if gap_lines else "  暂无明显差距"
 
+    # Benchmark examples for competitive takeaway
+    benchmarks = analytics.get("competitor", {}).get("benchmark_examples", [])
+    bench_lines = []
+    for b in benchmarks[:2]:
+        name = b.get("product_name", "")
+        summary = b.get("summary_text", "")[:150]
+        bench_lines.append(f"  - {name}: {summary}")
+    bench_text = "\n".join(bench_lines) if bench_lines else "  暂无"
+
     # Risk products
     risk_products = analytics.get("self", {}).get("risk_products", [])
     risk_lines = []
@@ -367,6 +377,9 @@ def _build_insights_prompt(analytics):
 竞品差距（基于比率对比，差距指数 0-100，越高差距越大）：
 {gaps_text}
 
+竞品高分样本（用于提炼竞品成功要素）：
+{bench_text}
+
 请返回 JSON（不要包含 markdown 代码块标记）：
 {{
   "hero_headline": "一句话核心结论（不超过40字，必须引用自有产品数据，不要引用含竞品的全量数据）",
@@ -375,7 +388,8 @@ def _build_insights_prompt(analytics):
   "improvement_priorities": [
     {{"label_code": "上方问题列表中方括号内的标识（如 packaging_shipping）", "action": "引用该类别的具体高频表现和涉及产品，给出针对性改进建议（如：针对 XX 产品的 YY 问题(N条)，建议...）", "evidence_count": N}}
   ],
-  "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据"
+  "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据",
+  "benchmark_takeaway": "一段话总结竞品做对了什么，可供自有产品借鉴的具体做法"
 }}
 
 重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
@@ -398,6 +412,7 @@ def _fallback_insights(analytics):
         "executive_bullets": _humanize_bullets(normalized),
         "improvement_priorities": [],
         "competitive_insight": "",
+        "benchmark_takeaway": "",
     }
 
 

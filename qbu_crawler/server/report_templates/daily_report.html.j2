@@ -165,6 +165,9 @@
           {% if item.recency_display is defined %}
           <span>{{ item.recency_display }}</span>
           {% endif %}
+          {% if item.translation_warning is defined and item.translation_warning %}
+          <span class="text-muted" title="翻译覆盖率低于50%，分析可能不完整">⚠ 翻译 {{ item.translated_rate_display }}</span>
+          {% endif %}
         </div>
 
         {# Timeline #}
@@ -310,6 +313,12 @@
         <li>{{ item }}</li>
         {% endfor %}
       </ul>
+      {% endif %}
+
+      {% if analytics.report_copy.benchmark_takeaway %}
+      <div class="recommendation-box mt-md">
+        {{ analytics.report_copy.benchmark_takeaway }}
+      </div>
       {% endif %}
     </div>
   </section>

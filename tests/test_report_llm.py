@@ -553,3 +553,16 @@ def test_insights_prompt_includes_affected_products():
     assert "手柄松动" in prompt
     assert "5" in prompt  # count should appear
     assert "Cabela's Heavy-Duty" in prompt or "Heavy-Duty" in prompt
+
+
+def test_insights_prompt_includes_benchmark_examples():
+    """Prompt should include competitor benchmark examples for takeaway generation."""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = _insights_analytics()
+    analytics["competitor"]["benchmark_examples"] = [
+        {"product_name": "25 LB Motorized Stuffer", "summary_text": "Great motor, easy to use, made 450 lbs sausage"},
+    ]
+    prompt = _build_insights_prompt(analytics)
+    assert "25 LB Motorized" in prompt
+    assert "benchmark_takeaway" in prompt
