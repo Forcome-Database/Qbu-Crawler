@@ -31,6 +31,20 @@ _LABEL_DISPLAY = {
 _PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 _SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 
+CODE_TO_DIMENSION = {
+    "quality_stability": "耐久性与质量",
+    "material_finish": "耐久性与质量",
+    "solid_build": "耐久性与质量",
+    "structure_design": "设计与使用",
+    "assembly_installation": "设计与使用",
+    "easy_to_use": "设计与使用",
+    "cleaning_maintenance": "清洁便利性",
+    "easy_to_clean": "清洁便利性",
+    "noise_power": "性能表现",
+    "strong_performance": "性能表现",
+    "service_fulfillment": "售后与履约",
+}
+
 # ── Metric tooltip explanations (Chinese) ────────────────────────────────────
 # Keys match KPI card labels, table headers, and issue card stats.
 # Used by PDF and email templates to render hover/title tooltips.
@@ -42,6 +56,7 @@ METRIC_TOOLTIPS = {
     "自有评论": "本期采集窗口内入库的自有产品评论行数（按抓取时间计）",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
     "竞品差距指数": "各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
+    "样本覆盖率": "实际入库评论数 ÷ 站点展示总评论数。受 MAX_REVIEWS 上限和翻页限制影响，部分产品覆盖率 <100% 属正常",
     # Product health matrix (P2)
     "评分": "站点展示的综合评分（历史累积，非本期样本）",
     "差评率_产品": "该产品 ≤{low_rating}星评论数 ÷ 该产品采集评论总数",
@@ -49,6 +64,8 @@ METRIC_TOOLTIPS = {
     # Issue cards (P3)
     "评论数": "匹配该问题标签的评论条数（关键词+词边界匹配）",
     "涉及产品数": "出现该问题的不同产品（SKU）数量",
+    # Issue cluster footnote (P3)
+    "问题聚类": "基于 AI 语义分析，包含差评和中性偏负面评论",
     # Gap analysis table (P4)
     "竞品好评": "竞品在该维度被正面标签命中的评论数",
     "自有差评": "自有产品在该维度被负面标签命中的评论数",
@@ -243,6 +260,8 @@ def _generate_hero_headline(normalized):
 
 def _compute_alert_level(normalized):
     """Return ``(level, text)`` where *level* is ``"red"``/``"yellow"``/``"green"``."""
+    if normalized.get("mode") == "baseline":
+        return "green", "首次基线采集完成，环比预警将在第 4 期后启用"
     top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
     high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
     delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta", 0) or 0
@@ -263,8 +282,13 @@ def _compute_alert_level(normalized):
     return "green", "无新增高风险信号"
 
 
-def _parse_date_flexible(value: str | None):
-    """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago')."""
+def _parse_date_flexible(value: str | None, anchor_date=None):
+    """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago').
+
+    For relative formats ('3 months ago'), *anchor_date* is used as the
+    reference point instead of ``date.today()``.  When *None* (default),
+    today's date is used, preserving backward compatibility.
+    """
     if not value:
         return None
     s = value.strip()
@@ -279,7 +303,7 @@ def _parse_date_flexible(value: str | None):
     except ValueError:
         pass
     # Relative format: "X days/months/years ago", "a month ago", "a year ago"
-    today = date.today()
+    today = anchor_date or date.today()
     m = re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, re.IGNORECASE)
     if m:
         amount = int(m.group(1)) if m.group(1) else 1
@@ -331,6 +355,18 @@ def _duration_display(first_seen: str | None, last_seen: str | None) -> str | No
 def _humanize_bullets(normalized):
     """Generate up to 3 natural-language conclusions for the executive summary."""
     bullets = []
+    kpis = normalized.get("kpis", {})
+
+    # Backfill disclosure — MUST be first to survive [:3] truncation
+    recently_published = kpis.get("recently_published_count", 0)
+    ingested = kpis.get("ingested_review_rows", 0)
+    if ingested > 0 and recently_published < ingested * 0.5:
+        backfill_count = ingested - recently_published
+        bullets.append(
+            f"注：本期 {ingested} 条评论中有 {backfill_count} 条为历史补采"
+            f"（发布于 30 天前），数据含历史积累"
+        )
+
     # Bullet 1: highest-risk product — negative rate and delta
     top = (normalized.get("self", {}).get("risk_products") or [None])[0]
     if top:
@@ -362,7 +398,6 @@ def _humanize_bullets(normalized):
         )
 
     # Bullet 3: coverage summary — show translation warning only if abnormal
-    kpis = normalized.get("kpis", {})
     translation_rate = kpis.get("translation_completion_rate") or 1.0
     if translation_rate < 0.7:
         bullets.append(
@@ -371,14 +406,6 @@ def _humanize_bullets(normalized):
     else:
         bullets.append(
             f"本期覆盖 {kpis.get('product_count', 0)} 个产品（自有 {kpis.get('own_product_count', 0)}、竞品 {kpis.get('competitor_product_count', 0)}），{kpis.get('own_review_rows', 0)} 条自有评论"
-        )
-    # Disclosure: when many reviews are historically published backfills
-    recently_published = kpis.get("recently_published_count", 0)
-    ingested = kpis.get("ingested_review_rows", 0)
-    if ingested > 0 and recently_published < ingested * 0.5:
-        backfill_count = ingested - recently_published
-        bullets.append(
-            f"注：本期 {ingested} 条评论中有 {backfill_count} 条为历史补采（发布于 30 天前），数据含历史积累"
         )
     return bullets[:3]
 
@@ -778,6 +805,20 @@ def normalize_deep_report_analytics(analytics):
             "tooltip": _resolve_tooltip("竞品差距指数"),
         },
     ]
+
+    # Coverage rate card
+    site_total = kpis.get("site_reported_review_total_current", 0) or 0
+    ingested = kpis.get("ingested_review_rows", 0) or 0
+    coverage_rate = ingested / max(site_total, 1) if site_total > 0 else 0
+    kpis["coverage_rate"] = coverage_rate
+    kpi_cards.append({
+        "label": "样本覆盖率",
+        "value": f"{coverage_rate:.0%}" if site_total > 0 else "—",
+        "delta_display": "",
+        "delta_class": "neutral",
+        "tooltip": _resolve_tooltip("样本覆盖率"),
+        "value_class": "severity-medium" if 0 < coverage_rate < 0.5 else "",
+    })
 
     # ── Assign status color classes to KPI values ────────────────────
     for card in kpi_cards:

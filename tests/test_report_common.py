@@ -90,6 +90,30 @@ def test_issue_cards_complete_fields():
     assert card["recommendation"] == "加强出厂耐久测试"
 
 
+def test_humanize_bullets_backfill_notice_survives_truncation():
+    """When >50% reviews are backfill, the notice must appear in first 3 bullets."""
+    from qbu_crawler.server.report_common import _humanize_bullets
+
+    normalized = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "recently_published_count": 10,
+            "own_negative_review_rows_delta": 0,
+            "product_count": 2,
+            "own_product_count": 1,
+            "competitor_product_count": 1,
+            "own_review_rows": 80,
+        },
+        "self": {"risk_products": [
+            {"product_name": "P1", "negative_review_rows": 5, "total_reviews": 50, "top_labels": [{"label_code": "quality_stability", "count": 5}]}
+        ]},
+        "competitor": {"top_positive_themes": [{"label_display": "易清洗", "review_count": 3}], "gap_analysis": []},
+    }
+    bullets = _humanize_bullets(normalized)
+    assert len(bullets) <= 3
+    assert any("历史补采" in b for b in bullets), f"Backfill notice missing from: {bullets}"
+
+
 # ---------------------------------------------------------------------------
 # Tests for _cluster_summary_items and _risk_products (report_analytics)
 # ---------------------------------------------------------------------------
@@ -305,8 +329,10 @@ def test_humanize_bullets_with_rate_and_delta():
                                      "total_reviews": 50, "top_labels": [{"label_code": "quality_stability"}]}]},
         "competitor": {"top_positive_themes": [{"label_display": "做工扎实", "review_count": 69, "label_code": "solid_build"}],
                        "gap_analysis": []},
-        "kpis": {"product_count": 9, "ingested_review_rows": 636, "untranslated_count": 0,
-                 "own_negative_review_rows_delta": 5, "translation_completion_rate": 1.0},
+        # recently_published_count >= 50% of ingested so backfill notice does NOT fire
+        "kpis": {"product_count": 9, "ingested_review_rows": 636, "recently_published_count": 636,
+                 "untranslated_count": 0, "own_negative_review_rows_delta": 5,
+                 "translation_completion_rate": 1.0},
     }
     bullets = _humanize_bullets(normalized)
     assert len(bullets) == 3
@@ -416,10 +442,11 @@ def test_normalize_injects_kpi_cards():
     }
     result = normalize_deep_report_analytics(analytics)
     assert "kpi_cards" in result
-    assert len(result["kpi_cards"]) == 5
+    assert len(result["kpi_cards"]) == 6
     labels = [c["label"] for c in result["kpi_cards"]]
     assert "健康指数" in labels
     assert "竞品差距指数" in labels
+    assert "样本覆盖率" in labels
 
 
 def test_normalize_injects_issue_cards():
@@ -492,6 +519,55 @@ def test_risk_products_has_rating_avg_and_negative_rate():
     assert p["rating_avg"] == 3.5          # from snapshot_products
     assert p["negative_rate"] == pytest.approx(1 / 20)  # 1 negative / 20 site total
     assert "top_features_display" in p
+
+
+def test_risk_products_has_coverage_rate():
+    """_risk_products should compute per-product coverage_rate (ingested/total)."""
+    from qbu_crawler.server.report_analytics import _risk_products
+
+    labeled_reviews = [
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 1},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                        "severity": "high", "confidence": 0.9}],
+            "images": [],
+        },
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 5},
+            "labels": [],
+            "images": [],
+        },
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 4},
+            "labels": [{"label_code": "easy_to_use", "label_polarity": "positive",
+                        "severity": "low", "confidence": 0.8}],
+            "images": [],
+        },
+    ]
+    snapshot_products = [{"sku": "SKU1", "rating": 3.5, "review_count": 100}]
+    result = _risk_products(labeled_reviews, snapshot_products=snapshot_products)
+    assert len(result) == 1
+    p = result[0]
+    # ingested = 3 (all own reviews for SKU1), total = 100 (site-reported)
+    assert p["ingested_reviews"] == 3
+    assert p["coverage_rate"] == pytest.approx(3 / 100)
+
+
+def test_risk_products_coverage_rate_none_when_no_total():
+    """coverage_rate should be None when site-reported total is 0."""
+    from qbu_crawler.server.report_analytics import _risk_products
+
+    labeled_reviews = [
+        {
+            "review": {"product_sku": "SKU1", "product_name": "P1", "ownership": "own", "rating": 1},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                        "severity": "high", "confidence": 0.9}],
+            "images": [],
+        },
+    ]
+    result = _risk_products(labeled_reviews, snapshot_products=[])
+    assert len(result) == 1
+    assert result[0]["coverage_rate"] is None
 
 
 def test_gap_analysis_has_gap_and_priority_display():
@@ -752,6 +828,127 @@ def test_alert_level_ignores_competitor_negative_delta():
     assert level == "green", f"Expected green but got {level} — competitor delta is inflating alert"
 
 
+# ---------------------------------------------------------------------------
+# Tests for _parse_date_flexible anchor_date parameter
+# ---------------------------------------------------------------------------
+
+
+def test_parse_date_flexible_anchor_date():
+    """Relative dates should use anchor_date, not today."""
+    from datetime import date
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    anchor = date(2026, 4, 1)
+    result = _parse_date_flexible("3 months ago", anchor_date=anchor)
+    assert result == date(2026, 1, 1)
+
+    # "a year ago" from anchor 2026-04-01
+    result2 = _parse_date_flexible("a year ago", anchor_date=anchor)
+    assert result2 == date(2025, 4, 1)
+
+    # Without anchor, uses today (existing behavior preserved)
+    result3 = _parse_date_flexible("2026-01-15")
+    assert result3 == date(2026, 1, 15)
+
+
+# ---------------------------------------------------------------------------
+# Tests for date_published_parsed DB migration
+# ---------------------------------------------------------------------------
+
+
+def test_date_published_parsed_column_exists(tmp_path, monkeypatch):
+    """After init_db, reviews table should have date_published_parsed column."""
+    from qbu_crawler import config, models
+    import sqlite3
+
+    db_file = str(tmp_path / "test_migration.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+
+    def _get_conn():
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(models, "get_conn", _get_conn)
+    models.init_db()
+
+    conn = _get_conn()
+    # Should not raise
+    conn.execute("SELECT date_published_parsed FROM reviews LIMIT 1")
+    conn.close()
+
+
+def test_date_published_parsed_backfill(tmp_path, monkeypatch):
+    """init_db should backfill date_published_parsed from date_published + scraped_at anchor."""
+    from qbu_crawler import config, models
+    import sqlite3
+
+    db_file = str(tmp_path / "test_backfill.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+
+    def _get_conn():
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(models, "get_conn", _get_conn)
+    models.init_db()
+
+    # Insert a product and a review with date_published but no date_published_parsed
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO products (url, site, name, sku, price, stock_status, rating, review_count, ownership) "
+        "VALUES ('http://x.com/p1', 'basspro', 'P1', 'S1', 10, 'in_stock', 4.0, 5, 'own')"
+    )
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, date_published, scraped_at) "
+        "VALUES (1, 'A1', 'H1', 'B1', 'h1', 5, '3 months ago', '2026-03-15 10:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Re-run init_db to trigger backfill
+    models.init_db()
+
+    conn = _get_conn()
+    row = conn.execute("SELECT date_published_parsed FROM reviews WHERE id = 1").fetchone()
+    conn.close()
+    assert row["date_published_parsed"] is not None
+    assert row["date_published_parsed"] == "2025-12-15"
+
+
+def test_cluster_summary_prefers_date_published_parsed():
+    """_cluster_summary_items should prefer date_published_parsed over date_published."""
+    from qbu_crawler.server.report_analytics import _cluster_summary_items
+
+    labeled_reviews = [
+        {
+            "review": {
+                "product_sku": "SKU1",
+                "product_name": "P1",
+                "ownership": "own",
+                "rating": 1,
+                "date_published": "3 months ago",
+                "date_published_parsed": "2026-01-08",
+            },
+            "labels": [
+                {"label_code": "quality_stability", "label_polarity": "negative",
+                 "severity": "high", "confidence": 0.9}
+            ],
+            "images": [],
+        },
+    ]
+    items = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
+    assert len(items) == 1
+    # The parsed date should be used instead of the relative string
+    assert items[0]["first_seen"] == "2026-01-08"
+    assert items[0]["last_seen"] == "2026-01-08"
+
+
 def test_health_index_sensitive_to_negative_spike():
     """Health index should drop significantly when negative rate spikes."""
     from qbu_crawler.server.report_common import compute_health_index
@@ -933,3 +1130,64 @@ def test_evidence_refs_use_primary_label():
                   if c.get("label_code") == "material_finish"][0]
     assert not mf_cluster["evidence_refs"], \
         "Secondary label cluster should NOT have evidence from primary-only linking"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Coverage rate KPI card and metric caliber annotations
+# ---------------------------------------------------------------------------
+
+def test_normalize_adds_coverage_rate_kpi():
+    """KPI cards should include a coverage rate card."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 148,
+            "site_reported_review_total_current": 223,
+            "translated_count": 148,
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    card_labels = [c["label"] for c in result["kpi_cards"]]
+    assert "样本覆盖率" in card_labels
+    coverage_card = next(c for c in result["kpi_cards"] if c["label"] == "样本覆盖率")
+    assert coverage_card["value"] == "66%"
+
+
+def test_coverage_rate_missing_site_total():
+    """When site_reported_review_total_current is absent, show '—'."""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "translated_count": 100,
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    coverage_card = next((c for c in result["kpi_cards"] if c["label"] == "样本覆盖率"), None)
+    assert coverage_card is not None
+    assert coverage_card["value"] == "—"
+
+
+def test_risk_score_tooltip_mentions_threshold():
+    """Risk score tooltip should specify the rating threshold used."""
+    from qbu_crawler.server.report_common import METRIC_TOOLTIPS
+    tooltip = METRIC_TOOLTIPS.get("风险分", "")
+    assert "≤" in tooltip or "星" in tooltip, f"Risk tooltip missing threshold info: {tooltip}"
+
+
+def test_alert_level_green_for_baseline():
+    """Baseline mode should always return green regardless of data severity."""
+    from qbu_crawler.server.report_common import _compute_alert_level
+
+    normalized = {
+        "mode": "baseline",
+        "kpis": {"own_negative_review_rows_delta": 50, "health_index": 30},
+        "self": {"top_negative_clusters": [
+            {"severity": "high", "review_count": 20}
+        ]},
+    }
+    level, text = _compute_alert_level(normalized)
+    assert level == "green"
+    assert "基线" in text

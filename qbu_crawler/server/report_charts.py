@@ -366,7 +366,7 @@ def _build_stacked_bar(
         go.Bar(
             x=categories,
             y=positive,
-            name="正面",
+            name="好评(\u22654\u661f)",
             marker=dict(color=_GREEN),
         )
     )
@@ -374,7 +374,7 @@ def _build_stacked_bar(
         go.Bar(
             x=categories,
             y=neutral,
-            name="中性",
+            name="中评(3\u661f)",
             marker=dict(color=_GOLD),
         )
     )
@@ -382,7 +382,7 @@ def _build_stacked_bar(
         go.Bar(
             x=categories,
             y=negative,
-            name="负面",
+            name="差评(\u22642\u661f)",
             marker=dict(color=_ACCENT),
         )
     )
@@ -505,7 +505,7 @@ def build_chart_html_fragments(analytics: dict) -> dict[str, str]:
             positive=sentiment_own["positive"],
             neutral=sentiment_own["neutral"],
             negative=sentiment_own["negative"],
-            title="自有产品情感分布",
+            title="自有产品评分分布",
         )
 
     # ── Sentiment distribution (competitor) ─────────────────────────
@@ -516,7 +516,7 @@ def build_chart_html_fragments(analytics: dict) -> dict[str, str]:
             positive=sentiment_comp["positive"],
             neutral=sentiment_comp["neutral"],
             negative=sentiment_comp["negative"],
-            title="竞品情感分布",
+            title="竞品评分分布",
         )
 
     # ── Rating trend line ────────────────────────────────────────────────────

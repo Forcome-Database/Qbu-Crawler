@@ -5,6 +5,13 @@ from datetime import date, timedelta
 from qbu_crawler import config, models
 
 
+def _date_sort_key(date_str):
+    """Parse date string for chronological sorting. Unparseable → epoch."""
+    from qbu_crawler.server.report_common import _parse_date_flexible
+    parsed = _parse_date_flexible(date_str)
+    return parsed or date(1970, 1, 1)
+
+
 NEGATIVE_LABELS = (
     "quality_stability",
     "structure_design",
@@ -26,6 +33,25 @@ POSITIVE_LABELS = (
 )
 
 TAXONOMY_VERSION = "v1"
+
+_POLARITY_WHITELIST = {
+    "quality_stability": {"negative"},
+    "structure_design": {"negative"},
+    "assembly_installation": {"negative"},
+    "material_finish": {"negative"},
+    "cleaning_maintenance": {"negative"},
+    "noise_power": {"negative"},
+    "packaging_shipping": {"negative"},
+    "service_fulfillment": {"negative", "positive"},  # bidirectional
+    "easy_to_use": {"positive"},
+    "solid_build": {"positive"},
+    "good_value": {"positive"},
+    "easy_to_clean": {"positive"},
+    "strong_performance": {"positive"},
+    "good_packaging": {"positive"},
+}
+
+_MAX_LABELS_PER_REVIEW = 3
 
 _NEGATIVE_RULES = {
     "quality_stability": {
@@ -453,27 +479,75 @@ def _sanitize_hybrid_labels(candidate_labels, llm_labels):
     return sanitized
 
 
+def _extract_validated_llm_labels(review):
+    """Extract and validate LLM labels from review's analysis_labels field.
+
+    Maps LLM field names (code/polarity) to downstream names (label_code/label_polarity).
+    Filters by polarity whitelist and caps at _MAX_LABELS_PER_REVIEW by confidence.
+    """
+    raw = review.get("analysis_labels") or "[]"
+    if isinstance(raw, str):
+        try:
+            items = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    else:
+        items = raw
+
+    if not isinstance(items, list):
+        return []
+
+    validated = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code", "")
+        polarity = item.get("polarity", "")
+        allowed = _POLARITY_WHITELIST.get(code)
+        if not allowed or polarity not in allowed:
+            continue
+        validated.append({
+            "label_code": code,
+            "label_polarity": polarity,
+            "severity": item.get("severity", "low"),
+            "confidence": item.get("confidence", 0.5),
+            "source": "llm",
+            "taxonomy_version": TAXONOMY_VERSION,
+        })
+
+    validated.sort(key=lambda l: -l["confidence"])
+    return validated[:_MAX_LABELS_PER_REVIEW]
+
+
 def sync_review_labels(snapshot):
-    candidate_labels = {}
+    all_labels = {}
     for review in snapshot.get("reviews") or []:
         review_id = _review_id(review)
         if not review_id:
             continue
-        labels = classify_review_labels(review)
+
+        # Primary: validated LLM labels
+        labels = _extract_validated_llm_labels(review)
+
+        if not labels:
+            # Fallback: rule-based classification
+            labels = classify_review_labels(review)
+
         models.replace_review_issue_labels(review_id, labels)
-        candidate_labels[review_id] = labels
+        all_labels[review_id] = labels
 
-    if config.REPORT_LABEL_MODE == "hybrid" and candidate_labels:
-        sample_review_ids = [review_id for review_id, labels in candidate_labels.items() if labels][:20]
+    # Keep hybrid branch for future use (currently no-op)
+    if config.REPORT_LABEL_MODE == "hybrid" and all_labels:
+        sample_review_ids = [rid for rid, labels in all_labels.items() if labels][:20]
         normalized_labels = _maybe_normalize_labels_with_llm(
-            {review_id: candidate_labels[review_id] for review_id in sample_review_ids}
+            {rid: all_labels[rid] for rid in sample_review_ids}
         )
-        for review_id in sample_review_ids:
-            llm_labels = _sanitize_hybrid_labels(candidate_labels[review_id], normalized_labels.get(review_id))
+        for rid in sample_review_ids:
+            llm_labels = _sanitize_hybrid_labels(all_labels[rid], normalized_labels.get(rid))
             if llm_labels:
-                models.replace_review_issue_labels(review_id, llm_labels)
+                models.replace_review_issue_labels(rid, llm_labels)
 
-    return models.list_review_issue_labels(list(candidate_labels))
+    return models.list_review_issue_labels(list(all_labels))
 
 
 def _build_labeled_reviews(snapshot, synced_labels=None):
@@ -524,8 +598,9 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
             )
             cluster["review_count"] += 1
             cluster["affected_products"].add(review.get("product_sku") or review.get("product_name"))
-            if review.get("date_published"):
-                cluster["dates"].append(review["date_published"])
+            pub_date = review.get("date_published_parsed") or review.get("date_published")
+            if pub_date:
+                cluster["dates"].append(pub_date)
             if item["images"]:
                 cluster["image_review_count"] += 1
             cluster["severity_score"] = max(cluster["severity_score"], _SEVERITY_SCORE[label["severity"]])
@@ -566,8 +641,9 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
         item["severity_display"] = {"high": "高", "medium": "中", "low": "低"}.get(item["severity"], item["severity"])
         item["affected_product_count"] = len(item.pop("affected_products"))
         dates = item.pop("dates")
-        item["first_seen"] = min(dates) if dates else None
-        item["last_seen"] = max(dates) if dates else None
+        sorted_dates = sorted(dates, key=_date_sort_key)
+        item["first_seen"] = sorted_dates[0] if sorted_dates else None
+        item["last_seen"] = sorted_dates[-1] if sorted_dates else None
     return items
 
 
@@ -578,6 +654,14 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         sku = p.get("sku") or ""
         sku_to_review_count[sku] = p.get("review_count") or 0
         sku_to_rating[sku] = p.get("rating")
+
+    # Count all ingested own reviews per SKU (before rating/label filtering)
+    ingested_by_sku = {}
+    for item in labeled_reviews:
+        review = item["review"]
+        sku = review.get("product_sku", "")
+        if sku and review.get("ownership") == "own":
+            ingested_by_sku[sku] = ingested_by_sku.get(sku, 0) + 1
 
     grouped = {}
     for item in labeled_reviews:
@@ -601,8 +685,10 @@ def _risk_products(labeled_reviews, snapshot_products=None):
                 "image_review_rows": 0,
                 "risk_score": 0,
                 "total_reviews": sku_to_review_count.get(review.get("product_sku", ""), 0),
+                "ingested_reviews": ingested_by_sku.get(review.get("product_sku", ""), 0),
                 "rating_avg": sku_to_rating.get(review.get("product_sku", "")),
                 "negative_rate": None,
+                "coverage_rate": None,
                 "top_labels": {},
             },
         )
@@ -637,6 +723,8 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         total = item.get("total_reviews") or 0
         neg = item.get("negative_review_rows", 0)
         item["negative_rate"] = neg / total if total else None
+        ingested = item.get("ingested_reviews", 0)
+        item["coverage_rate"] = ingested / total if total else None
         item["top_features_display"] = _join_label_counts(item["top_labels"])
     return items
 
@@ -729,15 +817,25 @@ def _negative_opportunities(labeled_reviews):
 
 
 def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="negative"):
-    """Aggregate review_analysis.features into issue clusters.
+    """Aggregate reviews into clusters grouped by ``label_code``.
 
-    Uses the LLM-enriched ``analysis_features`` / ``analysis_labels`` fields
-    from the ``review_analysis`` table (joined via ``get_reviews_with_analysis``).
-    Falls back gracefully when fields are missing or empty.
+    Instead of clustering by free-text feature strings (which creates 100+
+    fragmented clusters), this groups reviews by their primary
+    ``analysis_labels[].code`` — a fixed 14-code taxonomy.  Original feature
+    strings are preserved in ``sub_features``.
+
+    Reviews whose labels have no ``code`` matching the target *polarity* fall
+    into the ``_uncategorized`` bucket.
     """
     from collections import defaultdict
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
 
-    clusters = defaultdict(lambda: {"reviews": [], "products": set(), "severities": []})
+    clusters = defaultdict(lambda: {
+        "reviews": [],
+        "products": set(),
+        "severities": [],
+        "sub_features": defaultdict(int),
+    })
 
     for r in reviews_with_analysis:
         if r.get("ownership") != ownership:
@@ -753,39 +851,74 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
         features = json.loads(raw_features) if isinstance(raw_features, str) else raw_features
         labels = json.loads(raw_labels) if isinstance(raw_labels, str) else raw_labels
 
-        max_severity = "low"
+        if not features:
+            continue
+
+        # Find primary label_code: highest-confidence label matching target polarity
+        primary_code = None
+        primary_severity = "low"
+        best_confidence = -1.0
         for label in labels:
-            sev = label.get("severity", "low") if isinstance(label, dict) else "low"
-            if _SEVERITY_SCORE.get(sev, 0) > _SEVERITY_SCORE.get(max_severity, 0):
-                max_severity = sev
+            if not isinstance(label, dict):
+                continue
+            code = label.get("code") or label.get("label_code")
+            lab_polarity = label.get("polarity") or label.get("label_polarity")
+            if not code:
+                continue
+            if lab_polarity and lab_polarity != polarity:
+                continue
+            confidence = label.get("confidence", 0.0)
+            if confidence > best_confidence:
+                best_confidence = confidence
+                primary_code = code
+                primary_severity = label.get("severity", "low")
+
+        # Fallback: if no polarity-matching label found, use _uncategorized
+        if not primary_code:
+            primary_code = "_uncategorized"
+            # Still extract max severity from all labels
+            for label in labels:
+                if isinstance(label, dict):
+                    sev = label.get("severity", "low")
+                    if _SEVERITY_SCORE.get(sev, 0) > _SEVERITY_SCORE.get(primary_severity, 0):
+                        primary_severity = sev
+
+        bucket = clusters[primary_code]
+        bucket["reviews"].append(r)
+        bucket["products"].add(r.get("product_sku") or r.get("product_name", ""))
+        bucket["severities"].append(primary_severity)
 
         for feat in features:
             feat = feat.strip() if isinstance(feat, str) else str(feat)
-            if not feat:
-                continue
-            clusters[feat]["reviews"].append(r)
-            clusters[feat]["products"].add(r.get("product_sku") or r.get("product_name", ""))
-            clusters[feat]["severities"].append(max_severity)
+            if feat:
+                bucket["sub_features"][feat] += 1
 
     result = []
-    for feat, data in clusters.items():
+    for code, data in clusters.items():
         reviews = data["reviews"]
-        dates = [r.get("date_published") for r in reviews if r.get("date_published")]
+        dates = [r.get("date_published_parsed") or r.get("date_published") for r in reviews if r.get("date_published_parsed") or r.get("date_published")]
         max_sev = max(data["severities"], key=lambda s: _SEVERITY_SCORE.get(s, 0), default="low")
+        display = _LABEL_DISPLAY.get(code, code)
+
+        sub_features = [
+            {"feature": feat, "count": cnt}
+            for feat, cnt in sorted(data["sub_features"].items(), key=lambda x: -x[1])
+        ]
 
         result.append({
-            "label_code": feat,
-            "feature_display": feat,
-            "label_display": feat,  # backward compat with label-based templates
+            "label_code": code,
+            "feature_display": display,
+            "label_display": display,
             "label_polarity": polarity,
             "review_count": len(reviews),
             "affected_product_count": len(data["products"]),
             "severity": max_sev,
             "severity_display": {"high": "高", "medium": "中", "low": "低"}.get(max_sev, max_sev),
-            "first_seen": min(dates) if dates else None,
-            "last_seen": max(dates) if dates else None,
+            "first_seen": sorted(dates, key=_date_sort_key)[0] if dates else None,
+            "last_seen": sorted(dates, key=_date_sort_key)[-1] if dates else None,
             "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
             "image_review_count": sum(1 for r in reviews if r.get("images")),
+            "sub_features": sub_features,
         })
 
     result.sort(key=lambda c: (
@@ -820,36 +953,47 @@ def _compute_chart_data(labeled_reviews, snapshot):
 
     result = {}
 
-    # ── Radar data: own vs competitor positive ratio per dimension ─────
-    own_dim_pos = {}
-    own_dim_total = {}
-    comp_dim_pos = {}
-    comp_dim_total = {}
-    for item in labeled_reviews:
-        ownership = item["review"].get("ownership")
-        for label in item["labels"]:
-            code = label["label_code"]
-            if ownership == "own":
-                own_dim_total[code] = own_dim_total.get(code, 0) + 1
-                if label["label_polarity"] == "positive":
-                    own_dim_pos[code] = own_dim_pos.get(code, 0) + 1
-            else:
-                comp_dim_total[code] = comp_dim_total.get(code, 0) + 1
-                if label["label_polarity"] == "positive":
-                    comp_dim_pos[code] = comp_dim_pos.get(code, 0) + 1
+    # ── Radar data: own vs competitor using unified dimensions ─────
+    from qbu_crawler.server.report_common import CODE_TO_DIMENSION
 
-    # Only include dimensions that have data from BOTH sides
-    radar_dims = [d for d in DIMENSIONS if own_dim_total.get(d, 0) > 0 and comp_dim_total.get(d, 0) > 0]
-    if len(radar_dims) >= 3:
+    # Phase 1: For each review, determine per-dimension polarity (negative wins)
+    dim_pos = {"own": {}, "competitor": {}}
+    dim_total = {"own": {}, "competitor": {}}
+
+    for item in labeled_reviews:
+        ownership = item["review"].get("ownership") or "competitor"
+        if ownership not in ("own", "competitor"):
+            ownership = "competitor"
+
+        # Determine per-dimension polarity for this review
+        dim_polarity = {}  # dim -> "positive" | "negative"
+        for label in item["labels"]:
+            dim = CODE_TO_DIMENSION.get(label["label_code"])
+            if not dim:
+                continue
+            if dim not in dim_polarity:
+                dim_polarity[dim] = label["label_polarity"]
+            elif label["label_polarity"] == "negative":
+                dim_polarity[dim] = "negative"  # negative wins
+
+        # Phase 2: Count once per dimension
+        for dim, polarity in dim_polarity.items():
+            dim_total[ownership][dim] = dim_total[ownership].get(dim, 0) + 1
+            if polarity == "positive":
+                dim_pos[ownership][dim] = dim_pos[ownership].get(dim, 0) + 1
+
+    # Only include dimensions with data from BOTH sides
+    all_dims = sorted(set(dim_total["own"]) & set(dim_total["competitor"]))
+    if len(all_dims) >= 3:
         result["_radar_data"] = {
-            "categories": [_LABEL_DISPLAY.get(d, d) for d in radar_dims],
+            "categories": all_dims,
             "own_values": [
-                round(own_dim_pos.get(d, 0) / max(own_dim_total.get(d, 1), 1), 2)
-                for d in radar_dims
+                round(dim_pos["own"].get(d, 0) / max(dim_total["own"].get(d, 1), 1), 2)
+                for d in all_dims
             ],
             "competitor_values": [
-                round(comp_dim_pos.get(d, 0) / max(comp_dim_total.get(d, 1), 1), 2)
-                for d in radar_dims
+                round(dim_pos["competitor"].get(d, 0) / max(dim_total["competitor"].get(d, 1), 1), 2)
+                for d in all_dims
             ],
         }
 
@@ -891,6 +1035,14 @@ def _compute_chart_data(labeled_reviews, snapshot):
                 "negative": neg_counts,
             }
 
+    # Display hints for templates consuming chart data
+    result["_sentiment_chart_title"] = "评分分布"
+    result["_sentiment_chart_legend"] = {
+        "positive": "好评(≥4星)",
+        "neutral": "中评(3星)",
+        "negative": "差评(≤2星)",
+    }
+
     # ── Heatmap: product × dimension sentiment score (-1 to 1) ─────────
     # Only for own products with at least some labels
     own_products = [p for p in products if p.get("ownership") == "own"]
@@ -900,6 +1052,10 @@ def _compute_chart_data(labeled_reviews, snapshot):
         if item["review"].get("ownership") == "own"
         for label in item["labels"]
     ))
+    # Build SKU → review_count lookup from snapshot products
+    sku_review_count = {}
+    for p in own_products:
+        sku_review_count[p.get("sku", "")] = p.get("review_count", 0) or 0
     if len(own_products) >= 2 and len(heatmap_dims) >= 2:
         y_labels = []
         z = []
@@ -920,14 +1076,22 @@ def _compute_chart_data(labeled_reviews, snapshot):
                                 pos += 1
                             else:
                                 neg += 1
-                total = pos + neg
-                if total > 0:
+                if pos + neg > 0:
                     has_data = True
-                    row.append(round((pos - neg) / total, 2))
+                    total_reviews = max(sku_review_count.get(psku, pos + neg), pos + neg)
+                    row.append(round((pos - neg) / total_reviews, 2))
                 else:
                     row.append(0.0)
             if has_data:
-                y_labels.append(pname[:25])
+                # Smart truncation: remove brand prefix, truncate at word boundary
+                short_name = pname
+                for prefix in ("Cabela's ", "Cabela\u2019s "):
+                    if short_name.startswith(prefix):
+                        short_name = short_name[len(prefix):]
+                        break
+                if len(short_name) > 25:
+                    short_name = short_name[:25].rsplit(" ", 1)[0]
+                y_labels.append(short_name)
                 z.append(row)
 
         if len(y_labels) >= 2:
@@ -937,6 +1101,29 @@ def _compute_chart_data(labeled_reviews, snapshot):
                 "y_labels": y_labels,
             }
 
+    return result
+
+
+def _build_trend_data(products, days=30):
+    """Build per-product time series from product_snapshots."""
+    result = []
+    for product in products:
+        sku = product.get("sku", "")
+        snapshots = models.get_product_snapshots(sku, days=days) if sku else []
+        result.append({
+            "product_name": product.get("name", ""),
+            "product_sku": sku,
+            "series": [
+                {
+                    "date": s.get("scraped_at", ""),
+                    "price": s.get("price"),
+                    "rating": s.get("rating"),
+                    "review_count": s.get("review_count"),
+                    "stock_status": s.get("stock_status"),
+                }
+                for s in snapshots
+            ],
+        })
     return result
 
 
@@ -1014,7 +1201,8 @@ def build_report_analytics(snapshot, synced_labels=None):
     recent_cutoff = logical - _timedelta(days=30)
     recently_published_count = 0
     for review in snapshot_reviews:
-        pub_date = _parse_date_flexible(review.get("date_published"))
+        raw_parsed = review.get("date_published_parsed")
+        pub_date = (_parse_date_flexible(raw_parsed) if raw_parsed else None) or _parse_date_flexible(review.get("date_published"))
         if pub_date and pub_date >= recent_cutoff:
             recently_published_count += 1
 
@@ -1073,7 +1261,13 @@ def build_report_analytics(snapshot, synced_labels=None):
             "negative_opportunities": _negative_opportunities(labeled_reviews),
         },
         "appendix": {
-            "image_reviews": image_reviews[:10],
+            "image_reviews": sorted(
+                image_reviews,
+                key=lambda r: (
+                    0 if r.get("ownership") == "own" else 1,
+                    r.get("rating") or 5,
+                ),
+            )[:20],
             "coverage": {
                 "own_products": len(own_products),
                 "competitor_products": len(competitor_products),
@@ -1082,4 +1276,5 @@ def build_report_analytics(snapshot, synced_labels=None):
             },
         },
         **chart_data,
+        "_trend_data": _build_trend_data(snapshot.get("products") or [], days=30),
     }

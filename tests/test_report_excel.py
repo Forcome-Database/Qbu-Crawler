@@ -474,3 +474,72 @@ def test_generate_excel_output_path_with_analytics(tmp_path, monkeypatch):
     )
     assert path == custom_out
     assert os.path.isfile(custom_out)
+
+
+def test_download_images_parallel_respects_timeout(monkeypatch):
+    """Parallel image downloads should complete within global timeout."""
+    import time
+    from qbu_crawler.server.report import _download_images_parallel
+
+    call_count = 0
+
+    def slow_download(url, timeout=10):
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.3)
+        return None  # Simulate failed download
+
+    monkeypatch.setattr("qbu_crawler.server.report._download_and_resize", slow_download)
+    urls = [f"https://img.example.com/{i}.jpg" for i in range(10)]
+    start = time.time()
+    results = _download_images_parallel(urls, global_timeout=3)
+    elapsed = time.time() - start
+
+    assert len(results) == 10
+    # With 5 workers and 0.3s per download, 10 items should take ~0.6s (2 rounds)
+    # Certainly less than serial 3.0s
+    assert elapsed < 2.0, f"Took too long: {elapsed:.1f}s"
+
+
+def test_download_images_parallel_empty_list():
+    """Empty URL list should return empty results."""
+    from qbu_crawler.server.report import _download_images_parallel
+
+    results = _download_images_parallel([], global_timeout=5)
+    assert results == {}
+
+
+def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
+    """Legacy generate_excel should call _download_images_parallel for pre-fetching."""
+    from qbu_crawler.server import report
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    prefetch_calls = []
+    original_parallel = report._download_images_parallel
+
+    def mock_parallel(urls, **kwargs):
+        prefetch_calls.append(urls)
+        return {url: None for url in urls}
+
+    monkeypatch.setattr(report, "_download_images_parallel", mock_parallel)
+    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+
+    reviews_with_images = [
+        {
+            "product_name": "P1",
+            "product_sku": "SKU1",
+            "author": "A1",
+            "headline": "Great",
+            "body": "Body",
+            "headline_cn": "",
+            "body_cn": "",
+            "rating": 5,
+            "date_published": "2026-01-01",
+            "images": ["https://img.example.com/a.jpg", "https://img.example.com/b.jpg"],
+        },
+    ]
+    report._legacy_generate_excel([], reviews_with_images)
+
+    assert len(prefetch_calls) == 1
+    assert set(prefetch_calls[0]) == {"https://img.example.com/a.jpg", "https://img.example.com/b.jpg"}

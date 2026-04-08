@@ -327,7 +327,7 @@ def test_build_feature_clusters_basic():
             "ownership": "own",
             "sentiment": "negative",
             "analysis_features": '["手柄松动", "做工粗糙"]',
-            "analysis_labels": '[{"severity": "high"}]',
+            "analysis_labels": '[{"code": "structure_design", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
             "product_sku": "SKU1",
             "rating": 1,
             "date_published": "2026-01-01",
@@ -336,14 +336,14 @@ def test_build_feature_clusters_basic():
             "ownership": "own",
             "sentiment": "negative",
             "analysis_features": '["手柄松动"]',
-            "analysis_labels": '[{"severity": "medium"}]',
+            "analysis_labels": '[{"code": "structure_design", "polarity": "negative", "severity": "medium", "confidence": 0.85}]',
             "product_sku": "SKU2",
             "rating": 2,
             "date_published": "2026-02-01",
         },
     ]
     clusters = _build_feature_clusters(reviews, "own", "negative")
-    assert clusters[0]["feature_display"] == "手柄松动"
+    assert clusters[0]["label_code"] == "structure_design"
     assert clusters[0]["review_count"] == 2
     assert clusters[0]["affected_product_count"] == 2
     assert clusters[0]["severity"] == "high"
@@ -356,18 +356,27 @@ def test_build_feature_clusters_positive_polarity():
         {
             "ownership": "competitor",
             "sentiment": "positive",
-            "analysis_features": '["易操作", "外观好"]',
-            "analysis_labels": '[{"severity": "low"}]',
+            "analysis_features": '["易操作"]',
+            "analysis_labels": '[{"code": "easy_to_use", "polarity": "positive", "severity": "low", "confidence": 0.9}]',
             "product_sku": "COMP-1",
             "rating": 5,
             "date_published": "2026-03-01",
         },
+        {
+            "ownership": "competitor",
+            "sentiment": "positive",
+            "analysis_features": '["外观好"]',
+            "analysis_labels": '[{"code": "solid_build", "polarity": "positive", "severity": "low", "confidence": 0.88}]',
+            "product_sku": "COMP-1",
+            "rating": 5,
+            "date_published": "2026-03-02",
+        },
     ]
     clusters = _build_feature_clusters(reviews, "competitor", "positive")
     assert len(clusters) == 2
-    feature_names = [c["feature_display"] for c in clusters]
-    assert "易操作" in feature_names
-    assert "外观好" in feature_names
+    label_codes = [c["label_code"] for c in clusters]
+    assert "easy_to_use" in label_codes
+    assert "solid_build" in label_codes
 
 
 def test_build_feature_clusters_ignores_wrong_ownership():
@@ -655,6 +664,45 @@ def test_kpis_include_recently_published_count(analytics_db):
     assert kpis["recently_published_count"] == 1  # only the recent one
 
 
+def test_date_sort_key_relative_dates():
+    """Relative dates must sort chronologically, not lexicographically."""
+    from qbu_crawler.server.report_analytics import _date_sort_key
+    from datetime import date
+
+    key_5y = _date_sort_key("5 years ago")
+    key_2y = _date_sort_key("2 years ago")
+    assert key_5y < key_2y, "5 years ago should sort before 2 years ago"
+
+    key_bad = _date_sort_key("unknown")
+    assert key_bad == date(1970, 1, 1)
+
+
+def test_feature_clusters_first_last_seen_chronological():
+    """first_seen should be the earliest date, last_seen the most recent."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "5 years ago",
+            "analysis_features": '["quality issue"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 2,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2 years ago",
+            "analysis_features": '["quality issue"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+    cluster = clusters[0]
+    assert cluster["first_seen"] == "5 years ago"
+    assert cluster["last_seen"] == "2 years ago"
+
+
 def test_cluster_output_consistent_fields(analytics_db):
     """Both cluster code paths must produce the same set of required fields."""
     from qbu_crawler.server.report_analytics import _cluster_summary_items, _build_feature_clusters, _build_labeled_reviews
@@ -682,3 +730,202 @@ def test_cluster_output_consistent_fields(analytics_db):
     for cluster in feature_clusters:
         missing = required_keys - set(cluster.keys())
         assert not missing, f"Feature cluster missing keys: {missing}"
+
+
+def test_feature_clusters_merge_by_label_code():
+    """Features with same primary label_code should merge into one cluster."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-01-01",
+            "analysis_features": '["broke after a week"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 2,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-02-01",
+            "analysis_features": '["lifespan too short"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-03-01",
+            "analysis_features": '["metal shavings"]',
+            "analysis_labels": '[{"code": "material_finish", "polarity": "negative", "severity": "medium", "confidence": 0.88}]',
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+
+    # Should produce 2 clusters (quality_stability + material_finish), not 3
+    assert len(clusters) == 2
+
+    qs_cluster = next(c for c in clusters if c["label_code"] == "quality_stability")
+    assert qs_cluster["review_count"] == 2
+    assert len(qs_cluster["sub_features"]) == 2
+    assert any(sf["feature"] == "broke after a week" for sf in qs_cluster["sub_features"])
+    assert any(sf["feature"] == "lifespan too short" for sf in qs_cluster["sub_features"])
+    # Must have standard display name, not free-text
+    assert qs_cluster["label_display"] == "质量稳定性"
+
+    mf_cluster = next(c for c in clusters if c["label_code"] == "material_finish")
+    assert mf_cluster["review_count"] == 1
+
+
+def test_feature_clusters_uncategorized_fallback():
+    """Reviews with no matching-polarity labels go to _uncategorized."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-01-01",
+            "analysis_features": '["some issue"]',
+            "analysis_labels": '[]',  # no labels at all
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+    assert len(clusters) == 1
+    assert clusters[0]["label_code"] == "_uncategorized"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _extract_validated_llm_labels
+# ---------------------------------------------------------------------------
+
+
+def test_extract_validated_llm_labels_filters_polarity():
+    """LLM labels with wrong polarity for their code should be rejected."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}, '
+                           '{"code": "solid_build", "polarity": "negative", "severity": "low", "confidence": 0.7}, '
+                           '{"code": "easy_to_use", "polarity": "positive", "severity": "low", "confidence": 0.8}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    codes = {l["label_code"] for l in labels}
+    assert "solid_build" not in codes  # positive-only code with negative polarity → rejected
+    assert "quality_stability" in codes
+    assert "easy_to_use" in codes
+
+
+def test_extract_validated_llm_labels_caps_at_3():
+    """Per-review cap of 3 labels, highest confidence first."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}, '
+                           '{"code": "structure_design", "polarity": "negative", "severity": "medium", "confidence": 0.9}, '
+                           '{"code": "material_finish", "polarity": "negative", "severity": "medium", "confidence": 0.85}, '
+                           '{"code": "packaging_shipping", "polarity": "negative", "severity": "low", "confidence": 0.7}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    assert len(labels) == 3
+    assert labels[0]["label_code"] == "quality_stability"
+    assert labels[2]["label_code"] == "material_finish"
+
+
+def test_extract_validated_llm_labels_service_fulfillment_allows_both():
+    """service_fulfillment is the only bidirectional code."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "service_fulfillment", "polarity": "positive", "severity": "low", "confidence": 0.8}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    assert len(labels) == 1
+    assert labels[0]["label_code"] == "service_fulfillment"
+    assert labels[0]["label_polarity"] == "positive"
+
+
+def test_extract_validated_llm_labels_empty_input():
+    """None or empty analysis_labels returns empty list."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    assert _extract_validated_llm_labels({}) == []
+    assert _extract_validated_llm_labels({"analysis_labels": None}) == []
+    assert _extract_validated_llm_labels({"analysis_labels": "[]"}) == []
+
+
+def test_build_trend_data_returns_time_series(analytics_db):
+    """_build_trend_data should return per-product time series from snapshots."""
+    from qbu_crawler.server.report_analytics import _build_trend_data
+
+    conn = models.get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO products (url, site, name, sku, price, stock_status, rating, review_count, ownership, scraped_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("https://example.com/p1", "basspro", "Product 1", "SKU1", 100, "in_stock", 4.0, 10, "own", "2026-04-01 10:00:00"),
+        )
+        pid = conn.execute("SELECT id FROM products WHERE sku='SKU1'").fetchone()["id"]
+        for day in range(1, 4):
+            conn.execute(
+                "INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, scraped_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (pid, 100.0 + day, "in_stock", 10 + day, 4.0 + day * 0.1, f"2026-04-0{day} 10:00:00"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    products = [{"name": "Product 1", "sku": "SKU1"}]
+    trend = _build_trend_data(products, days=30)
+    assert len(trend) == 1
+    assert trend[0]["product_name"] == "Product 1"
+    assert trend[0]["product_sku"] == "SKU1"
+    series = trend[0]["series"]
+    assert len(series) == 3
+    assert series[0]["price"] == 101.0
+    assert series[2]["price"] == 103.0
+
+
+def test_build_trend_data_empty_snapshots(analytics_db):
+    """Products with no snapshots should return empty series."""
+    from qbu_crawler.server.report_analytics import _build_trend_data
+
+    products = [{"name": "Ghost Product", "sku": "GHOST"}]
+    trend = _build_trend_data(products, days=30)
+    assert len(trend) == 1
+    assert trend[0]["series"] == []
+
+
+def test_image_reviews_expanded_to_20(analytics_db):
+    """appendix.image_reviews should allow up to 20 items, prioritized by ownership and rating."""
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    # Build snapshot with many image reviews
+    reviews = []
+    for i in range(25):
+        reviews.append({
+            "product_name": "Own Product", "product_sku": "OWN-1",
+            "author": f"Author-{i}", "headline": f"Review {i}",
+            "body": f"This product broke. Body {i}",
+            "rating": (i % 5) + 1, "date_published": "2026-03-28",
+            "images": [f"https://img.example.com/{i}.jpg"],
+            "ownership": "own" if i < 15 else "competitor",
+            "headline_cn": "", "body_cn": "", "translate_status": "done",
+        })
+
+    snapshot = {
+        "run_id": 1, "logical_date": "2026-04-08",
+        "snapshot_hash": "test-hash",
+        "products": [
+            {"url": "https://example.com/own-1", "name": "Own Product", "sku": "OWN-1",
+             "price": 100, "stock_status": "in_stock", "rating": 3.0, "review_count": 25,
+             "scraped_at": "2026-04-08 10:00:00", "site": "basspro", "ownership": "own"},
+        ],
+        "reviews": reviews,
+        "products_count": 1, "reviews_count": 25,
+        "translated_count": 25, "untranslated_count": 0,
+    }
+
+    result = build_report_analytics(snapshot)
+    image_reviews = result["appendix"]["image_reviews"]
+    assert len(image_reviews) == 20  # expanded from 10
+    # Own products should come first
+    assert image_reviews[0]["ownership"] == "own"
