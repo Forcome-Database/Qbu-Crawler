@@ -162,6 +162,9 @@
           {% if item.affected_product_count is defined %}
           <span title="{{ analytics.tooltips['涉及产品数'] }}">涉及 {{ item.affected_product_count }} 个产品 <span class="tip-icon-sm">ⓘ</span></span>
           {% endif %}
+          {% if item.recency_display is defined %}
+          <span>{{ item.recency_display }}</span>
+          {% endif %}
         </div>
 
         {# Timeline #}

@@ -945,6 +945,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "image_review_count": sum(1 for r in reviews if r.get("images")),
             "sub_features": sub_features,
             "affected_products": sorted(data["product_names"] - {""})[:5],
+            "review_dates": sorted(dates),
         })
 
     result.sort(key=lambda c: (

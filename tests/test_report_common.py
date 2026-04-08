@@ -1231,3 +1231,32 @@ def test_risk_product_trend_display_populated():
     assert product["trend_display"] != "—"
     assert product["trend_display"] != ""
     assert "↑" in product["trend_display"] or "↓" in product["trend_display"] or "→" in product["trend_display"]
+
+
+def test_issue_card_recency_display():
+    """issue_card should show 90-day recency based on logical_date."""
+    analytics = {
+        "logical_date": "2026-04-08",
+        "mode": "baseline",
+        "kpis": {"ingested_review_rows": 5},
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [{
+                "label_code": "quality_stability",
+                "review_count": 3,
+                "severity": "high",
+                "affected_product_count": 1,
+                "example_reviews": [],
+                "review_dates": ["2025-01-01", "2026-02-15", "2026-03-20"],
+            }],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+        "report_copy": {"improvement_priorities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    card = result["self"]["issue_cards"][0]
+    assert "recency_display" in card
+    # 2026-02-15 and 2026-03-20 are within 90 days of 2026-04-08
+    assert "2" in card["recency_display"]

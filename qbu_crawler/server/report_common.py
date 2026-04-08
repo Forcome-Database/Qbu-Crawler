@@ -879,6 +879,14 @@ def normalize_deep_report_analytics(analytics):
     else:
         _label_key = True
 
+    logical_date_str = normalized.get("logical_date", "")
+    cutoff_90d = ""
+    if logical_date_str:
+        try:
+            cutoff_90d = (date.fromisoformat(logical_date_str) - timedelta(days=90)).isoformat()
+        except ValueError:
+            pass
+
     issue_cards = []
     for i, cluster in enumerate(normalized["self"]["top_negative_clusters"]):
         # Collect image URLs from example_reviews (max 3 unique)
@@ -906,6 +914,15 @@ def normalize_deep_report_analytics(analytics):
             "image_evidence": image_evidence,
             "recommendation": priority_by_label.get(lookup_key, ""),
         })
+        # ── 90-day recency indicator ──
+        review_dates = cluster.get("review_dates") or []
+        if cutoff_90d and review_dates:
+            recent = sum(1 for d in review_dates if d >= cutoff_90d)
+        else:
+            recent = 0
+        total = cluster.get("review_count", 0) or 1
+        recency_pct = round(recent / total * 100)
+        issue_cards[-1]["recency_display"] = f"近90天 {recent} 条（{recency_pct}%）"
     normalized["self"]["issue_cards"] = issue_cards
 
     if not normalized["report_copy"]["hero_headline"]:
