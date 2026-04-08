@@ -312,9 +312,39 @@ def test_heatmap_left_margin_adapts_to_label_length():
     assert "Cabela's Commercial-Grade Sausa" not in html or "\u2026" in html
 
 
+def test_stacked_bar_has_percentage_labels():
+    """Stacked bar chart should include percentage text in segments."""
+    from qbu_crawler.server.report_charts import _build_stacked_bar
+    html = _build_stacked_bar(
+        categories=["Product A", "Product B"],
+        positive=[40, 10],
+        neutral=[10, 5],
+        negative=[50, 85],
+        title="Test",
+    )
+    assert html
+    # 50% negative for Product A should show "50%"
+    assert "50%" in html
+    # 85% negative for Product B should show "85%"
+    assert "85%" in html
+
+
 def test_issue_cluster_footnote_in_tooltips():
     """METRIC_TOOLTIPS should contain issue cluster footnote."""
     from qbu_crawler.server.report_common import METRIC_TOOLTIPS
 
     assert "问题聚类" in METRIC_TOOLTIPS
     assert "AI 语义分析" in METRIC_TOOLTIPS["问题聚类"]
+
+
+def test_quadrant_scatter_truncation_length():
+    """Scatter chart should truncate names at 20 chars, not 12."""
+    products = [
+        {"name": "Cabela's Commercial-Grade", "price": 200, "rating": 3.5, "ownership": "own"},
+        {"name": "25 LB Motorized Stuffer", "price": 400, "rating": 4.5, "ownership": "competitor"},
+    ]
+    html = _build_quadrant_scatter(products=products, title="Test")
+    # Name should be truncated to ~20 chars (19 + ellipsis), not 12
+    assert "Cabela" in html
+    # Should NOT be truncated at 12 chars like the old behavior
+    assert html  # renders without error

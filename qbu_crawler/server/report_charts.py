@@ -266,8 +266,8 @@ def _build_quadrant_scatter(
 
     fig = go.Figure()
 
-    def _truncate(name: str, max_len: int = 12) -> str:
-        return name[:max_len] + "..." if len(name) > max_len else name
+    def _truncate(name: str, max_len: int = 20) -> str:
+        return name[:max_len - 1] + "\u2026" if len(name) > max_len else name
 
     if own:
         fig.add_trace(
@@ -290,7 +290,7 @@ def _build_quadrant_scatter(
                 mode="markers+text",
                 marker=dict(symbol="circle", size=10, color=_GREEN),
                 text=[_truncate(p["name"]) for p in comp],
-                textposition="top center",
+                textposition="bottom center",
                 textfont=dict(size=10),
                 name="竞品",
             )
@@ -372,6 +372,14 @@ def _build_stacked_bar(
     title: str,
 ) -> str:
     """Stacked bar chart for sentiment distribution."""
+    totals = [p + n + ne for p, n, ne in zip(positive, neutral, negative)]
+
+    def _pct_text(values: list[float], _totals: list[float]) -> list[str]:
+        return [
+            f"{v / t * 100:.0f}%" if t > 0 and v / t >= 0.10 else ""
+            for v, t in zip(values, _totals)
+        ]
+
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
@@ -379,6 +387,9 @@ def _build_stacked_bar(
             y=positive,
             name="好评(\u22654\u661f)",
             marker=dict(color=_GREEN),
+            text=_pct_text(positive, totals),
+            textposition="inside",
+            textfont=dict(size=9, color="white"),
         )
     )
     fig.add_trace(
@@ -387,6 +398,9 @@ def _build_stacked_bar(
             y=neutral,
             name="中评(3\u661f)",
             marker=dict(color=_GOLD),
+            text=_pct_text(neutral, totals),
+            textposition="inside",
+            textfont=dict(size=9),
         )
     )
     fig.add_trace(
@@ -395,6 +409,9 @@ def _build_stacked_bar(
             y=negative,
             name="差评(\u22642\u661f)",
             marker=dict(color=_ACCENT),
+            text=_pct_text(negative, totals),
+            textposition="inside",
+            textfont=dict(size=9, color="white"),
         )
     )
     fig.update_layout(
