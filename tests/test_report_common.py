@@ -90,6 +90,30 @@ def test_issue_cards_complete_fields():
     assert card["recommendation"] == "加强出厂耐久测试"
 
 
+def test_humanize_bullets_backfill_notice_survives_truncation():
+    """When >50% reviews are backfill, the notice must appear in first 3 bullets."""
+    from qbu_crawler.server.report_common import _humanize_bullets
+
+    normalized = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "recently_published_count": 10,
+            "own_negative_review_rows_delta": 0,
+            "product_count": 2,
+            "own_product_count": 1,
+            "competitor_product_count": 1,
+            "own_review_rows": 80,
+        },
+        "self": {"risk_products": [
+            {"product_name": "P1", "negative_review_rows": 5, "total_reviews": 50, "top_labels": [{"label_code": "quality_stability", "count": 5}]}
+        ]},
+        "competitor": {"top_positive_themes": [{"label_display": "易清洗", "review_count": 3}], "gap_analysis": []},
+    }
+    bullets = _humanize_bullets(normalized)
+    assert len(bullets) <= 3
+    assert any("历史补采" in b for b in bullets), f"Backfill notice missing from: {bullets}"
+
+
 # ---------------------------------------------------------------------------
 # Tests for _cluster_summary_items and _risk_products (report_analytics)
 # ---------------------------------------------------------------------------
@@ -305,8 +329,10 @@ def test_humanize_bullets_with_rate_and_delta():
                                      "total_reviews": 50, "top_labels": [{"label_code": "quality_stability"}]}]},
         "competitor": {"top_positive_themes": [{"label_display": "做工扎实", "review_count": 69, "label_code": "solid_build"}],
                        "gap_analysis": []},
-        "kpis": {"product_count": 9, "ingested_review_rows": 636, "untranslated_count": 0,
-                 "own_negative_review_rows_delta": 5, "translation_completion_rate": 1.0},
+        # recently_published_count >= 50% of ingested so backfill notice does NOT fire
+        "kpis": {"product_count": 9, "ingested_review_rows": 636, "recently_published_count": 636,
+                 "untranslated_count": 0, "own_negative_review_rows_delta": 5,
+                 "translation_completion_rate": 1.0},
     }
     bullets = _humanize_bullets(normalized)
     assert len(bullets) == 3

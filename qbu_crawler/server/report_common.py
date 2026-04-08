@@ -331,6 +331,18 @@ def _duration_display(first_seen: str | None, last_seen: str | None) -> str | No
 def _humanize_bullets(normalized):
     """Generate up to 3 natural-language conclusions for the executive summary."""
     bullets = []
+    kpis = normalized.get("kpis", {})
+
+    # Backfill disclosure — MUST be first to survive [:3] truncation
+    recently_published = kpis.get("recently_published_count", 0)
+    ingested = kpis.get("ingested_review_rows", 0)
+    if ingested > 0 and recently_published < ingested * 0.5:
+        backfill_count = ingested - recently_published
+        bullets.append(
+            f"注：本期 {ingested} 条评论中有 {backfill_count} 条为历史补采"
+            f"（发布于 30 天前），数据含历史积累"
+        )
+
     # Bullet 1: highest-risk product — negative rate and delta
     top = (normalized.get("self", {}).get("risk_products") or [None])[0]
     if top:
@@ -362,7 +374,6 @@ def _humanize_bullets(normalized):
         )
 
     # Bullet 3: coverage summary — show translation warning only if abnormal
-    kpis = normalized.get("kpis", {})
     translation_rate = kpis.get("translation_completion_rate") or 1.0
     if translation_rate < 0.7:
         bullets.append(
@@ -371,14 +382,6 @@ def _humanize_bullets(normalized):
     else:
         bullets.append(
             f"本期覆盖 {kpis.get('product_count', 0)} 个产品（自有 {kpis.get('own_product_count', 0)}、竞品 {kpis.get('competitor_product_count', 0)}），{kpis.get('own_review_rows', 0)} 条自有评论"
-        )
-    # Disclosure: when many reviews are historically published backfills
-    recently_published = kpis.get("recently_published_count", 0)
-    ingested = kpis.get("ingested_review_rows", 0)
-    if ingested > 0 and recently_published < ingested * 0.5:
-        backfill_count = ingested - recently_published
-        bullets.append(
-            f"注：本期 {ingested} 条评论中有 {backfill_count} 条为历史补采（发布于 30 天前），数据含历史积累"
         )
     return bullets[:3]
 
