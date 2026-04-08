@@ -281,15 +281,21 @@ def _build_insights_prompt(analytics):
     neg = kpis.get("negative_review_rows", 0)
     rate = kpis.get("negative_review_rate", 0)
     health = kpis.get("health_index", "N/A")
+    # Own-specific KPIs (aligned with KPI cards)
+    own_reviews = kpis.get("own_review_rows", 0)
+    own_neg = kpis.get("own_negative_review_rows", 0)
+    own_rate = kpis.get("own_negative_review_rate", 0)
+    comp_reviews = kpis.get("competitor_review_rows", 0)
 
     # Top issues with concrete symptoms from sub_features
     clusters = analytics.get("self", {}).get("top_negative_clusters", [])
     issue_lines = []
     for c in clusters[:8]:
+        label_code = c.get("label_code", "")
         display = c.get("feature_display") or c.get("label_display", "")
         count = c.get("review_count", 0)
         sev = c.get("severity_display") or c.get("severity", "")
-        line = f"  - {display}：{count} 条评论，严重度 {sev}"
+        line = f"  - [{label_code}] {display}：{count} 条评论，严重度 {sev}"
         # Add top symptoms for product-specific context
         sub_features = c.get("sub_features") or []
         if sub_features:
@@ -340,7 +346,8 @@ def _build_insights_prompt(analytics):
 
 数据概要：
 - 自有产品 {own_count} 个，竞品 {comp_count} 个
-- 总评论 {total} 条，差评 {neg} 条（差评率 {rate * 100:.1f}%）
+- 自有评论 {own_reviews} 条，自有差评 {own_neg} 条（自有差评率 {own_rate * 100:.1f}%）
+- 全量评论 {total} 条（含竞品 {comp_reviews} 条），全量差评 {neg} 条
 - 健康指数：{health}/100
 
 高风险产品：
@@ -357,14 +364,16 @@ def _build_insights_prompt(analytics):
 
 请返回 JSON（不要包含 markdown 代码块标记）：
 {{
-  "hero_headline": "一句话核心结论（不超过40字，必须引用具体数据）",
+  "hero_headline": "一句话核心结论（不超过40字，必须引用自有产品数据，不要引用含竞品的全量数据）",
   "executive_summary": "3-5句执行摘要，引用具体数字和产品名",
   "executive_bullets": ["要点1（含数据）", "要点2（含数据）", "要点3（含数据）"],
   "improvement_priorities": [
-    {{"rank": 1, "target": "产品名", "issue": "引用上方具体症状", "action": "建议行动", "evidence_count": N}}
+    {{"label_code": "上方问题列表中方括号内的标识（如 packaging_shipping）", "action": "针对该类问题的具体改进建议，必须紧扣该类别的用户投诉症状", "evidence_count": N}}
   ],
   "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据"
-}}"""
+}}
+
+重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
 
 
 def _fallback_insights(analytics):

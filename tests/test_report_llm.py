@@ -503,3 +503,33 @@ def test_hero_headline_truncation():
     }
     validated = _validate_insights(llm_output, {})
     assert len(validated["hero_headline"]) <= 80
+
+
+def test_insights_prompt_uses_own_kpis():
+    """Prompt must distinguish own vs total KPIs so LLM uses own data in hero_headline."""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = _insights_analytics()
+    # Add own-specific KPIs that the real pipeline provides
+    analytics["kpis"]["own_review_rows"] = 112
+    analytics["kpis"]["own_negative_review_rows"] = 50
+    analytics["kpis"]["own_negative_review_rate"] = 0.446
+    analytics["kpis"]["competitor_review_rows"] = 36
+
+    prompt = _build_insights_prompt(analytics)
+
+    # Prompt must contain own-specific numbers
+    assert "自有评论 112" in prompt, f"Prompt should contain '自有评论 112', got:\n{prompt}"
+    assert "自有差评 50" in prompt, f"Prompt should contain '自有差评 50', got:\n{prompt}"
+    assert "44.6%" in prompt, f"Prompt should contain own negative rate '44.6%', got:\n{prompt}"
+    assert "竞品 36" in prompt or "含竞品 36" in prompt, (
+        f"Prompt should mention competitor review count 36, got:\n{prompt}"
+    )
+    # Prompt must instruct LLM to use own data in hero_headline
+    assert "自有" in prompt and "hero_headline" in prompt, (
+        "Prompt must instruct LLM to reference own-product data in hero_headline"
+    )
+    # The hero_headline instruction should explicitly forbid using total/global data
+    assert "不要引用" in prompt or "不要使用" in prompt, (
+        "Prompt should instruct LLM NOT to use global/total data in hero_headline"
+    )
