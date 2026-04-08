@@ -765,15 +765,19 @@ def _generate_analytical_excel(
         neg_count = p.get("negative_review_rows", 0)
         neg_rate = neg_count / total_reviews if total_reviews else 0
 
+        # Look up full product info from products list by SKU
+        sku = p.get("product_sku") or p.get("sku", "")
+        full_product = next((pp for pp in products if (pp.get("sku") or "") == sku), {})
+
         ws_scorecard.cell(row=row_idx, column=1, value=p.get("product_name") or p.get("name", ""))
-        ws_scorecard.cell(row=row_idx, column=2, value=p.get("product_sku") or p.get("sku", ""))
-        ws_scorecard.cell(row=row_idx, column=3, value=p.get("site", ""))
-        ws_scorecard.cell(row=row_idx, column=4, value=p.get("ownership", ""))
-        ws_scorecard.cell(row=row_idx, column=5, value=p.get("price", ""))
-        ws_scorecard.cell(row=row_idx, column=6, value=p.get("rating", ""))
+        ws_scorecard.cell(row=row_idx, column=2, value=sku)
+        ws_scorecard.cell(row=row_idx, column=3, value=full_product.get("site", ""))
+        ws_scorecard.cell(row=row_idx, column=4, value=full_product.get("ownership", ""))
+        ws_scorecard.cell(row=row_idx, column=5, value=full_product.get("price", ""))
+        ws_scorecard.cell(row=row_idx, column=6, value=p.get("rating_avg") or full_product.get("rating", ""))
         neg_rate_cell = ws_scorecard.cell(row=row_idx, column=7, value=f"{neg_rate:.0%}" if total_reviews else "—")
         ws_scorecard.cell(row=row_idx, column=8, value=p.get("risk_score", ""))
-        ws_scorecard.cell(row=row_idx, column=9, value=p.get("top_labels_display") or p.get("focus_summary", ""))
+        ws_scorecard.cell(row=row_idx, column=9, value=p.get("top_features_display") or p.get("top_labels_display") or "")
         ws_scorecard.cell(row=row_idx, column=10, value="")
 
         # Conditional formatting for neg rate
@@ -811,9 +815,18 @@ def _generate_analytical_excel(
         ws_issues.cell(row=row_idx, column=5, value=card.get("first_seen", ""))
         ws_issues.cell(row=row_idx, column=6, value=card.get("last_seen", ""))
 
-        # Representative review summary
+        # Representative review summary — build from raw fields if summary_text missing
         examples = card.get("example_reviews") or []
-        summary = examples[0].get("summary_text", "") if examples else ""
+        summary = ""
+        if examples:
+            ex = examples[0]
+            summary = ex.get("summary_text", "")
+            if not summary:
+                title = (ex.get("headline_cn") or ex.get("headline") or "").strip()
+                body = (ex.get("body_cn") or ex.get("body") or "").strip()
+                summary = f"{title}：{body}" if title and body else (title or body or "")
+                if len(summary) > 200:
+                    summary = summary[:200] + "..."
         ws_issues.cell(row=row_idx, column=7, value=summary)
 
         # Severity coloring
@@ -894,15 +907,21 @@ def _generate_analytical_excel(
         ws_reviews.cell(row=row_idx, column=7, value=_cell_value(r.get("headline_cn")))
         ws_reviews.cell(row=row_idx, column=8, value=_cell_value(r.get("body_cn")))
 
-        # Features from review_analysis
-        features = r.get("features") or r.get("label_codes") or []
+        # Features from review_analysis (snapshot uses analysis_features/analysis_insight_cn)
+        features = r.get("analysis_features") or r.get("features") or r.get("label_codes") or []
+        if isinstance(features, str):
+            try:
+                features = json.loads(features)
+            except Exception:
+                pass
         if isinstance(features, list):
             features_str = ", ".join(str(f) for f in features)
         else:
             features_str = str(features)
         ws_reviews.cell(row=row_idx, column=9, value=features_str)
 
-        ws_reviews.cell(row=row_idx, column=10, value=_cell_value(r.get("insight_cn", "")))
+        insight = r.get("analysis_insight_cn") or r.get("insight_cn") or ""
+        ws_reviews.cell(row=row_idx, column=10, value=_cell_value(insight))
 
         # Embed images — reuse the same logic as the legacy sheet
         image_urls = r.get("images") or []
@@ -970,13 +989,13 @@ def _generate_analytical_excel(
             trend_rows.append({
                 "date": s.get("date", ""),
                 "product_name": product.get("product_name", ""),
+                "price": s.get("price", ""),
                 "rating": s.get("rating", ""),
-                "negative_rate": "",
-                "negative_count": "",
                 "review_count": s.get("review_count", 0),
+                "stock_status": s.get("stock_status", ""),
             })
 
-    trend_headers = ["日期", "产品", "评分", "差评率", "差评数", "评论量"]
+    trend_headers = ["日期", "产品", "价格", "评分", "评论量", "库存状态"]
     ws_trend.append(trend_headers)
     _style_header_row(ws_trend, len(trend_headers))
 
@@ -986,10 +1005,10 @@ def _generate_analytical_excel(
         for row_idx, t in enumerate(trend_rows, start=2):
             ws_trend.cell(row=row_idx, column=1, value=t.get("date", ""))
             ws_trend.cell(row=row_idx, column=2, value=t.get("product_name", ""))
-            ws_trend.cell(row=row_idx, column=3, value=t.get("rating", ""))
-            ws_trend.cell(row=row_idx, column=4, value=t.get("negative_rate", ""))
-            ws_trend.cell(row=row_idx, column=5, value=t.get("negative_count", 0))
-            ws_trend.cell(row=row_idx, column=6, value=t.get("review_count", 0))
+            ws_trend.cell(row=row_idx, column=3, value=t.get("price", ""))
+            ws_trend.cell(row=row_idx, column=4, value=t.get("rating", ""))
+            ws_trend.cell(row=row_idx, column=5, value=t.get("review_count", 0))
+            ws_trend.cell(row=row_idx, column=6, value=t.get("stock_status", ""))
 
     _auto_col_widths(ws_trend)
 
