@@ -156,6 +156,33 @@ def _download_and_resize(url: str) -> XlImage | None:
         return None
 
 
+def _download_images_parallel(urls: list[str], global_timeout: float = 60) -> dict:
+    """Download multiple images in parallel. Returns {url: Image_or_None}."""
+    if not urls:
+        return {}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        future_to_url = {pool.submit(_download_and_resize, url): url for url in urls}
+        try:
+            for future in as_completed(future_to_url, timeout=global_timeout):
+                url = future_to_url[future]
+                try:
+                    results[url] = future.result()
+                except Exception:
+                    results[url] = None
+        except TimeoutError:
+            # Global timeout reached — fill remaining with None
+            for future, url in future_to_url.items():
+                if url not in results:
+                    results[url] = None
+                    future.cancel()
+
+    return results
+
+
 def generate_excel(
     products: list[dict],
     reviews: list[dict],

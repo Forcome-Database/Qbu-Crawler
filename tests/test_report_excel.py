@@ -474,3 +474,36 @@ def test_generate_excel_output_path_with_analytics(tmp_path, monkeypatch):
     )
     assert path == custom_out
     assert os.path.isfile(custom_out)
+
+
+def test_download_images_parallel_respects_timeout(monkeypatch):
+    """Parallel image downloads should complete within global timeout."""
+    import time
+    from qbu_crawler.server.report import _download_images_parallel
+
+    call_count = 0
+
+    def slow_download(url, timeout=10):
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.3)
+        return None  # Simulate failed download
+
+    monkeypatch.setattr("qbu_crawler.server.report._download_and_resize", slow_download)
+    urls = [f"https://img.example.com/{i}.jpg" for i in range(10)]
+    start = time.time()
+    results = _download_images_parallel(urls, global_timeout=3)
+    elapsed = time.time() - start
+
+    assert len(results) == 10
+    # With 5 workers and 0.3s per download, 10 items should take ~0.6s (2 rounds)
+    # Certainly less than serial 3.0s
+    assert elapsed < 2.0, f"Took too long: {elapsed:.1f}s"
+
+
+def test_download_images_parallel_empty_list():
+    """Empty URL list should return empty results."""
+    from qbu_crawler.server.report import _download_images_parallel
+
+    results = _download_images_parallel([], global_timeout=5)
+    assert results == {}
