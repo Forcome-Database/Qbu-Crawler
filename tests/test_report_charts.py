@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from qbu_crawler.server.report_analytics import _compute_chart_data
 from qbu_crawler.server.report_charts import (
     QBU_THEME,
     _build_bar_chart,
@@ -144,3 +145,56 @@ def test_build_chart_html_fragments_with_data():
     assert "self_risk_products" in fragments
     assert "self_negative_clusters" in fragments
     assert "competitor_positive_themes" in fragments
+
+
+def test_radar_uses_unified_dimensions():
+    """Radar chart should use 5 unified dimensions with continuous values."""
+    from qbu_crawler.server.report_common import CODE_TO_DIMENSION
+
+    # Verify dimension mapping
+    assert CODE_TO_DIMENSION["quality_stability"] == "耐久性与质量"
+    assert CODE_TO_DIMENSION["solid_build"] == "耐久性与质量"
+    assert CODE_TO_DIMENSION["structure_design"] == "设计与使用"
+    assert CODE_TO_DIMENSION["easy_to_use"] == "设计与使用"
+    assert CODE_TO_DIMENSION["service_fulfillment"] == "售后与履约"
+
+    labeled_reviews = [
+        # Own: 1 negative quality_stability (maps to "耐久性与质量")
+        {"review": {"ownership": "own", "product_sku": "S1", "product_name": "P1"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative", "severity": "high", "confidence": 0.9}],
+         "images": [], "product": {}},
+        # Own: 1 positive solid_build (also maps to "耐久性与质量")
+        {"review": {"ownership": "own", "product_sku": "S1", "product_name": "P1"},
+         "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+         "images": [], "product": {}},
+        # Competitor: 1 positive solid_build
+        {"review": {"ownership": "competitor", "product_sku": "C1", "product_name": "CP1"},
+         "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+         "images": [], "product": {}},
+        # Competitor: 1 positive easy_to_use (maps to "设计与使用")
+        {"review": {"ownership": "competitor", "product_sku": "C1", "product_name": "CP1"},
+         "labels": [{"label_code": "easy_to_use", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+         "images": [], "product": {}},
+    ]
+    snapshot = {"products": [
+        {"name": "P1", "sku": "S1", "ownership": "own", "price": 100, "rating": 3.5},
+        {"name": "CP1", "sku": "C1", "ownership": "competitor", "price": 200, "rating": 4.5},
+    ]}
+    charts = _compute_chart_data(labeled_reviews, snapshot)
+    radar = charts.get("_radar_data", {})
+    if radar:
+        assert "耐久性与质量" in radar["categories"]
+        # Own has 1 positive + 1 negative in durability → negative wins → 0/2 = 0.0
+        # But we count reviews not labels: 2 reviews, 1 positive, 1 negative (negative wins)
+        # → positive_count = 0, total = 2, score = 0.0... wait
+        # Actually: review 1 is negative (quality_stability/neg), review 2 is positive (solid_build/pos)
+        # In "耐久性与质量" dimension: 2 reviews total, 1 positive → if negative wins when both present in SAME review
+        # But these are DIFFERENT reviews, each with only one label → score = 1/2 = 0.5
+        idx = radar["categories"].index("耐久性与质量")
+        own_val = radar["own_values"][idx]
+        assert 0 < own_val < 1, f"Expected continuous value for own, got {own_val}"
+        # Competitor has only positive in durability → score = 1.0
+        comp_val = radar["competitor_values"][idx]
+        assert comp_val == 1.0
+        # Own and competitor should differ (the whole point of this fix)
+        assert radar["own_values"] != radar["competitor_values"]

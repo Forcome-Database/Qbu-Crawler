@@ -31,6 +31,20 @@ _LABEL_DISPLAY = {
 _PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 _SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
 
+CODE_TO_DIMENSION = {
+    "quality_stability": "耐久性与质量",
+    "material_finish": "耐久性与质量",
+    "solid_build": "耐久性与质量",
+    "structure_design": "设计与使用",
+    "assembly_installation": "设计与使用",
+    "easy_to_use": "设计与使用",
+    "cleaning_maintenance": "清洁便利性",
+    "easy_to_clean": "清洁便利性",
+    "noise_power": "性能表现",
+    "strong_performance": "性能表现",
+    "service_fulfillment": "售后与履约",
+}
+
 # ── Metric tooltip explanations (Chinese) ────────────────────────────────────
 # Keys match KPI card labels, table headers, and issue card stats.
 # Used by PDF and email templates to render hover/title tooltips.

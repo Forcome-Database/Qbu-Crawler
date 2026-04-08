@@ -940,36 +940,47 @@ def _compute_chart_data(labeled_reviews, snapshot):
 
     result = {}
 
-    # ── Radar data: own vs competitor positive ratio per dimension ─────
-    own_dim_pos = {}
-    own_dim_total = {}
-    comp_dim_pos = {}
-    comp_dim_total = {}
-    for item in labeled_reviews:
-        ownership = item["review"].get("ownership")
-        for label in item["labels"]:
-            code = label["label_code"]
-            if ownership == "own":
-                own_dim_total[code] = own_dim_total.get(code, 0) + 1
-                if label["label_polarity"] == "positive":
-                    own_dim_pos[code] = own_dim_pos.get(code, 0) + 1
-            else:
-                comp_dim_total[code] = comp_dim_total.get(code, 0) + 1
-                if label["label_polarity"] == "positive":
-                    comp_dim_pos[code] = comp_dim_pos.get(code, 0) + 1
+    # ── Radar data: own vs competitor using unified dimensions ─────
+    from qbu_crawler.server.report_common import CODE_TO_DIMENSION
 
-    # Only include dimensions that have data from BOTH sides
-    radar_dims = [d for d in DIMENSIONS if own_dim_total.get(d, 0) > 0 and comp_dim_total.get(d, 0) > 0]
-    if len(radar_dims) >= 3:
+    # Phase 1: For each review, determine per-dimension polarity (negative wins)
+    dim_pos = {"own": {}, "competitor": {}}
+    dim_total = {"own": {}, "competitor": {}}
+
+    for item in labeled_reviews:
+        ownership = item["review"].get("ownership") or "competitor"
+        if ownership not in ("own", "competitor"):
+            ownership = "competitor"
+
+        # Determine per-dimension polarity for this review
+        dim_polarity = {}  # dim -> "positive" | "negative"
+        for label in item["labels"]:
+            dim = CODE_TO_DIMENSION.get(label["label_code"])
+            if not dim:
+                continue
+            if dim not in dim_polarity:
+                dim_polarity[dim] = label["label_polarity"]
+            elif label["label_polarity"] == "negative":
+                dim_polarity[dim] = "negative"  # negative wins
+
+        # Phase 2: Count once per dimension
+        for dim, polarity in dim_polarity.items():
+            dim_total[ownership][dim] = dim_total[ownership].get(dim, 0) + 1
+            if polarity == "positive":
+                dim_pos[ownership][dim] = dim_pos[ownership].get(dim, 0) + 1
+
+    # Only include dimensions with data from BOTH sides
+    all_dims = sorted(set(dim_total["own"]) & set(dim_total["competitor"]))
+    if len(all_dims) >= 3:
         result["_radar_data"] = {
-            "categories": [_LABEL_DISPLAY.get(d, d) for d in radar_dims],
+            "categories": all_dims,
             "own_values": [
-                round(own_dim_pos.get(d, 0) / max(own_dim_total.get(d, 1), 1), 2)
-                for d in radar_dims
+                round(dim_pos["own"].get(d, 0) / max(dim_total["own"].get(d, 1), 1), 2)
+                for d in all_dims
             ],
             "competitor_values": [
-                round(comp_dim_pos.get(d, 0) / max(comp_dim_total.get(d, 1), 1), 2)
-                for d in radar_dims
+                round(dim_pos["competitor"].get(d, 0) / max(dim_total["competitor"].get(d, 1), 1), 2)
+                for d in all_dims
             ],
         }
 
