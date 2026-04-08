@@ -792,3 +792,62 @@ def test_feature_clusters_uncategorized_fallback():
     clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
     assert len(clusters) == 1
     assert clusters[0]["label_code"] == "_uncategorized"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _extract_validated_llm_labels
+# ---------------------------------------------------------------------------
+
+
+def test_extract_validated_llm_labels_filters_polarity():
+    """LLM labels with wrong polarity for their code should be rejected."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}, '
+                           '{"code": "solid_build", "polarity": "negative", "severity": "low", "confidence": 0.7}, '
+                           '{"code": "easy_to_use", "polarity": "positive", "severity": "low", "confidence": 0.8}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    codes = {l["label_code"] for l in labels}
+    assert "solid_build" not in codes  # positive-only code with negative polarity → rejected
+    assert "quality_stability" in codes
+    assert "easy_to_use" in codes
+
+
+def test_extract_validated_llm_labels_caps_at_3():
+    """Per-review cap of 3 labels, highest confidence first."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}, '
+                           '{"code": "structure_design", "polarity": "negative", "severity": "medium", "confidence": 0.9}, '
+                           '{"code": "material_finish", "polarity": "negative", "severity": "medium", "confidence": 0.85}, '
+                           '{"code": "packaging_shipping", "polarity": "negative", "severity": "low", "confidence": 0.7}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    assert len(labels) == 3
+    assert labels[0]["label_code"] == "quality_stability"
+    assert labels[2]["label_code"] == "material_finish"
+
+
+def test_extract_validated_llm_labels_service_fulfillment_allows_both():
+    """service_fulfillment is the only bidirectional code."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    review = {
+        "analysis_labels": '[{"code": "service_fulfillment", "polarity": "positive", "severity": "low", "confidence": 0.8}]'
+    }
+    labels = _extract_validated_llm_labels(review)
+    assert len(labels) == 1
+    assert labels[0]["label_code"] == "service_fulfillment"
+    assert labels[0]["label_polarity"] == "positive"
+
+
+def test_extract_validated_llm_labels_empty_input():
+    """None or empty analysis_labels returns empty list."""
+    from qbu_crawler.server.report_analytics import _extract_validated_llm_labels
+
+    assert _extract_validated_llm_labels({}) == []
+    assert _extract_validated_llm_labels({"analysis_labels": None}) == []
+    assert _extract_validated_llm_labels({"analysis_labels": "[]"}) == []

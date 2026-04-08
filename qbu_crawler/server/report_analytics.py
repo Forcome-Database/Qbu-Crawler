@@ -34,6 +34,25 @@ POSITIVE_LABELS = (
 
 TAXONOMY_VERSION = "v1"
 
+_POLARITY_WHITELIST = {
+    "quality_stability": {"negative"},
+    "structure_design": {"negative"},
+    "assembly_installation": {"negative"},
+    "material_finish": {"negative"},
+    "cleaning_maintenance": {"negative"},
+    "noise_power": {"negative"},
+    "packaging_shipping": {"negative"},
+    "service_fulfillment": {"negative", "positive"},  # bidirectional
+    "easy_to_use": {"positive"},
+    "solid_build": {"positive"},
+    "good_value": {"positive"},
+    "easy_to_clean": {"positive"},
+    "strong_performance": {"positive"},
+    "good_packaging": {"positive"},
+}
+
+_MAX_LABELS_PER_REVIEW = 3
+
 _NEGATIVE_RULES = {
     "quality_stability": {
         "severity": "high",
@@ -460,27 +479,75 @@ def _sanitize_hybrid_labels(candidate_labels, llm_labels):
     return sanitized
 
 
+def _extract_validated_llm_labels(review):
+    """Extract and validate LLM labels from review's analysis_labels field.
+
+    Maps LLM field names (code/polarity) to downstream names (label_code/label_polarity).
+    Filters by polarity whitelist and caps at _MAX_LABELS_PER_REVIEW by confidence.
+    """
+    raw = review.get("analysis_labels") or "[]"
+    if isinstance(raw, str):
+        try:
+            items = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    else:
+        items = raw
+
+    if not isinstance(items, list):
+        return []
+
+    validated = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code", "")
+        polarity = item.get("polarity", "")
+        allowed = _POLARITY_WHITELIST.get(code)
+        if not allowed or polarity not in allowed:
+            continue
+        validated.append({
+            "label_code": code,
+            "label_polarity": polarity,
+            "severity": item.get("severity", "low"),
+            "confidence": item.get("confidence", 0.5),
+            "source": "llm",
+            "taxonomy_version": TAXONOMY_VERSION,
+        })
+
+    validated.sort(key=lambda l: -l["confidence"])
+    return validated[:_MAX_LABELS_PER_REVIEW]
+
+
 def sync_review_labels(snapshot):
-    candidate_labels = {}
+    all_labels = {}
     for review in snapshot.get("reviews") or []:
         review_id = _review_id(review)
         if not review_id:
             continue
-        labels = classify_review_labels(review)
+
+        # Primary: validated LLM labels
+        labels = _extract_validated_llm_labels(review)
+
+        if not labels:
+            # Fallback: rule-based classification
+            labels = classify_review_labels(review)
+
         models.replace_review_issue_labels(review_id, labels)
-        candidate_labels[review_id] = labels
+        all_labels[review_id] = labels
 
-    if config.REPORT_LABEL_MODE == "hybrid" and candidate_labels:
-        sample_review_ids = [review_id for review_id, labels in candidate_labels.items() if labels][:20]
+    # Keep hybrid branch for future use (currently no-op)
+    if config.REPORT_LABEL_MODE == "hybrid" and all_labels:
+        sample_review_ids = [rid for rid, labels in all_labels.items() if labels][:20]
         normalized_labels = _maybe_normalize_labels_with_llm(
-            {review_id: candidate_labels[review_id] for review_id in sample_review_ids}
+            {rid: all_labels[rid] for rid in sample_review_ids}
         )
-        for review_id in sample_review_ids:
-            llm_labels = _sanitize_hybrid_labels(candidate_labels[review_id], normalized_labels.get(review_id))
+        for rid in sample_review_ids:
+            llm_labels = _sanitize_hybrid_labels(all_labels[rid], normalized_labels.get(rid))
             if llm_labels:
-                models.replace_review_issue_labels(review_id, llm_labels)
+                models.replace_review_issue_labels(rid, llm_labels)
 
-    return models.list_review_issue_labels(list(candidate_labels))
+    return models.list_review_issue_labels(list(all_labels))
 
 
 def _build_labeled_reviews(snapshot, synced_labels=None):
