@@ -5,6 +5,13 @@ from datetime import date, timedelta
 from qbu_crawler import config, models
 
 
+def _date_sort_key(date_str):
+    """Parse date string for chronological sorting. Unparseable → epoch."""
+    from qbu_crawler.server.report_common import _parse_date_flexible
+    parsed = _parse_date_flexible(date_str)
+    return parsed or date(1970, 1, 1)
+
+
 NEGATIVE_LABELS = (
     "quality_stability",
     "structure_design",
@@ -566,8 +573,9 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
         item["severity_display"] = {"high": "高", "medium": "中", "low": "低"}.get(item["severity"], item["severity"])
         item["affected_product_count"] = len(item.pop("affected_products"))
         dates = item.pop("dates")
-        item["first_seen"] = min(dates) if dates else None
-        item["last_seen"] = max(dates) if dates else None
+        sorted_dates = sorted(dates, key=_date_sort_key)
+        item["first_seen"] = sorted_dates[0] if sorted_dates else None
+        item["last_seen"] = sorted_dates[-1] if sorted_dates else None
     return items
 
 
@@ -782,8 +790,8 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "affected_product_count": len(data["products"]),
             "severity": max_sev,
             "severity_display": {"high": "高", "medium": "中", "low": "低"}.get(max_sev, max_sev),
-            "first_seen": min(dates) if dates else None,
-            "last_seen": max(dates) if dates else None,
+            "first_seen": sorted(dates, key=_date_sort_key)[0] if dates else None,
+            "last_seen": sorted(dates, key=_date_sort_key)[-1] if dates else None,
             "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
             "image_review_count": sum(1 for r in reviews if r.get("images")),
         })

@@ -655,6 +655,45 @@ def test_kpis_include_recently_published_count(analytics_db):
     assert kpis["recently_published_count"] == 1  # only the recent one
 
 
+def test_date_sort_key_relative_dates():
+    """Relative dates must sort chronologically, not lexicographically."""
+    from qbu_crawler.server.report_analytics import _date_sort_key
+    from datetime import date
+
+    key_5y = _date_sort_key("5 years ago")
+    key_2y = _date_sort_key("2 years ago")
+    assert key_5y < key_2y, "5 years ago should sort before 2 years ago"
+
+    key_bad = _date_sort_key("unknown")
+    assert key_bad == date(1970, 1, 1)
+
+
+def test_feature_clusters_first_last_seen_chronological():
+    """first_seen should be the earliest date, last_seen the most recent."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "5 years ago",
+            "analysis_features": '["quality issue"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 2,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2 years ago",
+            "analysis_features": '["quality issue"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+    cluster = clusters[0]
+    assert cluster["first_seen"] == "5 years ago"
+    assert cluster["last_seen"] == "2 years ago"
+
+
 def test_cluster_output_consistent_fields(analytics_db):
     """Both cluster code paths must produce the same set of required fields."""
     from qbu_crawler.server.report_analytics import _cluster_summary_items, _build_feature_clusters, _build_labeled_reviews
