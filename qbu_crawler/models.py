@@ -193,6 +193,7 @@ def init_db():
         "ALTER TABLE workflow_runs ADD COLUMN analytics_path TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN pdf_path TEXT",
         "ALTER TABLE notification_outbox ADD COLUMN delivered_at TIMESTAMP",
+        "ALTER TABLE reviews ADD COLUMN date_published_parsed TEXT",
     ]
     for sql in migrations:
         try:

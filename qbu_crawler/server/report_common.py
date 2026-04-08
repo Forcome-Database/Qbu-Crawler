@@ -278,8 +278,13 @@ def _compute_alert_level(normalized):
     return "green", "无新增高风险信号"
 
 
-def _parse_date_flexible(value: str | None):
-    """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago')."""
+def _parse_date_flexible(value: str | None, anchor_date=None):
+    """Parse a date string in various formats: ISO, MM/DD/YYYY, or relative ('X months ago').
+
+    For relative formats ('3 months ago'), *anchor_date* is used as the
+    reference point instead of ``date.today()``.  When *None* (default),
+    today's date is used, preserving backward compatibility.
+    """
     if not value:
         return None
     s = value.strip()
@@ -294,7 +299,7 @@ def _parse_date_flexible(value: str | None):
     except ValueError:
         pass
     # Relative format: "X days/months/years ago", "a month ago", "a year ago"
-    today = date.today()
+    today = anchor_date or date.today()
     m = re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, re.IGNORECASE)
     if m:
         amount = int(m.group(1)) if m.group(1) else 1

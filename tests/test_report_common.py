@@ -779,6 +779,58 @@ def test_alert_level_ignores_competitor_negative_delta():
     assert level == "green", f"Expected green but got {level} — competitor delta is inflating alert"
 
 
+# ---------------------------------------------------------------------------
+# Tests for _parse_date_flexible anchor_date parameter
+# ---------------------------------------------------------------------------
+
+
+def test_parse_date_flexible_anchor_date():
+    """Relative dates should use anchor_date, not today."""
+    from datetime import date
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    anchor = date(2026, 4, 1)
+    result = _parse_date_flexible("3 months ago", anchor_date=anchor)
+    assert result == date(2026, 1, 1)
+
+    # "a year ago" from anchor 2026-04-01
+    result2 = _parse_date_flexible("a year ago", anchor_date=anchor)
+    assert result2 == date(2025, 4, 1)
+
+    # Without anchor, uses today (existing behavior preserved)
+    result3 = _parse_date_flexible("2026-01-15")
+    assert result3 == date(2026, 1, 15)
+
+
+# ---------------------------------------------------------------------------
+# Tests for date_published_parsed DB migration
+# ---------------------------------------------------------------------------
+
+
+def test_date_published_parsed_column_exists(tmp_path, monkeypatch):
+    """After init_db, reviews table should have date_published_parsed column."""
+    from qbu_crawler import config, models
+    import sqlite3
+
+    db_file = str(tmp_path / "test_migration.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+
+    def _get_conn():
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(models, "get_conn", _get_conn)
+    models.init_db()
+
+    conn = _get_conn()
+    # Should not raise
+    conn.execute("SELECT date_published_parsed FROM reviews LIMIT 1")
+    conn.close()
+
+
 def test_health_index_sensitive_to_negative_spike():
     """Health index should drop significantly when negative rate spikes."""
     from qbu_crawler.server.report_common import compute_health_index
