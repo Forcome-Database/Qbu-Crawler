@@ -483,7 +483,7 @@ def test_normalize_injects_kpi_cards():
     }
     result = normalize_deep_report_analytics(analytics)
     assert "kpi_cards" in result
-    assert len(result["kpi_cards"]) == 6
+    assert len(result["kpi_cards"]) == 7
     labels = [c["label"] for c in result["kpi_cards"]]
     assert "健康指数" in labels
     assert "竞品差距指数" in labels
@@ -1329,3 +1329,24 @@ def test_issue_card_translation_warning():
     card = result["self"]["issue_cards"][0]
     assert card["translation_warning"] is True
     assert card["translated_rate_display"] == "25%"
+
+
+def test_kpi_cards_include_positive_rate():
+    """KPI cards should include a positive rate card."""
+    analytics = {
+        "mode": "baseline",
+        "kpis": {
+            "ingested_review_rows": 100,
+            "own_review_rows": 80,
+            "own_positive_review_rows": 50,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+        "report_copy": {"improvement_priorities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    labels = [c["label"] for c in result["kpi_cards"]]
+    assert "好评率" in labels
+    pos_card = next(c for c in result["kpi_cards"] if c["label"] == "好评率")
+    assert pos_card["value"] == "62.5%"

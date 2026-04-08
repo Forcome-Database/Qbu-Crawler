@@ -543,6 +543,10 @@ ol {
   margin-top: var(--sp-md);
 }
 
+.issue-card-compact {
+  padding: var(--sp-sm) var(--sp-lg);
+}
+
 /* Issue header — title left, badge right */
 .issue-header {
   display: flex;

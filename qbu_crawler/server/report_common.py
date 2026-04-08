@@ -807,6 +807,9 @@ def normalize_deep_report_analytics(analytics):
     kpis = normalized["kpis"]
     own_neg_rate = kpis.get("own_negative_review_rate") or 0
     kpis["own_negative_review_rate_display"] = f"{own_neg_rate * 100:.1f}%"
+    own_pos = kpis.get("own_positive_review_rows", 0)
+    own_total = kpis.get("own_review_rows", 0) or 1
+    positive_rate = own_pos / own_total
     kpi_cards = [
         {
             "label": "健康指数",
@@ -828,6 +831,14 @@ def normalize_deep_report_analytics(analytics):
             "delta_display": kpis.get("ingested_review_rows_delta_display", ""),
             "delta_class": "neutral",
             "tooltip": _resolve_tooltip("自有评论"),
+        },
+        {
+            "label": "好评率",
+            "value": f"{positive_rate * 100:.1f}%",
+            "delta_display": "",
+            "delta_class": "neutral",
+            "tooltip": "自有产品 ≥4 星评论占比（3 星为中评，不计入好评）",
+            "value_class": "severity-low" if positive_rate >= 0.7 else "",
         },
         {
             "label": "高风险产品",

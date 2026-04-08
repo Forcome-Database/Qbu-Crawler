@@ -1312,6 +1312,9 @@ def build_report_analytics(snapshot, synced_labels=None):
             "negative_review_rows": sum(
                 1 for review in snapshot_reviews if (review.get("rating") or 0) <= negative_threshold
             ),
+            "own_positive_review_rows": sum(
+                1 for r in own_reviews if (r.get("review", {}).get("rating") or 0) >= 4
+            ),
             "own_negative_review_rows": sum(
                 1 for r in own_reviews if (r.get("review", {}).get("rating") or 0) <= negative_threshold
             ),

@@ -146,8 +146,8 @@
         <p class="page-note">每个问题簇附带证据引用和改良建议，便于研发快速定位根因。</p>
       </div>
 
-      {% for item in analytics.self.issue_cards[:4] %}
-      <article class="issue-card">
+      {% for item in analytics.self.issue_cards %}
+      <article class="issue-card {% if loop.index > 4 %}issue-card-compact{% endif %}">
         {# Issue header: priority number + feature_display + severity badge #}
         <div class="issue-header">
           <h3><span class="text-accent fw-bold">#{{ loop.index }}</span>&nbsp;&nbsp;{{ item.feature_display }}</h3>
@@ -178,6 +178,7 @@
         </p>
         {% endif %}
 
+        {% if loop.index <= 4 %}
         {# Example review quotes (up to 2) #}
         {% if item.example_reviews %}
         <div class="quote-stack mt-md">
@@ -223,6 +224,7 @@
         <div class="recommendation-box">
           {{ item.recommendation }}
         </div>
+        {% endif %}
         {% endif %}
       </article>
       {% endfor %}
