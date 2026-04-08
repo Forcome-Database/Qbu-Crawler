@@ -327,7 +327,7 @@ def test_build_feature_clusters_basic():
             "ownership": "own",
             "sentiment": "negative",
             "analysis_features": '["手柄松动", "做工粗糙"]',
-            "analysis_labels": '[{"severity": "high"}]',
+            "analysis_labels": '[{"code": "structure_design", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
             "product_sku": "SKU1",
             "rating": 1,
             "date_published": "2026-01-01",
@@ -336,14 +336,14 @@ def test_build_feature_clusters_basic():
             "ownership": "own",
             "sentiment": "negative",
             "analysis_features": '["手柄松动"]',
-            "analysis_labels": '[{"severity": "medium"}]',
+            "analysis_labels": '[{"code": "structure_design", "polarity": "negative", "severity": "medium", "confidence": 0.85}]',
             "product_sku": "SKU2",
             "rating": 2,
             "date_published": "2026-02-01",
         },
     ]
     clusters = _build_feature_clusters(reviews, "own", "negative")
-    assert clusters[0]["feature_display"] == "手柄松动"
+    assert clusters[0]["label_code"] == "structure_design"
     assert clusters[0]["review_count"] == 2
     assert clusters[0]["affected_product_count"] == 2
     assert clusters[0]["severity"] == "high"
@@ -356,18 +356,27 @@ def test_build_feature_clusters_positive_polarity():
         {
             "ownership": "competitor",
             "sentiment": "positive",
-            "analysis_features": '["易操作", "外观好"]',
-            "analysis_labels": '[{"severity": "low"}]',
+            "analysis_features": '["易操作"]',
+            "analysis_labels": '[{"code": "easy_to_use", "polarity": "positive", "severity": "low", "confidence": 0.9}]',
             "product_sku": "COMP-1",
             "rating": 5,
             "date_published": "2026-03-01",
         },
+        {
+            "ownership": "competitor",
+            "sentiment": "positive",
+            "analysis_features": '["外观好"]',
+            "analysis_labels": '[{"code": "solid_build", "polarity": "positive", "severity": "low", "confidence": 0.88}]',
+            "product_sku": "COMP-1",
+            "rating": 5,
+            "date_published": "2026-03-02",
+        },
     ]
     clusters = _build_feature_clusters(reviews, "competitor", "positive")
     assert len(clusters) == 2
-    feature_names = [c["feature_display"] for c in clusters]
-    assert "易操作" in feature_names
-    assert "外观好" in feature_names
+    label_codes = [c["label_code"] for c in clusters]
+    assert "easy_to_use" in label_codes
+    assert "solid_build" in label_codes
 
 
 def test_build_feature_clusters_ignores_wrong_ownership():
@@ -721,3 +730,65 @@ def test_cluster_output_consistent_fields(analytics_db):
     for cluster in feature_clusters:
         missing = required_keys - set(cluster.keys())
         assert not missing, f"Feature cluster missing keys: {missing}"
+
+
+def test_feature_clusters_merge_by_label_code():
+    """Features with same primary label_code should merge into one cluster."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-01-01",
+            "analysis_features": '["broke after a week"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.95}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 2,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-02-01",
+            "analysis_features": '["lifespan too short"]',
+            "analysis_labels": '[{"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9}]',
+        },
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-03-01",
+            "analysis_features": '["metal shavings"]',
+            "analysis_labels": '[{"code": "material_finish", "polarity": "negative", "severity": "medium", "confidence": 0.88}]',
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+
+    # Should produce 2 clusters (quality_stability + material_finish), not 3
+    assert len(clusters) == 2
+
+    qs_cluster = next(c for c in clusters if c["label_code"] == "quality_stability")
+    assert qs_cluster["review_count"] == 2
+    assert len(qs_cluster["sub_features"]) == 2
+    assert any(sf["feature"] == "broke after a week" for sf in qs_cluster["sub_features"])
+    assert any(sf["feature"] == "lifespan too short" for sf in qs_cluster["sub_features"])
+    # Must have standard display name, not free-text
+    assert qs_cluster["label_display"] == "质量稳定性"
+
+    mf_cluster = next(c for c in clusters if c["label_code"] == "material_finish")
+    assert mf_cluster["review_count"] == 1
+
+
+def test_feature_clusters_uncategorized_fallback():
+    """Reviews with no matching-polarity labels go to _uncategorized."""
+    from qbu_crawler.server.report_analytics import _build_feature_clusters
+
+    reviews = [
+        {
+            "ownership": "own", "sentiment": "negative", "rating": 1,
+            "product_sku": "SKU1", "product_name": "P1",
+            "date_published": "2026-01-01",
+            "analysis_features": '["some issue"]',
+            "analysis_labels": '[]',  # no labels at all
+        },
+    ]
+    clusters = _build_feature_clusters(reviews, ownership="own", polarity="negative")
+    assert len(clusters) == 1
+    assert clusters[0]["label_code"] == "_uncategorized"

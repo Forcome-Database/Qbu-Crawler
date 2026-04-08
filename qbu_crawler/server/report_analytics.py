@@ -737,15 +737,25 @@ def _negative_opportunities(labeled_reviews):
 
 
 def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="negative"):
-    """Aggregate review_analysis.features into issue clusters.
+    """Aggregate reviews into clusters grouped by ``label_code``.
 
-    Uses the LLM-enriched ``analysis_features`` / ``analysis_labels`` fields
-    from the ``review_analysis`` table (joined via ``get_reviews_with_analysis``).
-    Falls back gracefully when fields are missing or empty.
+    Instead of clustering by free-text feature strings (which creates 100+
+    fragmented clusters), this groups reviews by their primary
+    ``analysis_labels[].code`` — a fixed 14-code taxonomy.  Original feature
+    strings are preserved in ``sub_features``.
+
+    Reviews whose labels have no ``code`` matching the target *polarity* fall
+    into the ``_uncategorized`` bucket.
     """
     from collections import defaultdict
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
 
-    clusters = defaultdict(lambda: {"reviews": [], "products": set(), "severities": []})
+    clusters = defaultdict(lambda: {
+        "reviews": [],
+        "products": set(),
+        "severities": [],
+        "sub_features": defaultdict(int),
+    })
 
     for r in reviews_with_analysis:
         if r.get("ownership") != ownership:
@@ -761,30 +771,64 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
         features = json.loads(raw_features) if isinstance(raw_features, str) else raw_features
         labels = json.loads(raw_labels) if isinstance(raw_labels, str) else raw_labels
 
-        max_severity = "low"
+        if not features:
+            continue
+
+        # Find primary label_code: highest-confidence label matching target polarity
+        primary_code = None
+        primary_severity = "low"
+        best_confidence = -1.0
         for label in labels:
-            sev = label.get("severity", "low") if isinstance(label, dict) else "low"
-            if _SEVERITY_SCORE.get(sev, 0) > _SEVERITY_SCORE.get(max_severity, 0):
-                max_severity = sev
+            if not isinstance(label, dict):
+                continue
+            code = label.get("code") or label.get("label_code")
+            lab_polarity = label.get("polarity") or label.get("label_polarity")
+            if not code:
+                continue
+            if lab_polarity and lab_polarity != polarity:
+                continue
+            confidence = label.get("confidence", 0.0)
+            if confidence > best_confidence:
+                best_confidence = confidence
+                primary_code = code
+                primary_severity = label.get("severity", "low")
+
+        # Fallback: if no polarity-matching label found, use _uncategorized
+        if not primary_code:
+            primary_code = "_uncategorized"
+            # Still extract max severity from all labels
+            for label in labels:
+                if isinstance(label, dict):
+                    sev = label.get("severity", "low")
+                    if _SEVERITY_SCORE.get(sev, 0) > _SEVERITY_SCORE.get(primary_severity, 0):
+                        primary_severity = sev
+
+        bucket = clusters[primary_code]
+        bucket["reviews"].append(r)
+        bucket["products"].add(r.get("product_sku") or r.get("product_name", ""))
+        bucket["severities"].append(primary_severity)
 
         for feat in features:
             feat = feat.strip() if isinstance(feat, str) else str(feat)
-            if not feat:
-                continue
-            clusters[feat]["reviews"].append(r)
-            clusters[feat]["products"].add(r.get("product_sku") or r.get("product_name", ""))
-            clusters[feat]["severities"].append(max_severity)
+            if feat:
+                bucket["sub_features"][feat] += 1
 
     result = []
-    for feat, data in clusters.items():
+    for code, data in clusters.items():
         reviews = data["reviews"]
         dates = [r.get("date_published") for r in reviews if r.get("date_published")]
         max_sev = max(data["severities"], key=lambda s: _SEVERITY_SCORE.get(s, 0), default="low")
+        display = _LABEL_DISPLAY.get(code, code)
+
+        sub_features = [
+            {"feature": feat, "count": cnt}
+            for feat, cnt in sorted(data["sub_features"].items(), key=lambda x: -x[1])
+        ]
 
         result.append({
-            "label_code": feat,
-            "feature_display": feat,
-            "label_display": feat,  # backward compat with label-based templates
+            "label_code": code,
+            "feature_display": display,
+            "label_display": display,
             "label_polarity": polarity,
             "review_count": len(reviews),
             "affected_product_count": len(data["products"]),
@@ -794,6 +838,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "last_seen": sorted(dates, key=_date_sort_key)[-1] if dates else None,
             "example_reviews": sorted(reviews, key=lambda r: r.get("rating", 5))[:3],
             "image_review_count": sum(1 for r in reviews if r.get("images")),
+            "sub_features": sub_features,
         })
 
     result.sort(key=lambda c: (
