@@ -235,3 +235,72 @@ def test_radar_uses_unified_dimensions():
         assert comp_val == 1.0
         # Own and competitor should differ (the whole point of this fix)
         assert radar["own_values"] != radar["competitor_values"]
+
+
+def test_sentiment_chart_uses_rating_title():
+    """Sentiment distribution chart titles should say '评分分布' not '情感分布'."""
+    analytics = {
+        "kpis": {"health_index": 65},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+        "competitor": {"top_positive_themes": []},
+        "_sentiment_distribution_own": {
+            "categories": ["Product A", "Product B"],
+            "positive": [5, 3],
+            "neutral": [1, 1],
+            "negative": [2, 4],
+        },
+        "_sentiment_distribution_competitor": {
+            "categories": ["Comp A", "Comp B"],
+            "positive": [8, 6],
+            "neutral": [2, 1],
+            "negative": [1, 3],
+        },
+    }
+    fragments = build_chart_html_fragments(analytics)
+    own_html = fragments.get("sentiment_distribution_own", "")
+    comp_html = fragments.get("sentiment_distribution_competitor", "")
+    # Title should contain "评分分布" not "情感分布"
+    assert "评分分布" in own_html
+    assert "情感分布" not in own_html
+    assert "评分分布" in comp_html
+    assert "情感分布" not in comp_html
+
+
+def test_stacked_bar_legend_uses_rating_labels():
+    """Stacked bar legend should use '好评(>=4星)' etc., not '正面/中性/负面'."""
+    html = _build_stacked_bar(
+        categories=["Product A", "Product B"],
+        positive=[50, 30],
+        neutral=[10, 5],
+        negative=[5, 15],
+        title="评分分布",
+    )
+    # Check the rating-based legend entries are present
+    assert "4" in html  # "好评(≥4星)" contains 4
+    assert "3" in html  # "中评(3星)" contains 3
+    assert "2" in html  # "差评(≤2星)" contains 2
+
+
+def test_compute_chart_data_has_sentiment_chart_metadata():
+    """_compute_chart_data should include _sentiment_chart_title and _sentiment_chart_legend."""
+    labeled = [
+        {"review": {"ownership": "own", "product_sku": "S1", "product_name": "P1"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                     "severity": "high", "confidence": 0.9}],
+         "images": [], "product": {}},
+    ]
+    snapshot = {"products": [
+        {"name": "P1", "sku": "S1", "ownership": "own", "price": 10, "rating": 3.5, "review_count": 10},
+    ]}
+    charts = _compute_chart_data(labeled, snapshot)
+    assert charts["_sentiment_chart_title"] == "评分分布"
+    assert "positive" in charts["_sentiment_chart_legend"]
+    assert "好评" in charts["_sentiment_chart_legend"]["positive"]
+
+
+def test_issue_cluster_footnote_in_tooltips():
+    """METRIC_TOOLTIPS should contain issue cluster footnote."""
+    from qbu_crawler.server.report_common import METRIC_TOOLTIPS
+
+    assert "问题聚类" in METRIC_TOOLTIPS
+    assert "AI 语义分析" in METRIC_TOOLTIPS["问题聚类"]
