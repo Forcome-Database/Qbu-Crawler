@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qbu-crawler"
-version = "0.1.27"
+version = "0.1.38"
 description = "多站点产品数据爬虫 — 基于 DrissionPage，支持 Bass Pro / Walton's / Meat Your Maker 等站点"
 readme = "README.md"
 license = {text = "MIT"}
@@ -43,6 +43,7 @@ dependencies = [
     "uvicorn[standard]>=0.23.0",
     "pyvirtualdisplay>=3.0; sys_platform == 'linux'",
     "tzdata>=2024.1; sys_platform == 'win32'",
+    "json-repair>=0.58.7",
 ]
 
 [project.optional-dependencies]
