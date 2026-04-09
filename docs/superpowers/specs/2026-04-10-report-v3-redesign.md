@@ -1029,8 +1029,13 @@ _SAFETY_KEYWORDS = {
     "金属屑", "断裂", "爆裂", "危险", "安全", "锈",
 }
 
-def compute_cluster_severity(cluster, reviews_in_cluster):
+def compute_cluster_severity(cluster, reviews_in_cluster, logical_date):
     """Compute severity at cluster level based on multiple objective factors.
+    
+    Args:
+        cluster: cluster dict with review_count, affected_product_count, review_dates
+        reviews_in_cluster: list of review dicts (for safety keyword scan)
+        logical_date: date object for recency calculation
     
     Factors:
     - Review volume (how widespread)
@@ -1043,8 +1048,16 @@ def compute_cluster_severity(cluster, reviews_in_cluster):
     review_count = cluster["review_count"]
     affected_products = cluster["affected_product_count"]
     
-    # Recency: proportion of reviews from last 90 days
-    recent_count = cluster.get("recent_90_day_count", 0)
+    # Recency: count reviews from last 90 days using review_dates list
+    recent_cutoff = logical_date - timedelta(days=90)
+    review_dates = cluster.get("review_dates", [])
+    recent_count = 0
+    for d in review_dates:
+        try:
+            if datetime.strptime(d, "%Y-%m-%d").date() >= recent_cutoff:
+                recent_count += 1
+        except (ValueError, TypeError):
+            pass
     recency_rate = recent_count / max(review_count, 1)
     
     # Safety signal: check any review text for safety keywords
@@ -1232,11 +1245,13 @@ def _select_insight_samples(snapshot, analytics):
     seen_ids = set()
     
     def add(review_list, limit):
+        added = 0
         for r in review_list:
             if r["id"] not in seen_ids and len(samples) < 20:
                 seen_ids.add(r["id"])
                 samples.append(r)
-                if len([s for s in samples if s["id"] in seen_ids]) >= limit:
+                added += 1
+                if added >= limit:
                     break
     
     risk_products = analytics.get("self", {}).get("risk_products", [])
@@ -1703,4 +1718,252 @@ Risk threshold changes because the V3 multi-factor formula produces different ra
 | Baseline alert reflects actual health | Generate baseline with high neg rate → non-green alert |
 | Excel has 4 sheets with correct structure | Open Excel, verify sheet names and columns |
 | HTML works offline | Disconnect internet, open HTML → charts still render (with offline mode) |
-| Email has correct mode prefix | Check email subject for [无变化] / [价格变动] / normal |
+| Email has correct mode prefix | Check email subject for [无变化] / [数据变化] / normal |
+| Review table paginated | Open HTML with 700+ reviews → verify pagination or lazy load |
+
+---
+
+## 14. Implementation Notes — Boundary Condition Fixes
+
+This section captures specific boundary fixes discovered during spec review. Each is tagged with the phase it belongs to.
+
+### 14.1 [Phase 1] `_SEVERITY_SCORE` and `_SEVERITY_DISPLAY` must include "critical"
+
+The new 4-level severity system introduces `"critical"`. The existing dicts must be updated:
+
+```python
+# report_analytics.py — replace existing _SEVERITY_SCORE
+_SEVERITY_SCORE = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+# report_common.py — add to existing _SEVERITY_DISPLAY
+_SEVERITY_DISPLAY = {"critical": "危急", "high": "高", "medium": "中", "low": "低"}
+
+# report_common.py — add to existing _PRIORITY_DISPLAY (if used for severity badges)
+# Ensure "critical" maps to a display string and CSS class
+```
+
+All call sites using `_SEVERITY_SCORE[severity]` (at least 11 in `report_analytics.py`) will accept the new key without code changes since they do dict lookups. The `_sanitize_hybrid_labels` validation at `report_analytics.py:467` must accept `"critical"` as a valid severity value.
+
+### 14.2 [Phase 1] Own positive review counts per dimension for gap analysis
+
+The new `compute_gap_analysis_v3` needs `own_positive_count` per dimension. Currently, `build_report_analytics()` only builds own-negative and competitor-positive clusters.
+
+Add to Phase 1 in `build_report_analytics()`:
+
+```python
+# Add after existing cluster building
+own_positive_clusters = _build_feature_clusters(
+    labeled_reviews, ownership="own", polarity="positive"
+)
+# Pass to gap analysis alongside existing data
+gap_analysis = compute_gap_analysis_v3(
+    labeled_reviews, own_total, competitor_total,
+    own_positive_clusters=own_positive_clusters,
+)
+```
+
+Until this is implemented, `own_positive_count` defaults to 0 per dimension, and `catch_up_gap = comp_pos_rate - 0 = comp_pos_rate`. This is the same as the validation table in Section 6.3.3, so the formula works correctly in this degenerate case — the "追赶" gap captures dimensions where competitors are strong regardless of our positive rate.
+
+### 14.3 [Phase 1] Health index sentinel value when own_reviews == 0
+
+When `own_reviews == 0`, `compute_health_index_v3` returns 50.0 as a neutral sentinel. This must NOT trigger yellow alert.
+
+Fix in `compute_alert_level_v3`:
+
+```python
+def compute_alert_level_v3(analytics, mode):
+    health = analytics["kpis"].get("health_index", 100)
+    own_reviews = analytics["kpis"].get("own_review_rows", 0)
+    
+    # Guard: no own data → no alert
+    if own_reviews == 0:
+        return ("green", "自有评论数据不足，暂不预警")
+    
+    # ... rest of alert logic ...
+```
+
+### 14.4 [Phase 1] Float precision in price change detection
+
+Replace direct `!=` comparison with tolerance-based comparison:
+
+```python
+# In detect_snapshot_changes:
+def _price_changed(a, b):
+    """Compare prices with tolerance for float precision."""
+    if a is None and b is None:
+        return False
+    if a is None or b is None:
+        return True
+    return abs(float(a) - float(b)) >= 0.01
+    
+# Use: if _price_changed(product["price"], prev["price"]):
+```
+
+### 14.5 [Phase 1] KPI delta computation expansion
+
+Current `_compute_kpi_deltas` only covers 4 fields. Expand to include:
+
+```python
+_DELTA_FIELDS = [
+    "negative_review_rows",
+    "own_negative_review_rows",
+    "ingested_review_rows",
+    "product_count",
+    "health_index",              # NEW
+    "recently_published_count",  # NEW
+]
+```
+
+### 14.6 [Phase 1] KPI card "竞品领先维度" data source
+
+Add post-processing in `normalize_deep_report_analytics`:
+
+```python
+gap_analysis = normalized.get("competitor", {}).get("gap_analysis", [])
+kpis["gap_fix_count"] = sum(1 for g in gap_analysis if g["gap_type"] == "止血")
+kpis["gap_catch_count"] = sum(1 for g in gap_analysis if g["gap_type"] == "追赶")
+```
+
+Template references: `{{ kpis.gap_fix_count }}需修复 / {{ kpis.gap_catch_count }}需追赶`
+
+### 14.7 [Phase 1] Risk score early return for neg_count == 0
+
+Restructure `compute_risk_score_v3` to make the boundary explicit:
+
+```python
+    negative = [r for r in product_reviews if r["rating"] <= config.NEGATIVE_THRESHOLD]
+    neg_count = len(negative)
+    
+    if neg_count == 0:
+        return 0.0  # No negative reviews → zero risk (explicit, not implicit via all-zero factors)
+    
+    # ... compute factors only when neg_count > 0 ...
+```
+
+### 14.8 [Phase 3b] Change Report email subject should be dynamic
+
+Replace hardcoded `[价格变动]` with dynamic prefix:
+
+```python
+def _change_report_subject_prefix(changes):
+    types = []
+    if changes.get("price_changes"):
+        types.append("价格")
+    if changes.get("stock_changes"):
+        types.append("库存")
+    if changes.get("rating_changes"):
+        types.append("评分")
+    if changes.get("removed_products") or changes.get("new_products"):
+        types.append("产品")
+    
+    if len(types) == 1:
+        return f"[{types[0]}变动]"
+    return "[数据变化]"
+```
+
+### 14.9 [Phase 3b] "Improving" cluster detection must handle relative dates
+
+When `has_estimated_dates()` returns True (>30% reviews parse to same MM-DD as logical_date), the "improving" detection in `compute_cluster_changes` should use `scraped_at` as fallback:
+
+```python
+# In the improving detection loop:
+if has_estimated:
+    # Use scraped_at instead of date_published_parsed
+    last_scraped = max(r.get("scraped_at", "") for r in reviews_in_cluster)
+    # ... compare against logical_date ...
+```
+
+### 14.10 [Phase 3a] Review detail table pagination
+
+Limit the inline HTML review table to 100 rows with pagination:
+
+```html
+<div id="review-table-container" data-page-size="100" data-total="{{ reviews|length }}">
+  <!-- First 100 rows rendered server-side -->
+  {% for r in reviews[:100] %}
+  <tr>...</tr>
+  {% endfor %}
+</div>
+<button id="load-more-reviews" data-remaining="{{ reviews|length - 100 }}">
+  加载更多 (还有 {{ reviews|length - 100 }} 条)
+</button>
+```
+
+The remaining reviews are embedded as a hidden `<script type="application/json">` block and rendered client-side on "加载更多" click. This keeps initial page load fast while making all data accessible.
+
+### 14.11 [Phase 3a] Chart.js CDN offline fallback
+
+For the default CDN mode, add a runtime fallback:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4" 
+        onerror="document.getElementById('chart-fallback-msg').style.display='block'">
+</script>
+<div id="chart-fallback-msg" style="display:none" class="alert-signal alert-yellow">
+  ⚠️ 图表库加载失败（需要网络连接）。数据表格仍可正常查看。
+</div>
+```
+
+When `REPORT_OFFLINE_MODE=true`, the entire Chart.js bundle is inlined and this fallback is unnecessary.
+
+### 14.12 [Phase 3b] Partial scrape failure detection
+
+Add edge case #21 to the change detection:
+
+```python
+def detect_snapshot_changes(current_snapshot, previous_snapshot, task_expected_skus=None):
+    # ... existing logic ...
+    
+    # Distinguish scrape failure from product delisting
+    if task_expected_skus:
+        for sku in task_expected_skus:
+            if sku not in current_skus and sku in prev_by_sku:
+                # Expected product missing → likely scrape failure, not delisting
+                changes["scrape_failures"].append(prev_by_sku[sku])
+                # Remove from removed_products to avoid false alarm
+                changes["removed_products"] = [
+                    p for p in changes["removed_products"] if p["sku"] != sku
+                ]
+```
+
+Where `task_expected_skus` is derived from the workflow run's task params (CSV URL list).
+
+### 14.13 [Phase 3a] Empty-state text for "What Changed" tab
+
+When all new reviews are positive and no issues escalated:
+
+```html
+{% if not changes.escalated and not changes.new and new_negative_count == 0 %}
+<div class="empty-state">
+  ✅ 本期新增评论均为正面反馈，未发现新增问题。
+</div>
+{% endif %}
+
+{% if not changes.escalated %}
+<div class="empty-state-muted">暂无问题升级。</div>
+{% endif %}
+```
+
+### 14.14 [Phase 3b] `generate_full_report_from_snapshot` return contract
+
+Rename and update the function signature:
+
+```python
+def generate_report_from_snapshot(snapshot, previous_analytics=None, 
+                                   previous_snapshot=None, send_email=True):
+    """Generate report for any mode (full/change/quiet).
+    
+    Returns dict with:
+        mode: "full" | "change" | "quiet"
+        status: "completed" | "completed_no_change"  # backward compat
+        run_id: int
+        products_count: int
+        reviews_count: int
+        html_path: str | None    # always present for full/change; quiet if non-trivial
+        excel_path: str | None   # only for full mode
+        analytics_path: str | None  # only for full mode
+        email: {success: bool, error: str | None, recipients: list}
+    """
+```
+
+The old `generate_full_report_from_snapshot` is kept as a thin wrapper calling the new function for backward compatibility during Phase 3b transition.
