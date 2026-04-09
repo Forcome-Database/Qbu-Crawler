@@ -1967,3 +1967,301 @@ def generate_report_from_snapshot(snapshot, previous_analytics=None,
 ```
 
 The old `generate_full_report_from_snapshot` is kept as a thin wrapper calling the new function for backward compatibility during Phase 3b transition.
+
+---
+
+## 15. Holistic Review Fixes — Real Scenario Alignment
+
+This section addresses findings from a final review that traced the spec against real usage scenarios. Items are organized by the architectural question they answer.
+
+### 15.1 Core Architecture Issue: Incremental Snapshot vs Full Corpus
+
+**Problem**: Several V3 features need access to the full historical review corpus, not just the incremental snapshot (reviews from current run window). Specifically:
+
+- `_select_insight_samples()` (Section 7.2.2) draws from `snapshot.reviews`. On a day with 1 new review, the LLM gets 1 review, not 15-25.
+- `analyze_cluster_deep()` (Section 7.3.3) receives `cluster_reviews` but the data source is never specified.
+- `compute_cluster_changes()` (Section 5.2.2) compares current vs previous clusters but doesn't fetch the underlying reviews.
+
+**Fix**: Add a `query_cluster_reviews()` function to `models.py`:
+
+```python
+def query_cluster_reviews(label_code, ownership=None, limit=50):
+    """Fetch reviews belonging to a given issue cluster from the full corpus.
+    
+    Joins reviews + products + review_issue_labels to find all reviews
+    tagged with the given label_code.
+    
+    Args:
+        label_code: e.g., "quality_stability"
+        ownership: "own" | "competitor" | None (both)
+        limit: max reviews to return (newest first by scraped_at)
+    
+    Returns: list of review dicts with product metadata and analysis fields.
+    """
+    conn = models.get_conn()
+    try:
+        query = """
+            SELECT r.id, r.headline, r.body, r.rating, r.author,
+                   r.date_published_parsed, r.images, r.scraped_at,
+                   r.headline_cn, r.body_cn, r.translate_status,
+                   p.name AS product_name, p.sku AS product_sku,
+                   p.ownership, p.site,
+                   ra.sentiment, ra.features AS analysis_features,
+                   ra.labels AS analysis_labels,
+                   ra.insight_cn AS analysis_insight_cn,
+                   ra.impact_category
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            JOIN review_issue_labels ril ON ril.review_id = r.id
+            LEFT JOIN review_analysis ra ON ra.review_id = r.id
+            WHERE ril.label_code = ?
+        """
+        params = [label_code]
+        if ownership:
+            query += " AND p.ownership = ?"
+            params.append(ownership)
+        query += " ORDER BY r.scraped_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+```
+
+**Update Section 7.2.2**: `_select_insight_samples` should draw from the full corpus, not the snapshot:
+
+```python
+def _select_insight_samples(snapshot, analytics):
+    # Use full corpus for sample selection, not snapshot.reviews
+    all_own_reviews = models.query_reviews(ownership="own", limit=500)
+    all_comp_reviews = models.query_reviews(ownership="competitor", limit=200)
+    reviews = all_own_reviews + all_comp_reviews
+    # ... rest of selection logic unchanged ...
+```
+
+**Update Section 7.3.3**: `analyze_cluster_deep` receives reviews from `query_cluster_reviews`:
+
+```python
+# In the report generation pipeline:
+for cluster in top_clusters[:config.REPORT_MAX_CLUSTER_ANALYSIS]:
+    cluster_reviews = models.query_cluster_reviews(
+        label_code=cluster["label_code"],
+        ownership="own",
+        limit=30,
+    )
+    cluster["deep_analysis"] = analyze_cluster_deep(cluster, cluster_reviews)
+```
+
+### 15.2 Previous Run Loading Must Skip Non-Full Runs
+
+**Problem**: Quiet Day and Change Report modes set `analytics_path=None` in `workflow_runs`. If the next run's `load_previous_report_context()` finds a quiet-day run as "most recent completed," it gets `None` for analytics and can't compute deltas or carry forward outstanding issues.
+
+**Fix**: The query must find the most recent run with analytics, not just any completed run:
+
+```python
+def load_previous_report_context(current_run_id):
+    prev_run = models.get_previous_completed_run(
+        current_run_id,
+        require_analytics=True,  # NEW: skip runs where analytics_path IS NULL
+    )
+    # ...
+
+# In models.py:
+def get_previous_completed_run(current_run_id, require_analytics=False):
+    query = """
+        SELECT * FROM workflow_runs 
+        WHERE status = 'completed' AND id < ?
+    """
+    if require_analytics:
+        query += " AND analytics_path IS NOT NULL"
+    query += " ORDER BY id DESC LIMIT 1"
+    # ...
+```
+
+### 15.3 Baseline Mode: "What Changed" Tab Suppression
+
+**Problem**: On Day 1, `compute_cluster_changes(current, previous=None)` returns all clusters as "new." The reader sees a wall of "首次出现" items that aren't meaningful changes.
+
+**Fix**: In the template, hide the "What Changed" tab entirely when `mode == "baseline"`:
+
+```html
+{% if mode != "baseline" %}
+<button data-tab="changes">今日变化</button>
+{% endif %}
+```
+
+Add the Tab navigation section spec (Section 5.2) conditional:
+
+> **Visibility**: The "What Changed" tab is hidden in baseline mode. In baseline reports, the Overview tab displays a one-time notice: "首次基线采集，历史数据已建立，环比分析将在后续报告中启用。"
+
+### 15.4 Quiet Day Report Content Structure
+
+**Problem**: The spec describes three report modes (Section 4.1) and defines tabs for the Full Report (Section 5.1-5.6), but never defines the content structure for Quiet Day and Change Report.
+
+**Fix**: Define Quiet Day and Change Report content as subsets of Full Report:
+
+**Quiet Day Report** (`quiet_day_report.html.j2`) — single-page, no tabs:
+
+```
+┌─────────────────────────────────────────────────┐
+│ 产品监控简报 — {date}                            │
+│ 状态：无新评论。上次采集：{snapshot_at}            │
+├─────────────────────────────────────────────────┤
+│ 当前健康快照                                     │
+│ [KPI Cards: 健康指数, 差评率, 样本量, 高风险产品]  │
+│ (从 previous_analytics.kpis 读取, 无 delta)      │
+├─────────────────────────────────────────────────┤
+│ 未解决问题                                       │
+│ · {cluster.label_display} ({review_count}条)     │
+│   严重度: {severity} | 涉及: {products}          │
+│ · ...                                           │
+│ (从 previous_analytics.self.top_negative_clusters │
+│  读取, 只展示 severity >= medium 的 cluster)      │
+├─────────────────────────────────────────────────┤
+│ 翻译进度                                        │
+│ 已翻译 {done}/{total} ({pct}%)                   │
+│ (从 models.get_translate_stats() 实时查询)        │
+├─────────────────────────────────────────────────┤
+│ 📎 上期完整分析报告: {link to last full report}    │
+└─────────────────────────────────────────────────┘
+```
+
+**Change Report** — reuses `daily_report_v3.html.j2` with conditional tabs:
+
+- Tabs shown: 总览, 今日变化 (showing price/stock/rating changes only)
+- Tabs hidden: 问题诊断, 产品排行, 竞品对标, 全景数据
+- KPI cards: from `previous_analytics.kpis`, no delta
+- "今日变化" tab: only price/stock/rating changes, no review-related sections
+
+### 15.5 Quiet Day Email Fatigue: Adaptive Frequency
+
+**Problem**: After several consecutive quiet days, daily "[无变化]" emails become noise and get ignored.
+
+**Fix**: Add adaptive email frequency for quiet periods:
+
+```python
+def should_send_quiet_email(current_run_id):
+    """Determine whether to send a quiet-day email or skip.
+    
+    Rules:
+    - First quiet day after a full report: always send
+    - Days 2-3: send (keeps team aware)
+    - Days 4-6: skip (reduce noise)
+    - Day 7: send as "[周汇总]" with week summary
+    - Days 8+: repeat 7-day cycle
+    """
+    consecutive = count_consecutive_quiet_runs(current_run_id)
+    
+    if consecutive <= 3:
+        return True, None  # send, normal subject
+    if consecutive % 7 == 0:
+        return True, "weekly_digest"  # send as weekly summary
+    return False, None  # skip
+```
+
+When email is skipped, the HTML report is still generated and saved (for archival), but no email is sent. When the weekly digest triggers, the email includes a summary of any price/stock changes from the past 7 days.
+
+Add to config: `REPORT_QUIET_EMAIL_DAYS=3` (send daily for first N quiet days, then weekly).
+
+### 15.6 Overfit Removal: Drop Unused LLM Fields
+
+**Problem**: `usage_context` and `purchase_intent_impact` are added to the translation prompt and DB schema but have zero consumers in any report section, chart, or KPI.
+
+**Fix**: Remove from V3 scope. Keep only `impact_category` (consumed by risk score safety multiplier) and `failure_mode` (consumed by cluster deep analysis sub-clustering).
+
+Update Section 7.1.1 — new output fields reduced from 4 to 2:
+
+```python
+# Keep:
+"impact_category": "safety | functional | durability | cosmetic | service"
+"failure_mode": "具体失效模式描述"
+
+# Deferred to V4 (no current consumer):
+# "usage_context": "seasonal_hunter | commercial | hobbyist | first_time | gift"
+# "purchase_intent_impact": "would_repurchase | neutral | would_not_repurchase | would_warn_others"
+```
+
+DB schema change (Section 7.1.3) reduced to 2 ALTER TABLE statements.
+
+### 15.7 Overfit Removal: Drop Dark Mode and Review Table Pagination
+
+**Dark mode**: Removed from Section 4.2.3 interactive features. The ~300 lines JS budget focuses on: tab navigation, collapsible cards, lightbox, table sort/filter, sticky KPI bar, print-to-PDF.
+
+**Review table pagination**: Removed from Section 14.10. At the scale of ~1250 reviews after a year, a static HTML table renders instantly. If scale grows significantly, pagination can be added later.
+
+### 15.8 Data Freshness Timestamp
+
+**Problem**: Reader cannot tell how old the data is when they read the email at 9 AM.
+
+**Fix**: Add to the report hero section (Section 5.1.1):
+
+```
+Run #3 | 2026-04-10 | 增量模式 | 数据截至 06:15
+```
+
+And in the email header:
+
+```html
+<span class="freshness">数据截至 {{ snapshot_at.strftime('%H:%M') }}</span>
+```
+
+Source: `snapshot["snapshot_at"]` (already available in the snapshot dict).
+
+### 15.9 Report Generation Failure Notification
+
+**Problem**: If the report pipeline crashes, the team gets silence — worse than a quiet-day email.
+
+**Fix**: Add error handling in the workflow worker that sends a minimal failure notification:
+
+```python
+# In workflow worker, wrapping generate_report_from_snapshot:
+try:
+    result = generate_report_from_snapshot(...)
+except Exception as e:
+    logger.exception("Report generation failed")
+    send_email(
+        recipients=load_email_recipients(...),
+        subject=f"[报告失败] 产品监控 {logical_date}",
+        body_text=f"报告生成失败: {str(e)[:200]}\n请检查服务日志。",
+    )
+    raise
+```
+
+This reuses the existing `send_email()` function. No new template needed — plain text is sufficient for error alerts.
+
+### 15.10 `report_pdf.py` Removal Phase Clarification
+
+**Fix**: Update Section 10.3 to clearly mark phase:
+
+> `report_pdf.py` — Removed in **Phase 4 only**. During Phases 1-3, the file is retained. Phase 3a generates V3 HTML alongside V2 PDF (parallel output). Phase 4 removes the PDF path and the Playwright dependency.
+
+### 15.11 `report_mode` Write Timing
+
+**Fix**: `report_mode` is written to `workflow_runs` immediately after `determine_report_mode()` returns, before any report generation begins:
+
+```python
+mode, context = determine_report_mode(snapshot, prev_snapshot, prev_analytics)
+models.update_workflow_run(run_id, report_mode=mode)
+# ... then generate report based on mode ...
+```
+
+### 15.12 Email-to-Review Deep Links
+
+**Fix**: Add `id="review-{review_id}"` anchors to review rows in the HTML report. In the email "新差评摘要" section, each one-liner links to the corresponding anchor:
+
+```html
+<!-- In email template -->
+<a href="{{ report_url }}#review-{{ review.id }}">
+  [Sausage Stuffer] ★1 "金属刮屑严重..." — Tom126
+</a>
+```
+
+This requires `REPORT_HTML_PUBLIC_URL` to be configured. When not configured, links are omitted.
+
+### 15.13 Product Catalog Change Management
+
+The spec covers catalog changes from the snapshot-diff perspective (new/removed products). For completeness:
+
+- **Adding products**: Managed via CSV files in the OpenClaw workspace. New products appear automatically in the next scrape. Their first appearance triggers edge case #9 ("新监控" badge).
+- **Removing products**: A product removed from the CSV stops being scraped. It remains in the DB and historical reports. In `detect_snapshot_changes`, it appears as a `removed_product`. Historical data is never deleted — trend charts simply stop having new data points.
+- **Gap analysis impact**: Removed competitor products reduce `competitor_total`, which shifts rate-based metrics. This is mathematically correct — the competitive landscape narrowed.
