@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Date**: 2026-04-10
-> **Scope**: report_*.py, translator.py, report_templates/*, config.py
+> **Scope**: report_*.py, translator.py, models.py, config.py, report_templates/*
 > **Predecessor**: 2026-04-06-report-intelligence-redesign-v2-design.md
 
 ---
@@ -157,8 +157,14 @@ def detect_snapshot_changes(current_snapshot, previous_snapshot):
         stock_changes: [{sku, name, old, new}]
         rating_changes: [{sku, name, old, new}]
         review_count_changes: [{sku, name, old, new}]  # site-reported total
+        new_products: [product_dict]
+        removed_products: [product_dict]
     """
-    changes = {"has_changes": False, "price_changes": [], ...}
+    changes = {
+        "has_changes": False,
+        "price_changes": [], "stock_changes": [], "rating_changes": [],
+        "review_count_changes": [], "new_products": [], "removed_products": [],
+    }
     
     prev_by_sku = {p["sku"]: p for p in previous_snapshot.get("products", [])}
     
@@ -214,10 +220,18 @@ def load_previous_report_context(current_run_id):
     if not prev_run or not prev_run.get("analytics_path"):
         return None, None
     
-    analytics = json.loads(Path(prev_run["analytics_path"]).read_text())
+    try:
+        analytics = json.loads(Path(prev_run["analytics_path"]).read_text())
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("Failed to load previous analytics: %s", e)
+        return None, None
+    
     snapshot = None
     if prev_run.get("snapshot_path"):
-        snapshot = json.loads(Path(prev_run["snapshot_path"]).read_text())
+        try:
+            snapshot = json.loads(Path(prev_run["snapshot_path"]).read_text())
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load previous snapshot: %s", e)
     
     return analytics, snapshot
 ```
@@ -450,8 +464,18 @@ Computed by diffing current clusters against previous analytics clusters:
 - Improving: `review_count` unchanged for >= 7 days → "连续 N 天无新差评"
 
 ```python
-def compute_cluster_changes(current_clusters, previous_clusters):
+def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
+    """Diff two cluster lists to detect new, escalated, improving, and de-escalated clusters.
+    
+    Args:
+        current_clusters: list of cluster dicts from current analytics
+        previous_clusters: list of cluster dicts from previous analytics (may be None)
+        logical_date: date object for "today"
+    
+    Returns dict with keys: new, escalated, improving, de_escalated (each a list of change dicts)
+    """
     prev_by_code = {c["label_code"]: c for c in (previous_clusters or [])}
+    sev_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
     
     changes = {"new": [], "escalated": [], "improving": [], "de_escalated": []}
     
@@ -465,24 +489,49 @@ def compute_cluster_changes(current_clusters, previous_clusters):
                 "review_count": cluster["review_count"],
                 "affected_products": cluster.get("affected_products", []),
             })
-        else:
-            delta = cluster["review_count"] - prev["review_count"]
-            if delta > 0:
-                changes["escalated"].append({
-                    "label_display": cluster["label_display"],
-                    "delta": delta,
-                    "old_count": prev["review_count"],
-                    "new_count": cluster["review_count"],
-                    "severity": cluster["severity"],
-                })
-            
-            # Check severity transitions
-            sev_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-            if sev_order.get(cluster["severity"], 0) > sev_order.get(prev.get("severity"), 0):
-                changes["de_escalated" if delta <= 0 else "escalated"][-1]["severity_changed"] = True
+            continue
+        
+        delta = cluster["review_count"] - prev["review_count"]
+        cur_sev = sev_order.get(cluster["severity"], 0)
+        prev_sev = sev_order.get(prev.get("severity"), 0)
+        
+        if delta > 0:
+            entry = {
+                "label_display": cluster["label_display"],
+                "delta": delta,
+                "old_count": prev["review_count"],
+                "new_count": cluster["review_count"],
+                "severity": cluster["severity"],
+                "severity_changed": cur_sev > prev_sev,
+            }
+            changes["escalated"].append(entry)
+        elif cur_sev < prev_sev:
+            # Severity decreased without new reviews
+            changes["de_escalated"].append({
+                "label_display": cluster["label_display"],
+                "old_severity": prev.get("severity"),
+                "new_severity": cluster["severity"],
+            })
     
-    # Clusters in previous but unchanged for 7+ days
-    # (implementation: check last_seen date vs logical_date)
+    # Improving: clusters in previous where last_seen is >7 days before logical_date
+    for cluster in current_clusters:
+        code = cluster["label_code"]
+        prev = prev_by_code.get(code)
+        if prev is None:
+            continue
+        last_seen = cluster.get("last_seen")
+        if not last_seen:
+            continue
+        try:
+            last_seen_date = datetime.strptime(last_seen, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        days_quiet = (logical_date - last_seen_date).days
+        if days_quiet >= 7 and cluster["review_count"] == prev["review_count"]:
+            changes["improving"].append({
+                "label_display": cluster["label_display"],
+                "days_quiet": days_quiet,
+            })
     
     return changes
 ```
@@ -758,10 +807,22 @@ Problems:
 #### 6.2.2 New Formula
 
 ```python
-def compute_risk_score_v3(product_reviews, product_info):
+# Updated severity score dict (now includes "critical" level)
+_SEVERITY_SCORE_V3 = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+def compute_risk_score_v3(product_reviews, product_info, logical_date):
     """Multi-factor risk score combining rate, severity, evidence, recency, and volume.
     
+    Args:
+        product_reviews: list of review dicts for this product (all ratings)
+        product_info: dict with product metadata (sku, name, etc.)
+        logical_date: date object for recency calculation
+    
     Each factor normalized to 0-1, weighted, then scaled to 0-100.
+    
+    Note on impact_category: This field is added in Phase 2 (translator v2 prompt).
+    When absent (None), the safety multiplier is skipped — the formula degrades
+    gracefully to a 4-factor version without the safety bonus.
     """
     total = len(product_reviews)
     if total == 0:
@@ -781,15 +842,19 @@ def compute_risk_score_v3(product_reviews, product_info):
         for r in negative:
             labels = r.get("labels", [])
             if labels:
-                max_sev = max(_SEVERITY_SCORE.get(l.get("severity", "low"), 1) for l in labels)
+                max_sev = max(
+                    _SEVERITY_SCORE_V3.get(l.get("severity", "low"), 1) 
+                    for l in labels
+                )
             else:
                 max_sev = 2 if r["rating"] <= 1 else 1  # Default: 1-star=medium, 2-star=low
             
-            # Safety multiplier: if impact_category is "safety", multiply by 1.5
-            if r.get("impact_category") == "safety":
-                max_sev = min(max_sev * 1.5, 3)
+            # Safety multiplier (Phase 2 field — gracefully ignored when absent)
+            impact_cat = r.get("impact_category")  # None for v1-analyzed reviews
+            if impact_cat == "safety":
+                max_sev = min(max_sev * 1.5, 4)  # Max capped at critical (4)
             
-            severity_scores.append(max_sev / 3.0)  # Normalize to 0-1
+            severity_scores.append(max_sev / 4.0)  # Normalize to 0-1 (max=critical=4)
         severity_avg = sum(severity_scores) / len(severity_scores)
     else:
         severity_avg = 0.0  # Weight: 25%
@@ -803,8 +868,16 @@ def compute_risk_score_v3(product_reviews, product_info):
     # Are negative reviews concentrated in recent period?
     if neg_count > 0:
         recent_cutoff = logical_date - timedelta(days=90)
-        recent_neg = sum(1 for r in negative 
-                        if parse_date(r.get("date_published_parsed")) >= recent_cutoff)
+        recent_neg = 0
+        for r in negative:
+            date_str = r.get("date_published_parsed")
+            if date_str:
+                try:
+                    review_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    if review_date >= recent_cutoff:
+                        recent_neg += 1
+                except (ValueError, TypeError):
+                    pass
         recency = recent_neg / neg_count
     else:
         recency = 0.0  # Weight: 15%
@@ -921,6 +994,20 @@ def compute_gap_analysis_v3(labeled_reviews, own_total, competitor_total):
     gaps.sort(key=lambda g: -g["priority_score"])
     return gaps
 ```
+
+#### 6.3.3 Validation with Current Data
+
+Using actual review counts: own_total=141, competitor_total=569.
+
+| Dimension | comp_pos | own_neg | own_pos | comp_pos_rate | own_neg_rate | own_pos_rate | fix_urgency | catch_up_gap | priority_score | gap_type | priority |
+|-----------|---------|---------|---------|--------------|-------------|-------------|------------|-------------|---------------|----------|----------|
+| 做工与质量 | 108 | 62 | 0 | 19.0% | 44.0% | 0% | 44 | 19 | 0.7×0.44+0.3×0.19=**37** | 止血 | high |
+| 性能与动力 | 318 | 0 | 0 | 55.9% | 0% | 0% | 0 | 56 | 0.7×0+0.3×0.56=**17** | 追赶 | medium |
+| 安装与使用 | 43 | 1 | 0 | 7.6% | 0.7% | 0% | 1 | 8 | 0.7×0.01+0.3×0.08=**3** | 监控 | low |
+| 性价比高 | 29 | 0 | 0 | 5.1% | 0% | 0% | 0 | 5 | 0.7×0+0.3×0.05=**2** | 监控 | low |
+| 包装运输 | 8 | 4 | 0 | 1.4% | 2.8% | 0% | 3 | 1 | 0.7×0.03+0.3×0.01=**2** | 监控 | low |
+
+Key improvement vs V2: "做工与质量" (37, high) is clearly separated from "性能与动力" (17, medium), reflecting that the former needs urgent fixing while the latter is an aspirational gap.
 
 ### 6.4 Severity → Cluster-Level Computed Severity
 
@@ -1365,7 +1452,12 @@ At gpt-4o-mini pricing (~$0.15/1M input, $0.60/1M output): ~$0.005/report — ne
 | 12 | MAX_REVIEWS truncation | `review_count > MAX_REVIEWS` | Full | Footer note: "已采集 {ingested}/{site_total} 条（最近评论优先）" |
 | 13 | Single product only | `product_count == 1` | Full | Competitive tab hidden; scatter chart hidden; radar hidden |
 | 14 | Relative dates dominate | `>30%` reviews parse to same MM-DD | Full | Footnote on timeline: "部分日期为估算值" |
-| 15 | 3 consecutive quiet days | Counter in workflow_runs or notification_outbox | Quiet | After 3 quiet days, change email subject: "[连续N天无变化] ..." |
+| 15 | 3 consecutive quiet days | Query `workflow_runs WHERE report_mode='quiet' ORDER BY logical_date DESC`; count consecutive | Quiet | After 3 quiet days, change email subject: "[连续N天无变化] ..." |
+| 16 | Previous analytics file missing from disk | `FileNotFoundError` in `load_previous_report_context()` | Any | Return `None, None`; suppress deltas/changes; log warning |
+| 17 | All own products are zero (own_product_count=0) | `own_product_count == 0` | Full | Health index = 50 (neutral); "自有差评率" card shows "N/A"; hide own-product tabs |
+| 18 | Product SKU changes between snapshots | Same product URL but new SKU | Change | Detect via URL matching (not SKU); show as "SKU变更: old→new" |
+| 19 | Cluster deep analysis LLM returns malformed JSON | `_parse_llm_response` fails or `failure_modes` is empty | Full | Fall back to `_RECOMMENDATION_MAP` static recommendation; log warning |
+| 20 | Chart.js CDN unreachable (default mode, offline reader) | No detection at open time | Full | Add `<noscript>` fallback table with raw data; add note: "图表需要网络连接，或启用离线模式" |
 
 ### 8.2 Implementation Pattern
 
@@ -1473,7 +1565,7 @@ One row per product per snapshot date. Used for custom trend charts in Excel.
 | File | Changes |
 |------|---------|
 | `config.py` | Add `HIGH_RISK_THRESHOLD=35`, adjust `HEALTH_RED/YELLOW`, add `REPORT_OFFLINE_MODE` |
-| `models.py` | Add columns to `review_analysis` (impact_category, failure_mode, usage_context, purchase_intent_impact); add `get_previous_completed_run_analytics()` |
+| `models.py` | Add columns to `review_analysis` (impact_category, failure_mode, usage_context, purchase_intent_impact); update `save_review_analysis()` INSERT to include new columns; add `get_previous_completed_run()` analytics/snapshot path loading; add `report_mode` column to `workflow_runs` for quiet-day tracking |
 | `translator.py` | Extend `_build_analysis_prompt()` with 4 new fields; bump `prompt_version` to "v2" |
 | `report_analytics.py` | Replace `_risk_products()` with V3 multi-factor; replace severity with cluster-level computation; add `compute_cluster_changes()`; filter `_uncategorized` |
 | `report_common.py` | Replace `compute_health_index()` with NPS-proxy; replace `_competitor_gap_analysis()` with dual-dimension; replace `_compute_alert_level()` with V3 logic; update `normalize_deep_report_analytics()` for new fields |
@@ -1545,36 +1637,51 @@ Risk threshold changes because the V3 multi-factor formula produces different ra
 ### 12.1 Phased Rollout
 
 **Phase 1: Algorithm fixes (no visual changes)**
-- Replace health index, risk score, gap analysis, severity, alert level formulas
-- Add `_uncategorized` filter
-- Add baseline alert logic
+- Replace health index (NPS-proxy), gap analysis (dual-dimension), severity (cluster-level), alert level (baseline fix)
+- Replace risk score with V3 multi-factor formula — **note**: `impact_category` field will be `None` for all existing reviews (added in Phase 2). The formula handles this gracefully: safety multiplier is skipped when `impact_category is None`, producing a 4-factor score. Phase 2 adds the safety bonus as an enhancement, not a prerequisite.
+- Add `_uncategorized` filter to gap analysis
+- Add `_SEVERITY_SCORE_V3` dict with `critical` key
+- DB: add `report_mode` column to `workflow_runs`
 - Validate: generate report with V3 algorithms, compare analytics JSON side-by-side with V2
 
 **Phase 2: LLM enhancements**
+- DB: ALTER TABLE `review_analysis` add 4 new columns; update `save_review_analysis()` INSERT
 - Update translator prompt with 4 new fields (prompt_version v2)
-- Update report insights prompt with review sample injection
-- Add cluster-level deep analysis
-- Validate: compare LLM output quality before/after
+- Update report insights prompt with review sample injection (`_select_insight_samples`)
+- Add cluster-level deep analysis (`analyze_cluster_deep`)
+- Validate: compare LLM output quality before/after; verify risk_score safety multiplier activates for v2-analyzed reviews
 
-**Phase 3: HTML report + 3 modes**
-- Build V3 HTML template with Chart.js
-- Implement quiet day and change report modes
-- Implement snapshot change detection
-- Remove Playwright/PDF pipeline
-- Validate: generate all 3 report modes, test email delivery
+**Phase 3a: HTML template + Chart.js migration**
+- Build V3 HTML template (`daily_report_v3.html.j2` + CSS + JS)
+- Replace Plotly chart generation with Chart.js config builders
+- Implement tab navigation, collapsible cards, lightbox, table sort/filter
+- Add `@media print` styles and "导出PDF" button
+- Keep existing PDF pipeline running in parallel (both outputs generated)
+- Validate: compare V3 HTML vs V2 PDF side-by-side; verify all charts render correctly
+
+**Phase 3b: Three report modes + change detection**
+- Implement `detect_snapshot_changes()` and `determine_report_mode()`
+- Implement `compute_cluster_changes()` for "What Changed" tab
+- Build quiet day template (`quiet_day_report.html.j2`)
+- Route report generation through mode selector
+- Implement 3 email templates (full/change/quiet)
+- Validate: generate all 3 report modes; test email delivery for each mode
 
 **Phase 4: Excel redesign + cleanup**
 - Replace 6-sheet Excel with 4-sheet data-oriented format
-- Remove deprecated templates and report_pdf.py
-- Update email templates for 3 modes
-- Validate: end-to-end workflow test across multiple days
+- Remove `report_pdf.py` and Playwright dependency
+- Remove deprecated templates (`daily_report.html.j2`, `daily_report.css`)
+- Validate: end-to-end workflow test across multiple days (simulate full → quiet → change → full sequence)
 
 ### 12.2 Backward Compatibility
 
-- `workflow_runs` table: no schema change needed (report_phase values unchanged)
+- `workflow_runs` table: add nullable `report_mode` column (no breaking change)
 - `review_analysis` table: new columns added with ALTER TABLE, nullable, backward-compatible
-- Existing analytics JSON files: V2 format still loadable (normalization handles missing fields)
+- `save_review_analysis()`: updated INSERT includes new columns with default NULL for v1 callers
+- Existing analytics JSON files: V2 format still loadable (normalization handles missing fields with defaults). Cluster `label_code` field names are identical between V2 and V3.
+- `get_review_analysis()`: when both v1 and v2 analysis exist for a review, prefer `prompt_version='v2'` via `ORDER BY prompt_version DESC LIMIT 1`
 - Email recipients: no change to recipient lists or delivery mechanism
+- Phase 3a runs V3 HTML alongside V2 PDF — no sudden cutover until validated
 
 ---
 
