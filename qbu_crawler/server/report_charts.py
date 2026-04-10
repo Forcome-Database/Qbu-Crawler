@@ -725,9 +725,7 @@ def _chartjs_scatter(products):
             },
             "plugins": {
                 "legend": {"position": "bottom"},
-                "tooltip": {
-                    "callbacks": {}  # Template JS will handle label callback
-                },
+                "tooltip": {"enabled": True},
             },
             "responsive": True,
         },

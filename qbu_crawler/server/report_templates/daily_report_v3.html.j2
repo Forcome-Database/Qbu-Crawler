@@ -9,11 +9,13 @@
 <body>
   <!-- Sticky KPI Bar -->
   <header class="kpi-bar">
-    <span class="kpi-bar-title">产品评论分析</span>
-    {% for card in analytics.kpi_cards[:5] %}
-    <span class="kpi-bar-item">{{ card.label }}: <strong>{{ card.value }}</strong></span>
-    {% endfor %}
-    <button id="btn-print" class="btn-print" title="导出PDF">🖨</button>
+    <div class="kpi-bar-inner">
+      <span class="kpi-bar-title">产品评论分析</span>
+      {% for card in (analytics.kpi_cards or [])[:5] %}
+      <span class="kpi-bar-item">{{ card.label }}: <strong>{{ card.value }}</strong></span>
+      {% endfor %}
+      <button id="btn-print" class="btn-print" title="导出PDF">🖨</button>
+    </div>
   </header>
 
   <!-- Tab Navigation -->
@@ -22,8 +24,10 @@
     {% if mode != "baseline" %}
     <button data-tab="changes" class="tab-btn">今日变化</button>
     {% endif %}
+    {% if (analytics.kpis.own_review_rows or 0) > 0 %}
     <button data-tab="issues" class="tab-btn">问题诊断</button>
     <button data-tab="products" class="tab-btn">产品排行</button>
+    {% endif %}
     {% if (analytics.kpis.competitor_review_rows or 0) > 0 and (analytics.kpis.product_count or 0) > 1 %}
     <button data-tab="competitive" class="tab-btn">竞品对标</button>
     {% endif %}
@@ -37,7 +41,7 @@
       <div class="hero-wrap">
         {% if charts.health_gauge %}
         <div class="hero-gauge">
-          <canvas data-chart-config='{{ charts.health_gauge | tojson }}'></canvas>
+          <canvas data-chart-config="{{ charts.health_gauge | tojson }}"></canvas>
           <div class="gauge-value">{{ analytics.kpis.health_index }}</div>
         </div>
         {% endif %}
@@ -50,13 +54,15 @@
       </div>
 
       <!-- KPI Cards -->
+      {% if (analytics.kpis.own_review_rows or 0) < 5 %}
+      <div class="badge-warn" style="margin-bottom: var(--sp-sm)">⚠️ 样本不足 ({{ analytics.kpis.own_review_rows or 0 }}条)</div>
+      {% endif %}
       <div class="kpi-grid">
-        {% for card in analytics.kpi_cards %}
+        {% for card in (analytics.kpi_cards or []) %}
         <div class="metric-card">
           <span class="metric-label">{{ card.label }}{% if card.tooltip %} <span title="{{ card.tooltip }}">ⓘ</span>{% endif %}</span>
           <strong class="metric-value {{ card.value_class or '' }}">{{ card.value }}</strong>
           {% if card.delta_display %}<span class="delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>{% endif %}
-          {% if (analytics.kpis.own_review_rows or 0) < 5 %}<span class="badge-warn">样本不足</span>{% endif %}
         </div>
         {% endfor %}
       </div>
@@ -64,6 +70,12 @@
       <!-- Alert Signal -->
       {% if alert_level and alert_text %}
       <div class="alert-signal alert-{{ alert_level }}">{{ alert_text }}</div>
+      {% endif %}
+
+      {% if (analytics.kpis.translation_completion_rate or 1) < 0.5 %}
+      <div class="alert-signal alert-yellow">
+        ⚠️ 翻译进度 {{ (analytics.kpis.translation_completion_rate * 100) | round(0) }}%，以下分析基于部分数据
+      </div>
       {% endif %}
 
       <!-- Key Judgments + Report Scope -->
@@ -108,6 +120,7 @@
     {% endif %}
 
     <!-- Tab 3: Issue Diagnosis -->
+    {% if (analytics.kpis.own_review_rows or 0) > 0 %}
     <section id="tab-issues" class="tab-panel">
       <h2>自有产品问题诊断</h2>
       <p class="section-subtitle">按影响规模排序，每个问题簇附带证据引用和改良建议。</p>
@@ -123,6 +136,7 @@
           <span class="card-number">#{{ loop.index }}</span>
           <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
           <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
+          <span class="card-toggle">▼</span>
         </div>
         <div class="card-body">
           <div class="card-stats">
@@ -187,8 +201,10 @@
       </div>
       {% endfor %}
     </section>
+    {% endif %}
 
     <!-- Tab 4: Product Health -->
+    {% if (analytics.kpis.own_review_rows or 0) > 0 %}
     <section id="tab-products" class="tab-panel">
       <h2>自有产品健康度排名</h2>
       <p class="section-subtitle">按风险分降序排列。</p>
@@ -209,7 +225,7 @@
         </thead>
         <tbody>
           {% for p in risk_products %}
-          <tr class="severity-row severity-{{ 'high' if p.risk_score >= 50 else 'medium' if p.risk_score >= 20 else 'low' }}">
+          <tr class="severity-row severity-{{ 'high' if p.risk_score >= 70 else 'medium' if p.risk_score >= 40 else 'low' }}">
             <td>{{ p.product_name }}</td>
             <td>{{ p.product_sku }}</td>
             <td>{{ p.rating_avg }}</td>
@@ -229,16 +245,18 @@
       {% if charts.scatter %}
       <div class="chart-container">
         <h3>价格-评分象限图</h3>
-        <canvas data-chart-config='{{ charts.scatter | tojson }}'></canvas>
+        <canvas data-chart-config="{{ charts.scatter | tojson }}"></canvas>
       </div>
       {% endif %}
     </section>
+    {% endif %}
 
     <!-- Tab 5: Competitive Intelligence -->
     {% if (analytics.kpis.competitor_review_rows or 0) > 0 %}
     <section id="tab-competitive" class="tab-panel">
       <h2>竞品差距分析与机会</h2>
 
+      {% set gap_css = {'止血': 'badge-stop', '追赶': 'badge-chase', '监控': 'badge-watch'} %}
       {% set gap_analysis = analytics.competitor.gap_analysis if analytics.competitor is defined else [] %}
       {% if gap_analysis %}
       <table class="data-table">
@@ -257,7 +275,7 @@
           {% for g in gap_analysis %}
           <tr>
             <td>{{ g.label_display }}</td>
-            <td><span class="badge badge-gap-{{ g.gap_type }}">{{ g.gap_type }}</span></td>
+            <td><span class="badge {{ gap_css.get(g.gap_type, 'badge-watch') }}">{{ g.gap_type }}</span></td>
             <td>{{ g.fix_urgency }}%</td>
             <td>{{ g.catch_up_gap }}%</td>
             <td><strong>{{ g.priority_score }}</strong> <span class="badge badge-{{ g.priority }}">{{ g.priority_display }}</span></td>
@@ -282,7 +300,7 @@
         {% if charts.radar %}
         <div class="chart-container">
           <h3>竞品对标雷达图</h3>
-          <canvas data-chart-config='{{ charts.radar | tojson }}'></canvas>
+          <canvas data-chart-config="{{ charts.radar | tojson }}"></canvas>
         </div>
         {% endif %}
       </div>
@@ -339,13 +357,13 @@
         {% if charts.sentiment_own %}
         <div class="chart-container">
           <h3>自有产品评分分布</h3>
-          <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
+          <canvas data-chart-config="{{ charts.sentiment_own | tojson }}"></canvas>
         </div>
         {% endif %}
         {% if charts.sentiment_comp %}
         <div class="chart-container">
           <h3>竞品评分分布</h3>
-          <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
+          <canvas data-chart-config="{{ charts.sentiment_comp | tojson }}"></canvas>
         </div>
         {% endif %}
       </div>
@@ -391,11 +409,11 @@
   </main>
 
   <!-- Lightbox -->
-  <div id="lightbox" class="lightbox" style="display:none">
+  <div id="lightbox" class="lightbox">
     <div class="lightbox-backdrop"></div>
     <div class="lightbox-content">
-      <img class="lightbox-img" src="" alt="">
-      <button class="lightbox-close">&times;</button>
+      <img id="lightbox-img" class="lightbox-img" src="" alt="">
+      <button id="lightbox-close" class="lightbox-close">&times;</button>
     </div>
   </div>
 

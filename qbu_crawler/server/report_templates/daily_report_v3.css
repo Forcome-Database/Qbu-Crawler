@@ -760,7 +760,72 @@ a:hover { text-decoration: underline; }
 .mt-lg       { margin-top: var(--sp-lg); }
 
 /* ==========================================================================
-   22. RESPONSIVE — tablet (768px) and mobile (480px)
+   22. HERO SECTION
+   ========================================================================== */
+
+.hero-wrap { display: flex; gap: var(--sp-xl); align-items: flex-start; margin-bottom: var(--sp-xl); }
+.hero-gauge { position: relative; width: 200px; flex-shrink: 0; }
+.hero-gauge canvas { width: 100%; }
+.gauge-value { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); font-size: var(--fs-hero); font-weight: 800; color: var(--ink); }
+.hero-text { flex: 1; }
+.hero-headline { font-size: var(--fs-lg); color: var(--accent); font-weight: 700; margin: var(--sp-sm) 0; }
+.hero-meta { font-size: var(--fs-sm); color: var(--muted); }
+.hero-support { display: flex; gap: var(--sp-xl); margin-top: var(--sp-lg); }
+.hero-block { flex: 1; background: var(--panel); padding: var(--sp-lg); border-radius: var(--radius-md); }
+
+/* ==========================================================================
+   23. REPORT MAIN + FOOTER
+   ========================================================================== */
+
+.report-main { max-width: 1200px; margin: 0 auto; padding: var(--sp-lg); }
+.report-footer { max-width: 1200px; margin: var(--sp-xl) auto; padding: var(--sp-lg); text-align: center; font-size: var(--fs-sm); color: var(--muted); }
+.section-subtitle { color: var(--muted); margin-bottom: var(--sp-lg); }
+
+/* ==========================================================================
+   24. CHART GRID
+   ========================================================================== */
+
+.chart-grid { display: flex; gap: var(--sp-xl); flex-wrap: wrap; margin: var(--sp-xl) 0; }
+.chart-grid .chart-container { flex: 1; min-width: 300px; }
+
+/* ==========================================================================
+   25. HEATMAP
+   ========================================================================== */
+
+.heatmap-container { overflow-x: auto; margin: var(--sp-lg) 0; }
+.heatmap-table { border-collapse: collapse; width: 100%; }
+.heatmap-table th, .heatmap-table td { padding: var(--sp-xs) var(--sp-sm); text-align: center; font-size: var(--fs-sm); border: 1px solid var(--line); }
+.heatmap-cell { min-width: 50px; color: var(--ink); }
+
+/* ==========================================================================
+   26. CARD INTERNALS
+   ========================================================================== */
+
+.card-number { font-weight: 800; font-size: var(--fs-lg); color: var(--accent); margin-right: var(--sp-sm); }
+.card-title { font-size: var(--fs-md); }
+.card-stats { display: flex; gap: var(--sp-lg); font-size: var(--fs-sm); color: var(--muted); margin: var(--sp-sm) 0; flex-wrap: wrap; }
+.card-timeline { font-size: var(--fs-sm); color: var(--muted); margin: var(--sp-xs) 0; }
+
+/* ==========================================================================
+   27. ACTION BOARD
+   ========================================================================== */
+
+.action-board { margin: var(--sp-xl) 0; }
+.action-rank { font-size: var(--fs-xl); line-height: 1; }
+.action-evidence { font-size: var(--fs-sm); color: var(--muted); margin-top: var(--sp-xs); }
+
+/* ==========================================================================
+   28. TABLE SCROLL + FAILURE MODE + BADGE WARN + KPI BAR ITEM
+   ========================================================================== */
+
+.table-scroll { overflow-x: auto; }
+.failure-mode { margin: var(--sp-sm) 0; padding-left: var(--sp-md); border-left: 2px solid var(--line); }
+.badge-warn { display: inline-block; font-size: var(--fs-xs); color: var(--gold); background: var(--gold-soft); padding: 2px var(--sp-sm); border-radius: var(--radius-pill); font-weight: 600; }
+.kpi-bar-item { font-size: var(--fs-sm); white-space: nowrap; }
+.ai-badge { font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); padding: 2px 6px; border-radius: var(--radius-sm); }
+
+/* ==========================================================================
+   29. RESPONSIVE — tablet (768px) and mobile (480px)
    ========================================================================== */
 
 @media (max-width: 768px) {

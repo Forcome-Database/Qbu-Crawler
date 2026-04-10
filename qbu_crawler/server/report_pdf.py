@@ -254,7 +254,12 @@ def render_v3_html(snapshot, analytics, output_path=None):
     from qbu_crawler.server.report_common import normalize_deep_report_analytics, has_estimated_dates
 
     normalized = normalize_deep_report_analytics(analytics)
-    charts = build_chartjs_configs(analytics)
+
+    # Compute alert level before passing to template
+    computed_alert = _compute_alert_level(normalized)
+    normalized["alert_level"] = computed_alert
+
+    charts = build_chartjs_configs(normalized)
 
     # Add has_estimated_dates flag for template
     normalized["has_estimated_dates"] = has_estimated_dates(
@@ -263,7 +268,10 @@ def render_v3_html(snapshot, analytics, output_path=None):
     )
 
     template_dir = Path(__file__).parent / "report_templates"
-    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=False)
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
     template = env.get_template("daily_report_v3.html.j2")
 
     css_path = template_dir / "daily_report_v3.css"
