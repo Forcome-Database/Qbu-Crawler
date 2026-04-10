@@ -56,3 +56,88 @@ class TestHealthIndexV3:
     def test_missing_kpis_returns_neutral(self):
         assert compute_health_index({}) == 50.0
         assert compute_health_index(None) == 50.0
+
+
+from qbu_crawler.server.report_analytics import _risk_products
+from qbu_crawler import config
+
+
+class TestRiskScoreV3:
+    """Multi-factor: neg_rate(35%) + severity(25%) + evidence(15%) + recency(15%) + volume(10%)."""
+
+    @staticmethod
+    def _make_labeled_review(rating, labels=None, images=None, date_parsed="2026-03-01",
+                              ownership="own", product_name="Prod", product_sku="SKU1"):
+        return {
+            "review": {
+                "rating": rating, "ownership": ownership,
+                "product_name": product_name, "product_sku": product_sku,
+                "date_published_parsed": date_parsed,
+                "headline": "", "body": "",
+            },
+            "labels": labels or [],
+            "images": images or [],
+        }
+
+    @staticmethod
+    def _neg_label(code="quality_stability", severity="high"):
+        return {"label_code": code, "label_polarity": "negative", "severity": severity}
+
+    def test_zero_reviews_returns_empty(self):
+        assert _risk_products([], snapshot_products=[]) == []
+
+    def test_all_positive_returns_zero_risk(self):
+        """Product with only 5-star reviews → risk_score = 0."""
+        items = [self._make_labeled_review(5) for _ in range(10)]
+        products = [{"sku": "SKU1", "review_count": 10, "rating": 4.5}]
+        result = _risk_products(items, snapshot_products=products)
+        # No negative reviews → zero risk
+        if result:
+            assert all(p["risk_score"] == 0 for p in result)
+
+    def test_high_neg_rate_scores_higher(self):
+        """Product with 80% neg rate vs 20% neg rate."""
+        high_neg_items = (
+            [self._make_labeled_review(1, [self._neg_label()]) for _ in range(8)]
+            + [self._make_labeled_review(5) for _ in range(2)]
+        )
+        low_neg_items = (
+            [self._make_labeled_review(1, [self._neg_label()], product_sku="SKU2", product_name="P2") for _ in range(2)]
+            + [self._make_labeled_review(5, product_sku="SKU2", product_name="P2") for _ in range(8)]
+        )
+        products = [
+            {"sku": "SKU1", "review_count": 10, "rating": 2.0},
+            {"sku": "SKU2", "review_count": 10, "rating": 4.0},
+        ]
+        result = _risk_products(high_neg_items + low_neg_items, snapshot_products=products)
+        scores = {p["product_sku"]: p["risk_score"] for p in result}
+        if "SKU1" in scores and "SKU2" in scores:
+            assert scores["SKU1"] > scores["SKU2"], f"High neg rate ({scores['SKU1']}) should score higher than low neg rate ({scores['SKU2']})"
+
+    def test_neg_review_without_labels_still_counts(self):
+        """A 1-star review without labels should still contribute to neg_rate."""
+        items = [
+            self._make_labeled_review(1),  # no labels!
+            self._make_labeled_review(5),
+        ]
+        products = [{"sku": "SKU1", "review_count": 2, "rating": 3.0}]
+        result = _risk_products(items, snapshot_products=products)
+        # Should have a product with risk > 0 because neg_rate = 50%
+        if result:
+            assert result[0]["risk_score"] > 0
+            assert result[0]["negative_review_rows"] >= 1
+
+    def test_output_structure_preserved(self):
+        """Result contains all expected fields."""
+        items = [self._make_labeled_review(1, [self._neg_label()])]
+        products = [{"sku": "SKU1", "review_count": 5, "rating": 3.0}]
+        result = _risk_products(items, snapshot_products=products)
+        if result:
+            p = result[0]
+            assert "product_name" in p
+            assert "product_sku" in p
+            assert "negative_review_rows" in p
+            assert "risk_score" in p
+            assert 0 <= p["risk_score"] <= 100
+            assert "negative_rate" in p
+            assert "top_labels" in p

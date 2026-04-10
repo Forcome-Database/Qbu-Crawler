@@ -647,7 +647,34 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
     return items
 
 
-def _risk_products(labeled_reviews, snapshot_products=None):
+def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
+    """Compute per-product risk scores using a 5-factor weighted algorithm.
+
+    Factors (weights):
+      neg_rate    (35%): negative reviews / total reviews (site-reported)
+      severity    (25%): average severity of negative reviews, normalised 0–1
+      evidence    (15%): image-bearing negatives / total negatives
+      recency     (15%): proportion of negatives from last 90 days
+      volume_sig  (10%): min(neg_count / 10, 1.0) — statistical significance
+
+    A review is "negative" when rating <= config.NEGATIVE_THRESHOLD (default 2).
+    Reviews without labels still count toward neg_rate.
+    """
+    from qbu_crawler.server.report_common import _join_label_counts, _parse_date_flexible
+
+    # Reference date for recency calculation
+    if logical_date:
+        try:
+            ref_date = date.fromisoformat(logical_date) if isinstance(logical_date, str) else logical_date
+        except (ValueError, TypeError):
+            ref_date = date.today()
+    else:
+        ref_date = date.today()
+    recency_window = timedelta(days=90)
+
+    # Severity weights for the severity factor (normalised against max = "critical")
+    max_severity_score = float(_SEVERITY_SCORE.get("critical", max(_SEVERITY_SCORE.values())))
+
     sku_to_review_count = {}
     sku_to_rating = {}
     for p in (snapshot_products or []):
@@ -655,55 +682,115 @@ def _risk_products(labeled_reviews, snapshot_products=None):
         sku_to_review_count[sku] = p.get("review_count") or 0
         sku_to_rating[sku] = p.get("rating")
 
-    # Count all ingested own reviews per SKU (before rating/label filtering)
-    ingested_by_sku = {}
-    for item in labeled_reviews:
-        review = item["review"]
-        sku = review.get("product_sku", "")
-        if sku and review.get("ownership") == "own":
-            ingested_by_sku[sku] = ingested_by_sku.get(sku, 0) + 1
-
-    grouped = {}
+    # First pass: group ALL own reviews by SKU
+    by_sku = {}
     for item in labeled_reviews:
         review = item["review"]
         if review.get("ownership") != "own":
             continue
-        # Rating gate: only reviews at or below threshold contribute to risk
+        sku = review.get("product_sku", "")
+        if not sku:
+            continue
+        entry = by_sku.setdefault(sku, {
+            "product_name": review.get("product_name"),
+            "product_sku": sku,
+            "all_items": [],
+            "negative_items": [],
+            "image_negative_count": 0,
+            "top_labels": {},
+        })
+        entry["all_items"].append(item)
         rating = float(review.get("rating") or 0)
-        if rating > config.LOW_RATING_THRESHOLD:
-            continue
-        negative_labels = [label for label in item["labels"] if label["label_polarity"] == "negative"]
-        if not negative_labels:
-            continue
-        key = _product_key(review.get("product_name"), review.get("product_sku"))
-        product = grouped.setdefault(
-            key,
-            {
-                "product_name": review.get("product_name"),
-                "product_sku": review.get("product_sku"),
-                "negative_review_rows": 0,
-                "image_review_rows": 0,
-                "risk_score": 0,
-                "total_reviews": sku_to_review_count.get(review.get("product_sku", ""), 0),
-                "ingested_reviews": ingested_by_sku.get(review.get("product_sku", ""), 0),
-                "rating_avg": sku_to_rating.get(review.get("product_sku", "")),
-                "negative_rate": None,
-                "coverage_rate": None,
-                "top_labels": {},
-            },
-        )
-        product["negative_review_rows"] += 1
-        if item["images"]:
-            product["image_review_rows"] += 1
-        rating = review.get("rating") or 0
-        product["risk_score"] += 2 if rating and float(rating) <= 2 else 1
-        if item["images"]:
-            product["risk_score"] += 1
-        for label in negative_labels:
-            product["risk_score"] += _SEVERITY_SCORE[label["severity"]]
-            product["top_labels"][label["label_code"]] = product["top_labels"].get(label["label_code"], 0) + 1
+        if rating <= config.NEGATIVE_THRESHOLD:
+            entry["negative_items"].append(item)
+            if item.get("images"):
+                entry["image_negative_count"] += 1
+            for label in item.get("labels", []):
+                if label.get("label_polarity") == "negative":
+                    lc = label["label_code"]
+                    entry["top_labels"][lc] = entry["top_labels"].get(lc, 0) + 1
 
-    items = list(grouped.values())
+    # Second pass: compute 5-factor score per SKU
+    items = []
+    for sku, entry in by_sku.items():
+        all_count = len(entry["all_items"])
+        neg_items = entry["negative_items"]
+        neg_count = len(neg_items)
+        total_reviews = sku_to_review_count.get(sku, 0)
+
+        # ── factor 1: neg_rate (35%) ──────────────────────────────
+        # Use site-reported total when available; fall back to ingested count
+        denom = total_reviews if total_reviews > 0 else all_count
+        neg_rate = (neg_count / denom) if denom > 0 else 0.0
+
+        if neg_count == 0:
+            risk_score_raw = 0.0
+        else:
+            # ── factor 2: severity_avg (25%) ─────────────────────
+            severity_sum = 0.0
+            for neg_item in neg_items:
+                for label in neg_item.get("labels", []):
+                    if label.get("label_polarity") == "negative":
+                        severity_sum += _SEVERITY_SCORE.get(label.get("severity", "low"), 1)
+            # severity per neg review, normalised to 0-1 using max possible per label
+            # Use a soft cap: average over neg_count labels (assume 1 label/review on average)
+            severity_avg = min(severity_sum / (neg_count * max_severity_score), 1.0)
+
+            # ── factor 3: evidence_rate (15%) ────────────────────
+            evidence_rate = entry["image_negative_count"] / neg_count
+
+            # ── factor 4: recency (15%) ──────────────────────────
+            recent_neg = 0
+            for neg_item in neg_items:
+                review = neg_item["review"]
+                raw_parsed = review.get("date_published_parsed")
+                pub_date = _parse_date_flexible(raw_parsed) if raw_parsed else None
+                if pub_date is None:
+                    pub_date = _parse_date_flexible(review.get("date_published"))
+                if pub_date and (ref_date - pub_date) <= recency_window:
+                    recent_neg += 1
+            recency = recent_neg / neg_count
+
+            # ── factor 5: volume_sig (10%) ───────────────────────
+            volume_sig = min(neg_count / 10.0, 1.0)
+
+            # ── weighted combination ──────────────────────────────
+            risk_score_raw = (
+                0.35 * neg_rate
+                + 0.25 * severity_avg
+                + 0.15 * evidence_rate
+                + 0.15 * recency
+                + 0.10 * volume_sig
+            )
+
+        risk_score = round(min(risk_score_raw, 1.0) * 100, 1)
+
+        label_counts = entry["top_labels"]
+        top_labels = [
+            {"label_code": code, "count": count}
+            for code, count in sorted(label_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ]
+
+        ingested = all_count
+        negative_review_rows = neg_count
+        image_review_rows = entry["image_negative_count"]
+
+        items.append({
+            "product_name": entry["product_name"],
+            "product_sku": sku,
+            "negative_review_rows": negative_review_rows,
+            "image_review_rows": image_review_rows,
+            "risk_score_raw": risk_score_raw,
+            "risk_score": risk_score,
+            "total_reviews": total_reviews,
+            "ingested_reviews": ingested,
+            "rating_avg": sku_to_rating.get(sku),
+            "negative_rate": neg_count / total_reviews if total_reviews else None,
+            "coverage_rate": ingested / total_reviews if total_reviews else None,
+            "top_labels": top_labels,
+            "top_features_display": _join_label_counts(top_labels),
+        })
+
     items.sort(
         key=lambda item: (
             -item["risk_score"],
@@ -712,30 +799,6 @@ def _risk_products(labeled_reviews, snapshot_products=None):
             item["product_sku"] or "",
         )
     )
-    from qbu_crawler.server.report_common import _join_label_counts
-
-    # Compute max possible score per review for normalization
-    # Worst case: rating<=2(+2), has_image(+1), 3 high-severity labels(+9) = 12
-    max_per_review = 2 + 1 + _SEVERITY_SCORE["high"] * _MAX_LABELS_PER_REVIEW  # 12
-
-    for item in items:
-        label_counts = item.pop("top_labels")
-        item["top_labels"] = [
-            {"label_code": code, "count": count}
-            for code, count in sorted(label_counts.items(), key=lambda pair: (-pair[1], pair[0]))
-        ]
-        total = item.get("total_reviews") or 0
-        neg = item.get("negative_review_rows", 0)
-        item["negative_rate"] = neg / total if total else None
-        ingested = item.get("ingested_reviews", 0)
-        item["coverage_rate"] = ingested / total if total else None
-        # Normalize risk_score to 0-100: average severity per negative review
-        item["risk_score_raw"] = item["risk_score"]
-        if neg > 0:
-            item["risk_score"] = round(min(item["risk_score_raw"] / (neg * max_per_review), 1.0) * 100, 1)
-        else:
-            item["risk_score"] = 0
-        item["top_features_display"] = _join_label_counts(item["top_labels"])
     return items
 
 
@@ -1328,7 +1391,8 @@ def build_report_analytics(snapshot, synced_labels=None):
             "recently_published_count": recently_published_count,
         },
         "self": {
-            "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", [])),
+            "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", []),
+                                            logical_date=snapshot.get("logical_date")),
             "top_negative_clusters": top_negative_clusters,
             "recommendations": _recommendations(top_negative_clusters),
         },
