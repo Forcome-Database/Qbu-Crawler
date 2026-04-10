@@ -251,7 +251,7 @@ class FullReportGenerationError(RuntimeError):
         super().__init__(message)
         self.analytics_path = analytics_path
         self.excel_path = excel_path
-        self.pdf_path = pdf_path
+        self.pdf_path = pdf_path  # Legacy — always None in V3
 
 
 def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
@@ -604,15 +604,14 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
 
     try:
         if mode == "full":
-            # Entry point for 3-mode routing. Phase 4 will update workflows.py to call this
-            # instead of generate_full_report_from_snapshot.
+            # Entry point for 3-mode routing. workflows.py calls this function
+            # instead of generate_full_report_from_snapshot directly.
             # Delegate to existing function (which handles its own email)
             result = generate_full_report_from_snapshot(
                 snapshot, send_email=send_email, output_path=output_path,
             )
             result["mode"] = "full"
-            # NOTE: Full mode currently uses old email path inside generate_full_report_from_snapshot.
-            # Phase 4 will switch to _send_mode_email("full", ...) with email_full.html.j2.
+            # TODO: switch full-mode email to email_full.html.j2 template
             result.setdefault("status", "completed")
             return result
         elif mode == "change":

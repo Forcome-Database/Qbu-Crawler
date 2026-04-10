@@ -640,7 +640,7 @@ _legacy_query_report_data = query_report_data
 _legacy_generate_excel = generate_excel
 
 
-# ── 6-Sheet Analytical Excel ─────────────────────────────────────────────────
+# ── 4-Sheet Data-Oriented Excel ──────────────────────────────────────────────
 
 
 def _generate_analytical_excel(
@@ -707,6 +707,8 @@ def _generate_analytical_excel(
                 images_list = json.loads(images_raw)
             except Exception:
                 images_list = []
+            if not isinstance(images_list, list):
+                images_list = []
         elif isinstance(images_raw, list):
             images_list = images_raw
         else:
@@ -720,6 +722,8 @@ def _generate_analytical_excel(
                 labels_list = json.loads(labels_raw)
             except Exception:
                 labels_list = []
+            if not isinstance(labels_list, list):
+                labels_list = []
         else:
             labels_list = labels_raw if isinstance(labels_raw, list) else []
         labels_text = ", ".join(lbl.get("code", "") for lbl in labels_list if isinstance(lbl, dict))
@@ -730,6 +734,8 @@ def _generate_analytical_excel(
             try:
                 features_list = json.loads(features_raw)
             except Exception:
+                features_list = []
+            if not isinstance(features_list, list):
                 features_list = []
         else:
             features_list = features_raw if isinstance(features_raw, list) else []
@@ -800,6 +806,8 @@ def _generate_analytical_excel(
             try:
                 labels = json.loads(labels_raw)
             except Exception:
+                labels = []
+            if not isinstance(labels, list):
                 labels = []
         else:
             labels = labels_raw if isinstance(labels_raw, list) else []
