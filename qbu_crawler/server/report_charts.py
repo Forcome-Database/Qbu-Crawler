@@ -564,3 +564,184 @@ def build_chart_html_fragments(analytics: dict) -> dict[str, str]:
             break  # show first product with enough data
 
     return fragments
+
+
+# ── Chart.js config builders (V3 HTML report) ──────────────────────────────
+
+def build_chartjs_configs(analytics):
+    """Build Chart.js configuration dicts for the V3 HTML report.
+
+    Returns dict of {chart_name: chartjs_config_dict}.
+    Each config is a JSON-serializable dict matching Chart.js constructor args.
+    """
+    configs = {}
+
+    health = (analytics.get("kpis") or {}).get("health_index")
+    if health is not None:
+        configs["health_gauge"] = _chartjs_health_gauge(health)
+
+    radar = analytics.get("_radar_data")
+    if radar and len(radar.get("categories", [])) >= 3:
+        configs["radar"] = _chartjs_radar(radar)
+
+    for key, name in [("_sentiment_distribution_own", "sentiment_own"),
+                       ("_sentiment_distribution_competitor", "sentiment_comp")]:
+        dist = analytics.get(key)
+        if dist and dist.get("categories"):
+            configs[name] = _chartjs_stacked_bar(dist, name)
+
+    products = analytics.get("_products_for_charts")
+    if products and len(products) >= 2:
+        configs["scatter"] = _chartjs_scatter(products)
+
+    heatmap = analytics.get("_heatmap_data")
+    if heatmap and len(heatmap.get("y_labels", [])) >= 3:
+        configs["heatmap"] = _chartjs_heatmap_table(heatmap)
+
+    return configs
+
+
+def _chartjs_health_gauge(health_value):
+    """Doughnut chart simulating a gauge (0-100)."""
+    remaining = max(100 - health_value, 0)
+    if health_value >= 60:
+        color = _GREEN
+    elif health_value >= 45:
+        color = _GOLD
+    else:
+        color = _ACCENT
+    return {
+        "type": "doughnut",
+        "data": {
+            "datasets": [{
+                "data": [health_value, remaining],
+                "backgroundColor": [color, "#e8e0d4"],
+                "borderWidth": 0,
+            }],
+        },
+        "options": {
+            "cutout": "75%",
+            "rotation": -90,
+            "circumference": 180,
+            "plugins": {
+                "legend": {"display": False},
+                "tooltip": {"enabled": False},
+            },
+            "responsive": True,
+            "maintainAspectRatio": True,
+        },
+    }
+
+
+def _chartjs_radar(radar_data):
+    """Radar chart comparing own vs competitor across dimensions."""
+    return {
+        "type": "radar",
+        "data": {
+            "labels": radar_data["categories"],
+            "datasets": [
+                {
+                    "label": "自有",
+                    "data": radar_data["own_values"],
+                    "backgroundColor": "rgba(147, 84, 63, 0.15)",
+                    "borderColor": _ACCENT,
+                    "borderWidth": 2,
+                    "pointRadius": 3,
+                },
+                {
+                    "label": "竞品",
+                    "data": radar_data["competitor_values"],
+                    "backgroundColor": "rgba(52, 95, 87, 0.15)",
+                    "borderColor": _GREEN,
+                    "borderWidth": 2,
+                    "pointRadius": 3,
+                },
+            ],
+        },
+        "options": {
+            "scales": {"r": {"beginAtZero": True, "max": 1.0, "ticks": {"display": False}}},
+            "plugins": {"legend": {"position": "bottom"}},
+            "responsive": True,
+        },
+    }
+
+
+def _chartjs_stacked_bar(dist_data, chart_id):
+    """Stacked bar chart for sentiment distribution."""
+    return {
+        "type": "bar",
+        "data": {
+            "labels": dist_data["categories"],
+            "datasets": [
+                {"label": "好评(≥4星)", "data": dist_data.get("positive", []), "backgroundColor": _GREEN},
+                {"label": "中评(3星)", "data": dist_data.get("neutral", []), "backgroundColor": _GOLD},
+                {"label": "差评(≤2星)", "data": dist_data.get("negative", []), "backgroundColor": _ACCENT},
+            ],
+        },
+        "options": {
+            "scales": {
+                "x": {"stacked": True, "ticks": {"maxRotation": 45}},
+                "y": {"stacked": True, "beginAtZero": True},
+            },
+            "plugins": {"legend": {"position": "bottom"}},
+            "responsive": True,
+        },
+    }
+
+
+def _chartjs_scatter(products):
+    """Scatter chart: price (x) vs rating (y) with ownership coloring."""
+    own = [p for p in products if p.get("ownership") == "own"]
+    comp = [p for p in products if p.get("ownership") != "own"]
+
+    def _points(product_list):
+        return [{"x": p.get("price", 0), "y": p.get("rating", 0), "label": p.get("name", "")[:18]}
+                for p in product_list]
+
+    return {
+        "type": "scatter",
+        "data": {
+            "datasets": [
+                {
+                    "label": "自有",
+                    "data": _points(own),
+                    "backgroundColor": _ACCENT,
+                    "pointStyle": "triangle",
+                    "pointRadius": 8,
+                },
+                {
+                    "label": "竞品",
+                    "data": _points(comp),
+                    "backgroundColor": _GREEN,
+                    "pointStyle": "circle",
+                    "pointRadius": 6,
+                },
+            ],
+        },
+        "options": {
+            "scales": {
+                "x": {"title": {"display": True, "text": "价格 ($)"}},
+                "y": {"title": {"display": True, "text": "评分"}, "min": 0, "max": 5},
+            },
+            "plugins": {
+                "legend": {"position": "bottom"},
+                "tooltip": {
+                    "callbacks": {}  # Template JS will handle label callback
+                },
+            },
+            "responsive": True,
+        },
+    }
+
+
+def _chartjs_heatmap_table(heatmap_data):
+    """Heatmap data as a table structure (Chart.js doesn't have native heatmap).
+
+    Returns data for rendering as an HTML table with colored cells, not a chart.
+    """
+    return {
+        "type": "table",  # Custom: rendered as HTML table, not Chart.js canvas
+        "x_labels": heatmap_data.get("x_labels", []),
+        "y_labels": heatmap_data.get("y_labels", []),
+        "z": heatmap_data.get("z", []),
+    }
