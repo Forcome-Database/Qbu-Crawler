@@ -1089,6 +1089,74 @@ query_cluster_reviews fetches full-corpus reviews by label_code."
 
 ---
 
+### Task 8.5: Add `has_estimated_dates` utility (GLOBAL-01)
+
+**Files:**
+- Modify: `qbu_crawler/server/report_common.py`
+- Test: `tests/test_v3_algorithms.py` (append)
+
+**Spec ref:** Section 6.5
+
+- [ ] **Step 1: Write test**
+
+```python
+from qbu_crawler.server.report_common import has_estimated_dates
+
+
+class TestEstimatedDates:
+    def test_detects_clustered_dates(self):
+        """When >30% of reviews parse to the same MM-DD as logical_date, return True."""
+        reviews = [
+            {"date_published_parsed": "2022-04-10"},  # same MM-DD
+            {"date_published_parsed": "2023-04-10"},  # same MM-DD
+            {"date_published_parsed": "2024-04-10"},  # same MM-DD
+            {"date_published_parsed": "2026-01-15"},  # different
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is True
+
+    def test_no_clustering(self):
+        reviews = [
+            {"date_published_parsed": "2026-01-01"},
+            {"date_published_parsed": "2026-02-15"},
+            {"date_published_parsed": "2026-03-20"},
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is False
+
+    def test_empty_reviews(self):
+        assert has_estimated_dates([], "2026-04-10") is False
+```
+
+- [ ] **Step 2: Implement**
+
+Add to `report_common.py`:
+
+```python
+def has_estimated_dates(reviews, logical_date_str):
+    """Check if >30% of review dates cluster on the same MM-DD as logical_date.
+    
+    This indicates relative dates ("3 years ago") parsed to the same day-of-year,
+    making timeline analysis unreliable.
+    """
+    if not reviews:
+        return False
+    logical_mmdd = logical_date_str[5:]  # "MM-DD" from "YYYY-MM-DD"
+    count_matching = sum(
+        1 for r in reviews
+        if (r.get("date_published_parsed") or "").endswith(logical_mmdd)
+    )
+    return count_matching / len(reviews) > 0.30
+```
+
+- [ ] **Step 3: Run tests, commit**
+
+```bash
+uv run pytest tests/test_v3_algorithms.py::TestEstimatedDates -v
+git add qbu_crawler/server/report_common.py tests/test_v3_algorithms.py
+git commit -m "feat(report): add has_estimated_dates utility for relative date detection"
+```
+
+---
+
 ### Task 9: Update config — HIGH_RISK_THRESHOLD + REPORT_OFFLINE_MODE + REPORT_HTML_PUBLIC_URL
 
 **Files:**

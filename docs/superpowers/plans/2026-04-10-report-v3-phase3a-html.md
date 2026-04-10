@@ -299,6 +299,21 @@ Create `daily_report_v3.html.j2` following the structure from spec Section 4.2.4
 
 Each tab panel uses Jinja2 conditionals to handle missing data gracefully.
 
+**Edge case conditionals that MUST be in the template** (spec Section 8.1):
+- **#4 All positive**: Issues tab shows `{% if not top_negative_clusters %}<div class="empty-state">未发现问题</div>{% endif %}`
+- **#5 All negative**: Action board ranks by safety (`impact_category`) when all products high-risk
+- **#6 Few reviews (<5)**: KPI cards show `{% if kpis.own_review_rows < 5 %}<span class="badge-warn">样本不足</span>{% endif %}`
+- **#7 Own 0**: `{% if kpis.own_review_rows == 0 %}` hide issues/products tabs, show only competitive
+- **#8 Competitor 0**: `{% if kpis.competitor_review_rows == 0 %}` hide competitive tab
+- **#10 Translation <50%**: Banner `{% if kpis.translation_completion_rate < 0.5 %}翻译进度 {{pct}}%，以下分析基于部分数据{% endif %}`
+- **#12 MAX_REVIEWS truncation**: Footer `{% if product.ingested_reviews < product.total_reviews %}已采集 {{ingested}}/{{total}} 条{% endif %}`
+- **#13 Single product**: `{% if kpis.product_count == 1 %}` hide scatter chart, radar, competitive tab
+- **#14 Relative dates**: `{% if has_estimated_dates %}<span class="footnote">部分日期为估算值</span>{% endif %}`
+- **15.3 Baseline hides What Changed**: `{% if mode != "baseline" %}` show changes tab button
+- **15.8 Data freshness**: `<span class="freshness">数据截至 {{ snapshot.snapshot_at[:16] }}</span>` in hero
+- **15.12 Email deep links**: Add `id="review-{{ review.id }}"` anchors to review rows
+- **15.13 Empty-state for What Changed**: `{% if not changes.escalated and new_negative_count == 0 %}✅ 本期均为正面反馈{% endif %}`
+
 - [ ] **Step 3: Run template test**
 
 Run: `uv run pytest tests/test_v3_html.py::TestV3TemplateRender -v`
