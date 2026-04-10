@@ -106,3 +106,46 @@ class TestInsightSampleSelection:
         import inspect
         sig = inspect.signature(generate_report_insights)
         assert "snapshot" in sig.parameters
+
+
+class TestClusterDeepAnalysis:
+    def test_function_exists(self):
+        from qbu_crawler.server.report_llm import analyze_cluster_deep
+        assert callable(analyze_cluster_deep)
+
+    def test_returns_none_when_llm_not_configured(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_API_BASE", "")
+        from qbu_crawler.server.report_llm import analyze_cluster_deep
+        cluster = {"label_code": "quality_stability", "label_display": "质量稳定性", "review_count": 10}
+        reviews = [{"headline": "bad", "body": "terrible", "rating": 1.0,
+                     "product_name": "P1", "date_published_parsed": "2026-01-01"}]
+        result = analyze_cluster_deep(cluster, reviews)
+        assert result is None
+
+    def test_returns_none_when_cluster_analysis_disabled(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_API_BASE", "http://fake")
+        monkeypatch.setattr(config, "LLM_API_KEY", "fake")
+        monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+        from qbu_crawler.server.report_llm import analyze_cluster_deep
+        cluster = {"label_code": "quality_stability", "label_display": "质量稳定性", "review_count": 10}
+        result = analyze_cluster_deep(cluster, [])
+        assert result is None
+
+    def test_validate_cluster_analysis_sanitizes(self):
+        from qbu_crawler.server.report_llm import _validate_cluster_analysis
+        raw = {
+            "failure_modes": [{"mode": "test", "frequency": 5}] * 15,  # over limit
+            "root_causes": "not a list",  # wrong type
+            "temporal_pattern": "stable",
+            "user_workarounds": ["fix1"],
+            "actionable_summary": "Do something",
+        }
+        result = _validate_cluster_analysis(raw)
+        assert len(result["failure_modes"]) == 10  # capped
+        assert result["root_causes"] == []  # sanitized to list
+        assert result["actionable_summary"] == "Do something"
+
+    def test_validate_returns_none_for_non_dict(self):
+        from qbu_crawler.server.report_llm import _validate_cluster_analysis
+        assert _validate_cluster_analysis("not a dict") is None
+        assert _validate_cluster_analysis(None) is None

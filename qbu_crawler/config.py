@@ -163,6 +163,8 @@ HIGH_RISK_THRESHOLD = int(os.getenv("REPORT_HIGH_RISK_THRESHOLD", "35"))
 REPORT_OFFLINE_MODE = os.getenv("REPORT_OFFLINE_MODE", "false").lower() == "true"
 REPORT_HTML_PUBLIC_URL = os.getenv("REPORT_HTML_PUBLIC_URL", "")
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
+REPORT_CLUSTER_ANALYSIS = os.getenv("REPORT_CLUSTER_ANALYSIS", "true").lower() == "true"
+REPORT_MAX_CLUSTER_ANALYSIS = int(os.getenv("REPORT_MAX_CLUSTER_ANALYSIS", "3"))
 os.makedirs(REPORT_DIR, exist_ok=True)
 OPENCLAW_WORKSPACE_DIR = os.getenv("OPENCLAW_WORKSPACE_DIR", "") or os.path.join(
     BASE_DIR,

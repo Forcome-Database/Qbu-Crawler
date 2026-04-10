@@ -601,3 +601,91 @@ def generate_report_insights(analytics, snapshot=None):
     except Exception:
         logger.warning("LLM insights generation failed, using fallback", exc_info=True)
         return _fallback_insights(analytics)
+
+
+def analyze_cluster_deep(cluster, cluster_reviews):
+    """LLM-powered root-cause analysis for a single issue cluster.
+
+    Args:
+        cluster: dict with label_code, label_display, review_count
+        cluster_reviews: list of review dicts (from query_cluster_reviews)
+
+    Returns dict with: failure_modes, root_causes, temporal_pattern,
+    user_workarounds, actionable_summary. Returns None if LLM unavailable.
+    """
+    if not config.LLM_API_BASE or not config.LLM_API_KEY:
+        return None
+    if not config.REPORT_CLUSTER_ANALYSIS:
+        return None
+
+    review_lines = []
+    for r in cluster_reviews[:30]:
+        review_lines.append(
+            f"[{r.get('rating', '')}星|{r.get('product_name', '')}|"
+            f"{r.get('date_published_parsed', '')}] "
+            f"{(r.get('body_cn') or r.get('body', ''))[:300]}"
+        )
+    reviews_text = "\n".join(review_lines)
+
+    prompt = (
+        f"你是产品质量分析专家。以下是 {cluster.get('review_count', 0)} 条关于"
+        f"「{cluster.get('label_display', '')}」问题的用户评论"
+        f"（展示前 {len(review_lines)} 条）。\n\n"
+        f"{reviews_text}\n\n"
+        "请分析并返回JSON（不要包含 markdown 代码块标记）：\n"
+        "{\n"
+        '  "failure_modes": [\n'
+        '    {"mode": "具体失效模式描述", "frequency": 出现次数估计, '
+        '"severity": "critical/major/minor", '
+        '"example_quote": "最能说明此失效的一句用户原话"}\n'
+        "  ],\n"
+        '  "root_causes": [\n'
+        '    {"cause": "推测根因", "evidence": "从评论推断的依据", '
+        '"confidence": "high/medium/low"}\n'
+        "  ],\n"
+        '  "temporal_pattern": "问题随时间的变化趋势描述",\n'
+        '  "user_workarounds": ["用户自行采取的应对方法"],\n'
+        '  "actionable_summary": "不超过2句话：这个问题的本质是什么，最高优先的改进动作是什么"\n'
+        "}\n\n"
+        "注意：failure_modes 按 frequency 降序排列，"
+        "每个必须有 example_quote 直接引用评论原文。"
+    )
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(base_url=config.LLM_API_BASE, api_key=config.LLM_API_KEY)
+        response = client.chat.completions.create(
+            model=config.LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        parsed = _parse_llm_response(raw)
+        return _validate_cluster_analysis(parsed)
+    except Exception as e:
+        logger.warning("analyze_cluster_deep failed for %s: %s", cluster.get("label_code"), e)
+        return None
+
+
+def _validate_cluster_analysis(parsed):
+    """Validate and sanitize cluster analysis output."""
+    if not isinstance(parsed, dict):
+        return None
+    result = {
+        "failure_modes": parsed.get("failure_modes", []),
+        "root_causes": parsed.get("root_causes", []),
+        "temporal_pattern": parsed.get("temporal_pattern", ""),
+        "user_workarounds": parsed.get("user_workarounds", []),
+        "actionable_summary": parsed.get("actionable_summary", ""),
+    }
+    if not isinstance(result["failure_modes"], list):
+        result["failure_modes"] = []
+    if not isinstance(result["root_causes"], list):
+        result["root_causes"] = []
+    if not isinstance(result["user_workarounds"], list):
+        result["user_workarounds"] = []
+    result["failure_modes"] = result["failure_modes"][:10]
+    result["root_causes"] = result["root_causes"][:5]
+    result["user_workarounds"] = result["user_workarounds"][:5]
+    return result
