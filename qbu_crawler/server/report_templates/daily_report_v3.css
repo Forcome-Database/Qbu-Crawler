@@ -1,0 +1,820 @@
+/* ==========================================================================
+   Qbu-Crawler Daily Report V3 — CSS Design System
+   Screen-first, responsive, interactive (tabs, lightbox, collapse)
+   ========================================================================== */
+
+/* ==========================================================================
+   1. DESIGN TOKENS
+   ========================================================================== */
+
+:root {
+  /* Color palette — same as daily_report.css */
+  --paper: #f5f0e8;
+  --panel: #fffaf3;
+  --panel-strong: #f1e6d7;
+  --ink: #201b16;
+  --muted: #766d62;
+  --line: #d9ccb9;
+  --accent: #93543f;
+  --accent-soft: #ead6c8;
+  --green: #345f57;
+  --green-soft: #dce9e3;
+  --gold: #b0823a;
+  --gold-soft: #f5ecd4;
+  --red-bg: #f2d9d0;
+  --red: #c0392b;
+  --orange: #d4680a;
+  --orange-soft: #fdebd0;
+
+  /* Spacing scale */
+  --sp-xs: 4px;
+  --sp-sm: 8px;
+  --sp-md: 14px;
+  --sp-lg: 20px;
+  --sp-xl: 28px;
+  --sp-2xl: 40px;
+
+  /* Typography — screen-optimised (base 14px, not 11px) */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  --fs-xl: 28px;
+  --fs-hero: 40px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow: 0 10px 28px rgba(34, 23, 13, 0.08);
+  --shadow-sm: 0 2px 8px rgba(34, 23, 13, 0.05);
+  --shadow-kpi: 0 4px 16px rgba(34, 23, 13, 0.10);
+}
+
+/* ==========================================================================
+   2. RESET & BASE
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--ink);
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  background: linear-gradient(180deg, #faf6ef 0%, #f3ede3 100%);
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, p, ul, ol { margin: 0; padding: 0; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   3. REPORT SHELL
+   ========================================================================== */
+
+.report-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--sp-lg) var(--sp-2xl);
+}
+
+/* ==========================================================================
+   4. STICKY KPI BAR
+   ========================================================================== */
+
+.kpi-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(245, 240, 232, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding: var(--sp-sm) var(--sp-lg);
+  transition: box-shadow 0.2s;
+}
+
+.kpi-bar.scrolled {
+  box-shadow: var(--shadow-kpi);
+}
+
+.kpi-bar-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  flex-wrap: wrap;
+}
+
+.kpi-bar-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: var(--sp-sm);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   5. KPI METRIC CARDS (flex-wrap grid)
+   ========================================================================== */
+
+.kpi-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-md);
+  padding: var(--sp-lg) 0;
+}
+
+.metric-card {
+  flex: 1 1 calc(20% - var(--sp-md));
+  min-width: 140px;
+  padding: var(--sp-md) var(--sp-lg);
+  border: 1px solid rgba(147, 84, 63, 0.12);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 250, 244, 0.9);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+
+.metric-card:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: var(--sp-xs);
+}
+
+.metric-value {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.metric-delta {
+  display: block;
+  margin-top: var(--sp-xs);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.delta-up   { color: var(--accent); }
+.delta-down { color: var(--green); }
+.delta-flat { color: var(--muted); }
+
+/* Compact metric for kpi-bar */
+.kpi-bar .metric-card {
+  flex: 0 0 auto;
+  min-width: 100px;
+  padding: var(--sp-xs) var(--sp-md);
+  border-radius: var(--radius-md);
+}
+
+.kpi-bar .metric-value { font-size: var(--fs-md); }
+.kpi-bar .metric-label { font-size: 10px; }
+
+/* ==========================================================================
+   6. TAB NAVIGATION
+   ========================================================================== */
+
+.tab-nav {
+  display: flex;
+  gap: 2px;
+  border-bottom: 2px solid var(--line);
+  margin-bottom: var(--sp-xl);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-nav::-webkit-scrollbar { display: none; }
+
+.tab-nav button {
+  flex-shrink: 0;
+  padding: var(--sp-sm) var(--sp-lg);
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.tab-nav button:hover { color: var(--ink); }
+
+.tab-nav button.tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ==========================================================================
+   7. TAB PANELS
+   ========================================================================== */
+
+.tab-panel { display: none; }
+.tab-panel.tab-active { display: block; }
+
+/* ==========================================================================
+   8. ALERT SIGNAL — full-width banner
+   ========================================================================== */
+
+.alert-signal {
+  width: 100%;
+  padding: var(--sp-md) var(--sp-lg);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  margin-bottom: var(--sp-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+.alert-signal::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alert-red    { background: var(--red-bg);    color: var(--accent); }
+.alert-red::before    { background: var(--accent); }
+.alert-yellow { background: var(--gold-soft); color: var(--gold); }
+.alert-yellow::before { background: var(--gold); }
+.alert-green  { background: var(--green-soft); color: var(--green); }
+.alert-green::before  { background: var(--green); }
+
+/* ==========================================================================
+   9. DATA TABLES
+   ========================================================================== */
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+}
+
+.data-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.data-table th {
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 2px solid var(--line);
+  white-space: nowrap;
+}
+
+.data-table th[data-sortable] {
+  cursor: pointer;
+  user-select: none;
+}
+
+.data-table th[data-sortable]:hover { color: var(--accent); }
+
+.sort-indicator {
+  display: inline-block;
+  margin-left: 4px;
+  opacity: 0.4;
+  font-size: 10px;
+}
+
+.data-table th.sort-asc .sort-indicator,
+.data-table th.sort-desc .sort-indicator { opacity: 1; color: var(--accent); }
+
+.data-table td {
+  padding: var(--sp-sm) var(--sp-md);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.data-table tbody tr:nth-child(even) td { background: rgba(245, 240, 232, 0.4); }
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover td { background: rgba(147, 84, 63, 0.06); }
+
+/* Severity row tinting */
+.data-table tr.severity-critical td { background: rgba(192, 57, 43, 0.08); }
+.data-table tr.severity-high td { background: rgba(242, 217, 208, 0.4); }
+.data-table tr.severity-medium td { background: rgba(245, 236, 212, 0.4); }
+.data-table tr.severity-low td { background: rgba(220, 233, 227, 0.3); }
+
+/* Review table (full-width variant) */
+.review-table th:first-child { width: 40%; }
+
+/* ==========================================================================
+   10. ISSUE CARDS — collapsible, severity border-left
+   ========================================================================== */
+
+.issue-card {
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-left-color: var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  overflow: hidden;
+  margin-bottom: var(--sp-md);
+  transition: box-shadow 0.15s;
+}
+
+.issue-card:hover { box-shadow: var(--shadow-sm); }
+
+.issue-card.severity-critical { border-left-color: var(--red); }
+.issue-card.severity-high     { border-left-color: var(--accent); }
+.issue-card.severity-medium   { border-left-color: var(--gold); }
+.issue-card.severity-low      { border-left-color: var(--muted); }
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  padding: var(--sp-md) var(--sp-lg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.card-header:hover { background: rgba(147, 84, 63, 0.04); }
+
+.card-header h3 {
+  font-size: var(--fs-md);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  flex: 1;
+}
+
+.card-toggle {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  transition: transform 0.2s;
+  margin-top: 3px;
+}
+
+.card-body {
+  padding: 0 var(--sp-lg) var(--sp-lg);
+}
+
+/* Collapsed state */
+.card-collapsed .card-body { display: none; }
+.card-collapsed .card-toggle { transform: rotate(-90deg); }
+
+/* ==========================================================================
+   11. ACTION CARDS — numbered badges
+   ========================================================================== */
+
+.action-card {
+  padding: var(--sp-md) var(--sp-lg);
+  border: 1.5px solid var(--accent-soft);
+  border-radius: var(--radius-lg);
+  background: rgba(234, 214, 200, 0.12);
+  display: flex;
+  gap: var(--sp-md);
+  align-items: flex-start;
+  margin-bottom: var(--sp-sm);
+}
+
+.action-badge {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.action-body { flex: 1; }
+
+.action-title {
+  font-weight: 700;
+  font-size: var(--fs-base);
+  margin-bottom: var(--sp-xs);
+}
+
+/* ==========================================================================
+   12. QUOTE BLOCKS — bilingual reviews
+   ========================================================================== */
+
+.quote-block {
+  padding: var(--sp-md);
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--panel);
+  margin-bottom: var(--sp-md);
+}
+
+.quote-cn {
+  font-weight: 600;
+  font-size: var(--fs-base);
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.quote-en {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin-top: var(--sp-xs);
+  line-height: 1.5;
+}
+
+.quote-meta {
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   13. EVIDENCE STRIP — horizontal thumbnails
+   ========================================================================== */
+
+.evidence-strip {
+  display: flex;
+  gap: var(--sp-sm);
+  overflow-x: auto;
+  padding-bottom: var(--sp-xs);
+  margin-top: var(--sp-md);
+  scrollbar-width: thin;
+}
+
+.evidence-thumb {
+  position: relative;
+  width: 120px;
+  height: 90px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.evidence-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s;
+}
+
+.evidence-thumb:hover img { transform: scale(1.06); }
+
+.evidence-label {
+  position: absolute;
+  top: var(--sp-xs);
+  left: var(--sp-xs);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: var(--fs-xs);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.evidence-img { cursor: zoom-in; }
+
+/* ==========================================================================
+   14. LIGHTBOX OVERLAY
+   ========================================================================== */
+
+#lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(20, 14, 10, 0.88);
+  align-items: center;
+  justify-content: center;
+}
+
+#lightbox.lightbox-open { display: flex; }
+
+#lightbox-img {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+#lightbox-close {
+  position: absolute;
+  top: var(--sp-lg);
+  right: var(--sp-lg);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+#lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
+
+/* ==========================================================================
+   15. RECOMMENDATION BOX — dashed border, AI badge
+   ========================================================================== */
+
+.recommendation-box {
+  position: relative;
+  padding: var(--sp-md) var(--sp-md) var(--sp-md) 42px;
+  border: 1.5px dashed var(--accent-soft);
+  border-radius: var(--radius-md);
+  background: rgba(234, 214, 200, 0.12);
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  margin-top: var(--sp-md);
+}
+
+.recommendation-box::before {
+  content: "AI";
+  position: absolute;
+  top: var(--sp-md);
+  left: var(--sp-md);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+/* ==========================================================================
+   16. CHART CONTAINERS
+   ========================================================================== */
+
+.chart-container {
+  padding: var(--sp-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.chart-container canvas {
+  max-width: 100%;
+  height: auto !important;
+}
+
+.chart-aspect-16-9 { aspect-ratio: 16 / 9; }
+.chart-aspect-4-3  { aspect-ratio: 4 / 3; }
+.chart-aspect-1-1  { aspect-ratio: 1 / 1; max-width: 400px; margin: 0 auto; }
+
+/* ==========================================================================
+   17. BADGES — severity + gap_type
+   ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px var(--sp-sm);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge-critical { background: rgba(192, 57, 43, 0.15); color: var(--red); }
+.badge-high     { background: var(--red-bg);    color: var(--accent); }
+.badge-medium   { background: var(--gold-soft); color: var(--gold); }
+.badge-low      { background: var(--green-soft); color: var(--green); }
+
+/* Gap type badges */
+.badge-stop     { background: var(--red-bg);    color: var(--accent); }
+.badge-chase    { background: var(--gold-soft); color: var(--gold); }
+.badge-watch    { background: var(--green-soft); color: var(--green); }
+
+/* ==========================================================================
+   18. EMPTY STATE
+   ========================================================================== */
+
+.empty-state {
+  text-align: center;
+  padding: var(--sp-2xl) var(--sp-lg);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.empty-state::before {
+  content: "—";
+  display: block;
+  font-size: var(--fs-lg);
+  margin-bottom: var(--sp-sm);
+  opacity: 0.4;
+}
+
+/* ==========================================================================
+   19. TABLE FILTER BAR
+   ========================================================================== */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-md);
+  flex-wrap: wrap;
+}
+
+.filter-input {
+  padding: var(--sp-xs) var(--sp-sm);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  width: 220px;
+  outline-offset: 2px;
+}
+
+.filter-input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+.filter-count {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ==========================================================================
+   20. PRINT BUTTON
+   ========================================================================== */
+
+#btn-print {
+  padding: var(--sp-xs) var(--sp-md);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  color: var(--ink);
+  transition: background 0.15s;
+}
+
+#btn-print:hover { background: var(--panel-strong); }
+
+/* ==========================================================================
+   21. SECTION HEADINGS & LAYOUT UTILITIES
+   ========================================================================== */
+
+.section-kicker {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--sp-xs);
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-lg);
+  flex-wrap: wrap;
+}
+
+.page-head h2 {
+  font-size: var(--fs-xl);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-lg);
+}
+
+.footnote {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin-top: var(--sp-lg);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+/* Utility */
+.text-muted  { color: var(--muted); }
+.text-accent { color: var(--accent); }
+.text-green  { color: var(--green); }
+.text-gold   { color: var(--gold); }
+.fw-bold     { font-weight: 700; }
+.mt-sm       { margin-top: var(--sp-sm); }
+.mt-md       { margin-top: var(--sp-md); }
+.mt-lg       { margin-top: var(--sp-lg); }
+
+/* ==========================================================================
+   22. RESPONSIVE — tablet (768px) and mobile (480px)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .report-shell { padding: 0 var(--sp-md) var(--sp-xl); }
+
+  .kpi-grid .metric-card {
+    flex: 1 1 calc(33% - var(--sp-md));
+    min-width: 120px;
+  }
+
+  .grid-2 { grid-template-columns: 1fr; }
+
+  .tab-nav button { padding: var(--sp-sm) var(--sp-md); font-size: var(--fs-sm); }
+
+  .page-head { flex-direction: column; align-items: flex-start; }
+}
+
+@media (max-width: 480px) {
+  .kpi-grid .metric-card {
+    flex: 1 1 calc(50% - var(--sp-sm));
+    min-width: 100px;
+  }
+
+  .metric-value { font-size: var(--fs-lg); }
+
+  .evidence-thumb { width: 90px; height: 68px; }
+
+  .data-table th, .data-table td { padding: var(--sp-xs) var(--sp-sm); }
+}
+
+/* ==========================================================================
+   23. PRINT STYLES
+   ========================================================================== */
+
+@media print {
+  body { background: #fff; font-size: 11px; }
+
+  .kpi-bar { position: static; backdrop-filter: none; box-shadow: none; border-bottom: 1px solid var(--line); }
+
+  .tab-nav, #lightbox, #btn-print, .filter-bar { display: none !important; }
+
+  .tab-panel { display: block !important; }
+
+  /* Expand all collapsed cards */
+  .card-collapsed .card-body { display: block !important; }
+  .card-toggle { display: none; }
+
+  .issue-card { break-inside: avoid; page-break-inside: avoid; }
+
+  .data-table thead { position: static; }
+
+  .report-shell { max-width: 100%; padding: 0; }
+
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+
+  @page { size: A4; margin: 1.5cm; }
+}
