@@ -1,4 +1,4 @@
-"""Tests for 6-sheet analytical Excel workbook generation."""
+"""Tests for Excel workbook generation (legacy 2-sheet and V3 4-sheet)."""
 
 import os
 from datetime import datetime, timezone
@@ -191,7 +191,7 @@ def _patch_image_download(monkeypatch):
     monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
 
 
-def test_generate_analytical_excel_has_six_sheets(tmp_path, monkeypatch):
+def test_generate_analytical_excel_has_four_sheets(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report._generate_analytical_excel(
@@ -202,14 +202,7 @@ def test_generate_analytical_excel_has_six_sheets(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    assert wb.sheetnames == [
-        "Executive Summary",
-        "Product Scorecard",
-        "Issue Analysis",
-        "Competitive Benchmark",
-        "Review Details",
-        "Trend Data",
-    ]
+    assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
 
 
 def test_generate_excel_without_analytics_uses_legacy(tmp_path, monkeypatch):
@@ -227,7 +220,7 @@ def test_generate_excel_without_analytics_uses_legacy(tmp_path, monkeypatch):
 
 
 def test_generate_excel_with_analytics_uses_analytical(tmp_path, monkeypatch):
-    """When analytics is passed, the wrapper produces the 6-sheet format."""
+    """When analytics is passed, the wrapper produces the 4-sheet V3 format."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report.generate_excel(
@@ -238,140 +231,13 @@ def test_generate_excel_with_analytics_uses_analytical(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    assert "Executive Summary" in wb.sheetnames
-    assert "Review Details" in wb.sheetnames
-    assert len(wb.sheetnames) == 6
+    assert "评论明细" in wb.sheetnames
+    assert "产品概览" in wb.sheetnames
+    assert len(wb.sheetnames) == 4
 
 
-def test_executive_summary_has_kpis(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    path = report._generate_analytical_excel([], [], analytics=analytics)
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Executive Summary"]
-    # Check that KPI header row exists
-    found_kpi_header = False
-    for row in ws.iter_rows(values_only=True):
-        if row and "指标" in str(row[0] or ""):
-            found_kpi_header = True
-            break
-    assert found_kpi_header
-
-
-def test_executive_summary_has_report_date(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    report_date = datetime(2026, 4, 5, tzinfo=timezone.utc)
-    path = report._generate_analytical_excel(
-        [], [], analytics=analytics, report_date=report_date,
-    )
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Executive Summary"]
-    assert ws.cell(row=1, column=1).value == "报告日期"
-    assert ws.cell(row=1, column=2).value == "2026-04-05"
-
-
-def test_executive_summary_has_llm_summary(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    path = report._generate_analytical_excel([], [], analytics=analytics)
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Executive Summary"]
-    # Find the LLM summary section
-    found_summary = False
-    for row in ws.iter_rows(values_only=True):
-        if row and str(row[0] or "").startswith("自有产品"):
-            found_summary = True
-            break
-    assert found_summary
-
-
-def test_product_scorecard_sorted_by_risk(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    # Add a second risk product with lower score
-    analytics["self"]["risk_products"].append({
-        "product_name": "Another Product",
-        "product_sku": "SKU-003",
-        "site": "basspro",
-        "ownership": "own",
-        "price": 39.99,
-        "rating": 3.8,
-        "total_reviews": 10,
-        "negative_review_rows": 2,
-        "risk_score": 4,
-        "top_labels_display": "包装运输(2)",
-        "focus_summary": "",
-    })
-    path = report._generate_analytical_excel(
-        SAMPLE_PRODUCTS, SAMPLE_REVIEWS, analytics=analytics,
-    )
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Product Scorecard"]
-    # First data row should be the highest risk_score
-    assert ws.cell(row=2, column=1).value == "Test Grinder"
-    assert ws.cell(row=3, column=1).value == "Another Product"
-
-
-def test_issue_analysis_sorted_by_review_count(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    analytics["self"]["issue_cards"].append({
-        "feature_display": "包装运输",
-        "label_display": "包装运输",
-        "review_count": 10,
-        "severity": "medium",
-        "severity_display": "中",
-        "affected_product_count": 2,
-    })
-    path = report._generate_analytical_excel([], [], analytics=analytics)
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Issue Analysis"]
-    # Higher review_count should come first
-    assert ws.cell(row=2, column=1).value == "包装运输"
-    assert ws.cell(row=3, column=1).value == "质量稳定性"
-
-
-def test_competitive_benchmark_with_gap_analysis(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    path = report._generate_analytical_excel([], [], analytics=analytics)
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Competitive Benchmark"]
-    # Header check — gap_analysis is present
-    assert ws.cell(row=1, column=1).value == "对标维度"
-    assert ws.cell(row=1, column=4).value == "差距"
-    assert ws.cell(row=2, column=1).value == "质量稳定性"
-
-
-def test_competitive_benchmark_fallback_to_themes(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    analytics = _make_test_analytics()
-    analytics["competitor"]["gap_analysis"] = []  # No gap data
-    path = report._generate_analytical_excel([], [], analytics=analytics)
-    import openpyxl
-
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Competitive Benchmark"]
-    # Should fall back to positive themes
-    assert ws.cell(row=1, column=1).value == "竞品优势维度"
-    assert ws.cell(row=1, column=2).value == "好评数"
-    assert ws.cell(row=2, column=1).value == "做工扎实"
-
-
-def test_review_details_has_enhanced_columns(tmp_path, monkeypatch):
+def test_review_detail_sheet_has_expected_columns(tmp_path, monkeypatch):
+    """评论明细 sheet should have all required columns including 图片链接."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report._generate_analytical_excel(
@@ -380,32 +246,110 @@ def test_review_details_has_enhanced_columns(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    ws = wb["Review Details"]
-    headers = [ws.cell(row=1, column=c).value for c in range(1, 13)]
+    ws = wb["评论明细"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
     assert "情感" in headers
-    assert "具体特征" in headers
+    assert "特征短语" in headers
     assert "洞察" in headers
-    assert "图片" in headers
-
-    # Data row check
-    assert ws.cell(row=2, column=1).value == "Test Grinder"
-    assert ws.cell(row=2, column=5).value == "negative"
-    assert "quality_stability" in (ws.cell(row=2, column=9).value or "")
+    assert "图片链接" in headers
+    # No embedded images — images appear as text URLs only
+    assert len(ws._images) == 0
 
 
-def test_trend_data_shows_note_when_empty(tmp_path, monkeypatch):
+def test_review_detail_sheet_data_row(tmp_path, monkeypatch):
+    """评论明细 first data row should contain the first review's sentiment."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
-    path = report._generate_analytical_excel([], [], analytics=analytics)
+    path = report._generate_analytical_excel(
+        SAMPLE_PRODUCTS, SAMPLE_REVIEWS, analytics=analytics,
+    )
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    ws = wb["Trend Data"]
-    assert ws.cell(row=1, column=1).value == "日期"
-    assert "数据积累中" in (ws.cell(row=2, column=1).value or "")
+    ws = wb["评论明细"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    sentiment_col = headers.index("情感") + 1
+    product_name_col = headers.index("产品名称") + 1
+    assert ws.cell(row=2, column=product_name_col).value == "Test Grinder"
+    assert ws.cell(row=2, column=sentiment_col).value == "negative"
 
 
-def test_trend_data_with_data(tmp_path, monkeypatch):
+def test_product_overview_sheet_has_risk_data(tmp_path, monkeypatch):
+    """产品概览 sheet should include ingested_reviews and risk_score from analytics."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    analytics = _make_test_analytics()
+    # Use a risk_products entry matching SAMPLE_PRODUCTS SKU-001
+    analytics["self"]["risk_products"] = [
+        {
+            "product_name": "Test Grinder",
+            "product_sku": "SKU-001",
+            "negative_review_rows": 5,
+            "negative_rate": 0.25,
+            "risk_score": 9,
+            "ingested_reviews": 20,
+            "top_features_display": "质量稳定性",
+        }
+    ]
+    path = report._generate_analytical_excel(
+        SAMPLE_PRODUCTS, SAMPLE_REVIEWS, analytics=analytics,
+    )
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb["产品概览"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    assert headers == [
+        "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
+        "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分",
+    ]
+    # First data row = Test Grinder (SKU-001)
+    assert ws.cell(row=2, column=1).value == "Test Grinder"
+    risk_score_col = headers.index("风险分") + 1
+    assert ws.cell(row=2, column=risk_score_col).value == 9
+
+
+def test_label_sheet_pivot_rows(tmp_path, monkeypatch):
+    """问题标签 sheet should have one row per label per review."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    import json as _json
+    analytics = _make_test_analytics()
+    reviews_with_labels = [
+        {
+            "product_name": "Test Grinder",
+            "product_sku": "SKU-001",
+            "author": "Alice",
+            "headline": "Blade broke",
+            "body": "Broke after 2 uses.",
+            "headline_cn": "刀片断了",
+            "body_cn": "两次后断了。",
+            "rating": 1.0,
+            "date_published": "2026-03-28",
+            "images": [],
+            "ownership": "own",
+            "sentiment": "negative",
+            "analysis_labels": _json.dumps([
+                {"code": "quality_stability", "polarity": "negative", "severity": "high", "confidence": 0.9},
+                {"code": "material", "polarity": "negative", "severity": "medium", "confidence": 0.7},
+            ]),
+            "analysis_features": "[]",
+            "analysis_insight_cn": "",
+        }
+    ]
+    path = report._generate_analytical_excel(
+        SAMPLE_PRODUCTS, reviews_with_labels, analytics=analytics,
+    )
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb["问题标签"]
+    # Header row + 2 label rows
+    assert ws.max_row == 3
+    assert ws.cell(row=2, column=3).value == "quality_stability"
+    assert ws.cell(row=3, column=3).value == "material"
+
+
+def test_trend_data_sheet_with_data(tmp_path, monkeypatch):
+    """趋势数据 should flatten nested series; SKU column is present."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     analytics["_trend_series"] = [
@@ -421,9 +365,28 @@ def test_trend_data_with_data(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    ws = wb["Trend Data"]
+    ws = wb["趋势数据"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    assert "日期" in headers
+    assert "SKU" in headers
     assert ws.cell(row=2, column=1).value == "2026-04-01"
-    assert ws.cell(row=2, column=2).value == "Test Grinder"
+    sku_col = headers.index("SKU") + 1
+    assert ws.cell(row=2, column=sku_col).value == "SKU-1"
+
+
+def test_trend_data_sheet_empty_still_has_header(tmp_path, monkeypatch):
+    """趋势数据 sheet should always have a header row even when no series data."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    analytics = _make_test_analytics()
+    # No _trend_series key → empty trend sheet
+    path = report._generate_analytical_excel([], [], analytics=analytics)
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb["趋势数据"]
+    assert ws.cell(row=1, column=1).value == "日期"
+    # Only the header row (no data rows, no "数据积累中" note in new format)
+    assert ws.max_row == 1
 
 
 def test_analytical_excel_none_analytics_falls_back_to_legacy(tmp_path, monkeypatch):
@@ -440,7 +403,7 @@ def test_analytical_excel_none_analytics_falls_back_to_legacy(tmp_path, monkeypa
 
 
 def test_analytical_excel_empty_data_still_has_headers(tmp_path, monkeypatch):
-    """Empty products/reviews with analytics still produce headers-only sheets."""
+    """Empty products/reviews with analytics still produce 4 sheets with headers."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = {
         "mode_display": "首日全量基线版",
@@ -453,7 +416,8 @@ def test_analytical_excel_empty_data_still_has_headers(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    assert len(wb.sheetnames) == 6
+    assert len(wb.sheetnames) == 4
+    assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
     # Each sheet should at least have a header row
     for name in wb.sheetnames:
         ws = wb[name]

@@ -649,7 +649,9 @@ def _generate_analytical_excel(
     analytics: dict | None = None,
     report_date: datetime | None = None,
 ) -> str:
-    """Generate a 6-sheet analytical Excel workbook.
+    """Generate a 4-sheet data-oriented Excel workbook.
+
+    Sheets: 评论明细, 产品概览, 问题标签, 趋势数据.
 
     If *analytics* is ``None``, falls back to the legacy 2-sheet format for
     backward compatibility.
@@ -672,348 +674,169 @@ def _generate_analytical_excel(
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
     header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    section_font = Font(bold=True, size=12, color="1F4E79")
 
-    def _style_header_row(ws, col_count, row=1):
-        for col_idx in range(1, col_count + 1):
-            cell = ws.cell(row=row, column=col_idx)
+    def _write_headers(ws, headers):
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
 
-    def _auto_col_widths(ws, min_w=10, max_w=60, skip_cols=None):
-        skip_cols = skip_cols or set()
+    def _auto_widths(ws, min_w=10, max_w=60):
         for col in ws.columns:
-            col_letter = col[0].column_letter
-            if col_letter in skip_cols:
-                continue
-            max_len = 0
-            for cell in col:
-                try:
-                    cell_len = len(str(cell.value)) if cell.value is not None else 0
-                    max_len = max(max_len, cell_len)
-                except Exception:
-                    pass
-            ws.column_dimensions[col_letter].width = min(max(max_len + 2, min_w), max_w)
+            letter = col[0].column_letter
+            max_len = max((len(str(c.value or "")) for c in col), default=0)
+            ws.column_dimensions[letter].width = min(max(max_len + 2, min_w), max_w)
 
-    # Convenience accessors
-    kpis = analytics.get("kpis", {})
-    self_data = analytics.get("self", {})
-    competitor_data = analytics.get("competitor", {})
-    report_copy = analytics.get("report_copy", {})
-
-    # ── Sheet 1: Executive Summary ────────────────────────────────────────
-    ws_exec = wb.active
-    ws_exec.title = "Executive Summary"
-
-    ws_exec.cell(row=1, column=1, value="报告日期")
-    ws_exec.cell(row=1, column=2, value=report_date.strftime("%Y-%m-%d"))
-    ws_exec.cell(row=2, column=1, value="报告模式")
-    ws_exec.cell(row=2, column=2, value=analytics.get("mode_display", ""))
-    # Row 3-4: blank
-
-    ws_exec.cell(row=5, column=1, value="核心 KPI").font = section_font
-
-    kpi_headers = ["指标", "本期", "上期", "变化", "状态"]
-    for col_idx, h in enumerate(kpi_headers, start=1):
-        cell = ws_exec.cell(row=6, column=col_idx, value=h)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = header_align
-
-    kpi_rows_data = [
-        ("产品健康指数", kpis.get("health_index", "—"), "—", kpis.get("health_index_delta_display", "—"), ""),
-        ("差评数", kpis.get("negative_review_rows", 0), "—", kpis.get("negative_review_rows_delta_display", "—"), ""),
-        ("差评率", kpis.get("negative_review_rate_display", "—"), "—", "", ""),
-        ("高风险产品", kpis.get("high_risk_count", 0), "—", "", ""),
-        ("竞品差距", kpis.get("competitive_gap_index", "—"), "—", kpis.get("competitive_gap_index_delta_display", "—"), ""),
-    ]
-    for row_offset, (label, current, prev, delta, status) in enumerate(kpi_rows_data):
-        row_num = 7 + row_offset
-        ws_exec.cell(row=row_num, column=1, value=label)
-        ws_exec.cell(row=row_num, column=2, value=_cell_value(current))
-        ws_exec.cell(row=row_num, column=3, value=prev)
-        ws_exec.cell(row=row_num, column=4, value=delta)
-        ws_exec.cell(row=row_num, column=5, value=status)
-
-    summary_row = 7 + len(kpi_rows_data) + 1
-    ws_exec.cell(row=summary_row, column=1, value="LLM 执行摘要").font = section_font
-    executive_summary = report_copy.get("executive_summary") or "(暂无)"
-    ws_exec.cell(row=summary_row + 1, column=1, value=executive_summary)
-
-    _auto_col_widths(ws_exec)
-
-    # ── Sheet 2: Product Scorecard ────────────────────────────────────────
-    ws_scorecard = wb.create_sheet("Product Scorecard")
-    scorecard_headers = [
-        "产品", "SKU", "站点", "归属", "价格", "评分",
-        "差评率", "风险分", "主要问题", "趋势",
-    ]
-    ws_scorecard.append(scorecard_headers)
-    _style_header_row(ws_scorecard, len(scorecard_headers))
-
-    risk_products = self_data.get("risk_products") or []
-    # Sort by risk_score descending
-    risk_products_sorted = sorted(risk_products, key=lambda p: p.get("risk_score", 0), reverse=True)
-    # Fall back to products list if no risk_products
-    if not risk_products_sorted and products:
-        risk_products_sorted = products
-
-    for row_idx, p in enumerate(risk_products_sorted, start=2):
-        # Compute negative rate
-        total_reviews = p.get("total_reviews") or p.get("review_count") or 0
-        neg_count = p.get("negative_review_rows", 0)
-        neg_rate = neg_count / total_reviews if total_reviews else 0
-
-        # Look up full product info from products list by SKU
-        sku = p.get("product_sku") or p.get("sku", "")
-        full_product = next((pp for pp in products if (pp.get("sku") or "") == sku), {})
-
-        ws_scorecard.cell(row=row_idx, column=1, value=p.get("product_name") or p.get("name", ""))
-        ws_scorecard.cell(row=row_idx, column=2, value=sku)
-        ws_scorecard.cell(row=row_idx, column=3, value=full_product.get("site", ""))
-        ws_scorecard.cell(row=row_idx, column=4, value=full_product.get("ownership", ""))
-        ws_scorecard.cell(row=row_idx, column=5, value=full_product.get("price", ""))
-        ws_scorecard.cell(row=row_idx, column=6, value=p.get("rating_avg") or full_product.get("rating", ""))
-        neg_rate_cell = ws_scorecard.cell(row=row_idx, column=7, value=f"{neg_rate:.0%}" if total_reviews else "—")
-        ws_scorecard.cell(row=row_idx, column=8, value=p.get("risk_score", ""))
-        ws_scorecard.cell(row=row_idx, column=9, value=p.get("top_features_display") or p.get("top_labels_display") or "")
-        ws_scorecard.cell(row=row_idx, column=10, value="")
-
-        # Conditional formatting for neg rate
-        if total_reviews:
-            if neg_rate > 0.30:
-                neg_rate_cell.fill = _RED_FILL
-            elif neg_rate >= 0.15:
-                neg_rate_cell.fill = _YELLOW_FILL
-            else:
-                neg_rate_cell.fill = _GREEN_FILL
-
-    _auto_col_widths(ws_scorecard)
-
-    # ── Sheet 3: Issue Analysis ───────────────────────────────────────────
-    ws_issues = wb.create_sheet("Issue Analysis")
-    issue_headers = [
-        "问题特征", "严重度", "影响评论数", "涉及产品数",
-        "首次出现", "最近一条", "代表性评论摘要",
-    ]
-    ws_issues.append(issue_headers)
-    _style_header_row(ws_issues, len(issue_headers))
-
-    issue_cards = self_data.get("issue_cards") or self_data.get("top_negative_clusters") or []
-    # Sort by review_count descending
-    issue_cards_sorted = sorted(issue_cards, key=lambda c: c.get("review_count", 0), reverse=True)
-
-    severity_fill_map = {"high": _RED_FILL, "medium": _YELLOW_FILL, "low": _GREEN_FILL}
-
-    for row_idx, card in enumerate(issue_cards_sorted, start=2):
-        ws_issues.cell(row=row_idx, column=1, value=card.get("feature_display") or card.get("label_display", ""))
-        severity = card.get("severity", "low")
-        sev_cell = ws_issues.cell(row=row_idx, column=2, value=card.get("severity_display") or severity)
-        ws_issues.cell(row=row_idx, column=3, value=card.get("review_count", 0))
-        ws_issues.cell(row=row_idx, column=4, value=card.get("affected_product_count", 0))
-        ws_issues.cell(row=row_idx, column=5, value=card.get("first_seen", ""))
-        ws_issues.cell(row=row_idx, column=6, value=card.get("last_seen", ""))
-
-        # Representative review summary — build from raw fields if summary_text missing
-        examples = card.get("example_reviews") or []
-        summary = ""
-        if examples:
-            ex = examples[0]
-            summary = ex.get("summary_text", "")
-            if not summary:
-                title = (ex.get("headline_cn") or ex.get("headline") or "").strip()
-                body = (ex.get("body_cn") or ex.get("body") or "").strip()
-                summary = f"{title}：{body}" if title and body else (title or body or "")
-                if len(summary) > 200:
-                    summary = summary[:200] + "..."
-        ws_issues.cell(row=row_idx, column=7, value=summary)
-
-        # Severity coloring
-        if severity in severity_fill_map:
-            sev_cell.fill = severity_fill_map[severity]
-
-    _auto_col_widths(ws_issues)
-
-    # ── Sheet 4: Competitive Benchmark ────────────────────────────────────
-    ws_benchmark = wb.create_sheet("Competitive Benchmark")
-    gap_analysis = competitor_data.get("gap_analysis") or []
-
-    if gap_analysis:
-        bench_headers = ["对标维度", "自有得分", "竞品得分", "差距", "方向"]
-        ws_benchmark.append(bench_headers)
-        _style_header_row(ws_benchmark, len(bench_headers))
-
-        red_font = Font(color="CC0000")
-        green_font = Font(color="008000")
-
-        for row_idx, g in enumerate(gap_analysis, start=2):
-            ws_benchmark.cell(row=row_idx, column=1, value=g.get("label_display", ""))
-            own_neg = g.get("own_negative_count", 0)
-            comp_pos = g.get("competitor_positive_count", 0)
-            ws_benchmark.cell(row=row_idx, column=2, value=own_neg)
-            ws_benchmark.cell(row=row_idx, column=3, value=comp_pos)
-            gap_val = comp_pos - own_neg
-            gap_cell = ws_benchmark.cell(row=row_idx, column=4, value=gap_val)
-            if gap_val > 0:
-                direction = "竞品领先"
-                gap_cell.font = red_font
-            elif gap_val < 0:
-                direction = "自有领先"
-                gap_cell.font = green_font
-            else:
-                direction = "持平"
-            ws_benchmark.cell(row=row_idx, column=5, value=direction)
-    else:
-        # Fallback: show competitor positive themes
-        positive_themes = competitor_data.get("top_positive_themes") or []
-        bench_headers = ["竞品优势维度", "好评数"]
-        ws_benchmark.append(bench_headers)
-        _style_header_row(ws_benchmark, len(bench_headers))
-
-        for row_idx, theme in enumerate(positive_themes, start=2):
-            ws_benchmark.cell(row=row_idx, column=1, value=theme.get("label_display", ""))
-            ws_benchmark.cell(row=row_idx, column=2, value=theme.get("review_count", 0))
-
-    _auto_col_widths(ws_benchmark)
-
-    # ── Sheet 5: Review Details ───────────────────────────────────────────
-    ws_reviews = wb.create_sheet("Review Details")
+    # ── Sheet 1: 评论明细 ──────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "评论明细"
     review_headers = [
-        "产品", "SKU", "归属", "评分", "情感", "标题(原文)",
-        "标题(中文)", "内容(中文)", "具体特征", "洞察", "图片", "日期",
+        "ID", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
+        "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
+        "特征短语", "洞察", "评论时间", "图片链接",
     ]
-    ws_reviews.append(review_headers)
-    _style_header_row(ws_reviews, len(review_headers))
+    _write_headers(ws1, review_headers)
 
-    images_col = len(review_headers) - 1  # "图片" is column 11 (1-indexed)
-    images_col_letter = get_column_letter(images_col)
-
-    # Pre-fetch all review images in parallel
-    _all_image_urls_analytical = set()
-    for _r in reviews:
-        for _url in (_r.get("images") or []):
-            if isinstance(_url, str) and _url.startswith("http"):
-                _all_image_urls_analytical.add(_url)
-    _prefetched_analytical = _download_images_parallel(list(_all_image_urls_analytical)) if _all_image_urls_analytical else {}
-
-    for row_idx, r in enumerate(reviews, start=2):
-        ws_reviews.cell(row=row_idx, column=1, value=_cell_value(r.get("product_name")))
-        ws_reviews.cell(row=row_idx, column=2, value=_cell_value(r.get("product_sku")))
-        ws_reviews.cell(row=row_idx, column=3, value=_cell_value(r.get("ownership")))
-        ws_reviews.cell(row=row_idx, column=4, value=_cell_value(r.get("rating")))
-        ws_reviews.cell(row=row_idx, column=5, value=_cell_value(r.get("sentiment", "")))
-        ws_reviews.cell(row=row_idx, column=6, value=_cell_value(r.get("headline")))
-        ws_reviews.cell(row=row_idx, column=7, value=_cell_value(r.get("headline_cn")))
-        ws_reviews.cell(row=row_idx, column=8, value=_cell_value(r.get("body_cn")))
-
-        # Features from review_analysis (snapshot uses analysis_features/analysis_insight_cn)
-        features = r.get("analysis_features") or r.get("features") or r.get("label_codes") or []
-        if isinstance(features, str):
+    for r in reviews:
+        # Parse images: JSON string → newline-separated URLs (no downloading)
+        images_raw = r.get("images")
+        if isinstance(images_raw, str):
             try:
-                features = json.loads(features)
+                images_list = json.loads(images_raw)
             except Exception:
-                pass
-        if isinstance(features, list):
-            features_str = ", ".join(str(f) for f in features)
+                images_list = []
+        elif isinstance(images_raw, list):
+            images_list = images_raw
         else:
-            features_str = str(features)
-        ws_reviews.cell(row=row_idx, column=9, value=features_str)
+            images_list = []
+        images_text = "\n".join(str(u) for u in images_list) if images_list else ""
 
-        insight = r.get("analysis_insight_cn") or r.get("insight_cn") or ""
-        ws_reviews.cell(row=row_idx, column=10, value=_cell_value(insight))
-
-        # Embed images — reuse the same logic as the legacy sheet
-        image_urls = r.get("images") or []
-        if isinstance(image_urls, str):
+        # Parse labels
+        labels_raw = r.get("analysis_labels") or "[]"
+        if isinstance(labels_raw, str):
             try:
-                image_urls = json.loads(image_urls)
+                labels_list = json.loads(labels_raw)
             except Exception:
-                image_urls = []
+                labels_list = []
+        else:
+            labels_list = labels_raw if isinstance(labels_raw, list) else []
+        labels_text = ", ".join(lbl.get("code", "") for lbl in labels_list if isinstance(lbl, dict))
 
-        embedded_count = 0
-        for img_idx, url in enumerate(image_urls):
-            xl_img = _prefetched_analytical.get(url) if isinstance(url, str) else None
-            if xl_img is None and isinstance(url, str) and url.startswith("http"):
-                xl_img = _download_and_resize(url)
-            if xl_img:
-                y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
-                from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
-                from openpyxl.drawing.xdr import XDRPositiveSize2D
-                from openpyxl.utils.units import pixels_to_EMU
-                marker = AnchorMarker(
-                    col=images_col - 1,  # 0-indexed
-                    row=row_idx - 1,     # 0-indexed
-                    colOff=0,
-                    rowOff=pixels_to_EMU(y_offset),
-                )
-                size = XDRPositiveSize2D(
-                    pixels_to_EMU(xl_img.width),
-                    pixels_to_EMU(xl_img.height),
-                )
-                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
-                ws_reviews.add_image(xl_img)
-                embedded_count += 1
-
-        if embedded_count > 0:
-            row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
-            ws_reviews.row_dimensions[row_idx].height = row_height_px * 0.75
-        elif image_urls:
-            ws_reviews.cell(row=row_idx, column=images_col, value=_cell_value(image_urls))
-
-        ws_reviews.cell(row=row_idx, column=12, value=_cell_value(r.get("date_published")))
-
-    # Auto-adjust widths, skip image column
-    for col in ws_reviews.columns:
-        col_letter = col[0].column_letter
-        if col_letter == images_col_letter:
-            ws_reviews.column_dimensions[col_letter].width = _IMG_COL_WIDTH
-            continue
-        max_len = 0
-        for cell in col:
+        # Parse features
+        features_raw = r.get("analysis_features") or r.get("features") or "[]"
+        if isinstance(features_raw, str):
             try:
-                cell_len = len(str(cell.value)) if cell.value is not None else 0
-                max_len = max(max_len, cell_len)
+                features_list = json.loads(features_raw)
             except Exception:
-                pass
-        ws_reviews.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 60)
+                features_list = []
+        else:
+            features_list = features_raw if isinstance(features_raw, list) else []
+        features_text = ", ".join(str(f) for f in features_list)
 
-    # ── Sheet 6: Trend Data ───────────────────────────────────────────────
-    ws_trend = wb.create_sheet("Trend Data")
-    # _trend_series: per-product nested format from _build_trend_data
-    # Flatten to rows for Excel display
-    trend_series = analytics.get("_trend_series") or []
-    trend_rows = []
-    for product in trend_series:
-        for s in product.get("series") or []:
-            trend_rows.append({
-                "date": s.get("date", ""),
-                "product_name": product.get("product_name", ""),
-                "price": s.get("price", ""),
-                "rating": s.get("rating", ""),
-                "review_count": s.get("review_count", 0),
-                "stock_status": s.get("stock_status", ""),
-            })
+        ws1.append([
+            r.get("id"),
+            r.get("product_name"),
+            r.get("product_sku"),
+            r.get("ownership"),
+            r.get("rating"),
+            r.get("sentiment"),
+            labels_text,
+            r.get("impact_category"),
+            r.get("failure_mode"),
+            r.get("headline"),
+            r.get("headline_cn"),
+            r.get("body"),
+            r.get("body_cn"),
+            features_text,
+            r.get("analysis_insight_cn") or r.get("insight_cn") or "",
+            r.get("date_published_parsed") or r.get("date_published") or "",
+            images_text,
+        ])
 
-    trend_headers = ["日期", "产品", "价格", "评分", "评论量", "库存状态"]
-    ws_trend.append(trend_headers)
-    _style_header_row(ws_trend, len(trend_headers))
+    _auto_widths(ws1)
 
-    if not trend_rows:
-        ws_trend.cell(row=2, column=1, value="数据积累中 — 多日采集后将显示趋势")
-    else:
-        for row_idx, t in enumerate(trend_rows, start=2):
-            ws_trend.cell(row=row_idx, column=1, value=t.get("date", ""))
-            ws_trend.cell(row=row_idx, column=2, value=t.get("product_name", ""))
-            ws_trend.cell(row=row_idx, column=3, value=t.get("price", ""))
-            ws_trend.cell(row=row_idx, column=4, value=t.get("rating", ""))
-            ws_trend.cell(row=row_idx, column=5, value=t.get("review_count", 0))
-            ws_trend.cell(row=row_idx, column=6, value=t.get("stock_status", ""))
+    # ── Sheet 2: 产品概览 ──────────────────────────────────────────────────
+    ws2 = wb.create_sheet("产品概览")
+    product_headers = [
+        "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
+        "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分",
+    ]
+    _write_headers(ws2, product_headers)
 
-    _auto_col_widths(ws_trend)
+    risk_by_sku = {
+        p["product_sku"]: p
+        for p in (analytics.get("self") or {}).get("risk_products") or []
+        if p.get("product_sku")
+    }
+    for p in products:
+        risk = risk_by_sku.get(p.get("sku", ""), {})
+        ws2.append([
+            p.get("name"),
+            p.get("sku"),
+            p.get("site"),
+            p.get("ownership"),
+            p.get("price"),
+            p.get("stock_status"),
+            p.get("rating"),
+            p.get("review_count"),
+            risk.get("ingested_reviews", 0),
+            risk.get("negative_review_rows", 0),
+            risk.get("negative_rate"),
+            risk.get("risk_score"),
+        ])
+
+    _auto_widths(ws2)
+
+    # ── Sheet 3: 问题标签 ──────────────────────────────────────────────────
+    ws3 = wb.create_sheet("问题标签")
+    label_headers = ["review_id", "product_sku", "label_code", "label_polarity", "severity", "confidence"]
+    _write_headers(ws3, label_headers)
+
+    for r in reviews:
+        labels_raw = r.get("analysis_labels") or "[]"
+        if isinstance(labels_raw, str):
+            try:
+                labels = json.loads(labels_raw)
+            except Exception:
+                labels = []
+        else:
+            labels = labels_raw if isinstance(labels_raw, list) else []
+        for label in labels:
+            if isinstance(label, dict):
+                ws3.append([
+                    r.get("id"),
+                    r.get("product_sku"),
+                    label.get("code"),
+                    label.get("polarity"),
+                    label.get("severity"),
+                    label.get("confidence"),
+                ])
+
+    _auto_widths(ws3)
+
+    # ── Sheet 4: 趋势数据 ──────────────────────────────────────────────────
+    ws4 = wb.create_sheet("趋势数据")
+    trend_headers = ["日期", "SKU", "产品名称", "价格", "评分", "评论数", "库存状态"]
+    _write_headers(ws4, trend_headers)
+
+    for ts in analytics.get("_trend_series") or []:
+        for point in ts.get("series") or []:
+            ws4.append([
+                point.get("date"),
+                ts.get("product_sku"),
+                ts.get("product_name"),
+                point.get("price"),
+                point.get("rating"),
+                point.get("review_count"),
+                point.get("stock_status"),
+            ])
+
+    _auto_widths(ws4)
 
     wb.save(filepath)
-    logger.info("_generate_analytical_excel: saved 6-sheet workbook to %s", filepath)
+    logger.info("V3 4-sheet Excel generated: %s", filepath)
     return filepath
 
 

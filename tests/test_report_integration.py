@@ -284,7 +284,7 @@ class TestReportHTML:
 
 
 class TestExcelGeneration:
-    """Test 6-sheet Excel generation via generate_excel with analytics."""
+    """Test 4-sheet data-oriented Excel generation via generate_excel with analytics."""
 
     def test_generate_analytical_excel_creates_file(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
@@ -298,31 +298,8 @@ class TestExcelGeneration:
         )
         assert Path(path).exists()
 
-    def test_generate_analytical_excel_has_six_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_generate_analytical_excel_has_four_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-        analytics = report_analytics.build_report_analytics(sample_snapshot)
-        normalized = report_common.normalize_deep_report_analytics(analytics)
-
-        # Prevent HTTP image downloads
-        monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
-
-        path = report.generate_excel(
-            products=sample_snapshot["products"],
-            reviews=sample_snapshot["reviews"],
-            analytics=normalized,
-        )
-
-        import openpyxl
-        wb = openpyxl.load_workbook(path)
-        assert len(wb.sheetnames) == 6
-        assert "Executive Summary" in wb.sheetnames
-        assert "Product Scorecard" in wb.sheetnames
-        assert "Issue Analysis" in wb.sheetnames
-        assert "Review Details" in wb.sheetnames
-
-    def test_executive_summary_sheet_has_kpi_header(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
-        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-        monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
 
@@ -334,17 +311,11 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        ws = wb["Executive Summary"]
-        found_kpi_header = any(
-            "指标" in str(cell.value or "")
-            for row in ws.iter_rows()
-            for cell in row
-        )
-        assert found_kpi_header
+        assert len(wb.sheetnames) == 4
+        assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
 
-    def test_review_details_sheet_has_data_rows(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_review_detail_sheet_has_sentiment_column(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-        monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
 
@@ -356,9 +327,28 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        ws = wb["Review Details"]
+        ws = wb["评论明细"]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        assert "情感" in headers
+
+    def test_review_detail_sheet_has_data_rows(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+        analytics = report_analytics.build_report_analytics(sample_snapshot)
+        normalized = report_common.normalize_deep_report_analytics(analytics)
+
+        path = report.generate_excel(
+            products=sample_snapshot["products"],
+            reviews=sample_snapshot["reviews"],
+            analytics=normalized,
+        )
+
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+        ws = wb["评论明细"]
         # Header + at least one data row
         assert ws.max_row >= 2
+        # No embedded images in 4-sheet format
+        assert len(ws._images) == 0
 
 
 # ── LLM Insights (Fallback) ───────────────────────────────────────────────────
