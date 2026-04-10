@@ -159,7 +159,7 @@ class TestAnalyzeAndTranslateBatch:
         assert analysis["sentiment"] == "positive"
         assert analysis["sentiment_score"] == 0.9
         assert analysis["llm_model"] == "test-model"
-        assert analysis["prompt_version"] == "v1"
+        assert analysis["prompt_version"] == "v2"
 
         labels = json.loads(analysis["labels"])
         assert len(labels) == 2
@@ -289,4 +289,4 @@ class TestAnalyzeAndTranslateBatch:
 
     def test_prompt_version_attribute(self):
         """TranslationWorker should have _prompt_version class attribute."""
-        assert TranslationWorker._prompt_version == "v1"
+        assert TranslationWorker._prompt_version == "v2"

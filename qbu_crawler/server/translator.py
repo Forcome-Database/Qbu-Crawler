@@ -95,7 +95,7 @@ class TranslationWorker:
     # Backoff delays (seconds) for consecutive transient failures
     _BACKOFF_DELAYS = [30, 60, 120, 300]
 
-    _prompt_version = "v1"
+    _prompt_version = "v2"
 
     def __init__(self, interval: int = 60, batch_size: int = 20, concurrency: int = 1):
         self._interval = interval
@@ -235,7 +235,14 @@ class TranslationWorker:
             "3. 给出情感强度 sentiment_score（0.0-1.0，1.0 表示极端正面/负面）。\n"
             "4. 从下方标签分类中选择适用的标签（可多选，也可不选）。\n"
             '5. 提取 2-5 个中文特征短语 features（如"做工精良"、"尺寸偏小"）。\n'
-            "6. 用一句话总结核心洞察（insight_cn 中文, insight_en 英文）。\n\n"
+            "6. 用一句话总结核心洞察（insight_cn 中文, insight_en 英文）。\n"
+            "7. 判断影响类别 impact_category（必须为 safety / functional / durability / cosmetic / service 之一）：\n"
+            "   - safety: 涉及人身安全风险（金属碎屑进入食物、使用中断裂、爆炸等）\n"
+            "   - functional: 产品无法执行核心功能\n"
+            "   - durability: 初期可用但短期内退化/损坏\n"
+            "   - cosmetic: 外观问题、轻微美观缺陷\n"
+            "   - service: 物流、客服、履约问题\n"
+            "8. 提取具体失效模式 failure_mode（一个中文短语，如'齿轮磨损'、'密封圈漏肉'、'主轴金属屑脱落'）。\n\n"
             f"## 情感判断参考\n"
             f"- rating <= {config.NEGATIVE_THRESHOLD} 通常倾向 negative\n"
             f"- rating >= 4 通常倾向 positive\n"
@@ -254,7 +261,9 @@ class TranslationWorker:
             "\"severity\": \"low|medium|high\", \"confidence\": 0.0-1.0}]\n"
             "- features: [\"中文特征短语\", ...]\n"
             "- insight_cn: 一句话中文洞察\n"
-            "- insight_en: 一句话英文洞察\n\n"
+            "- insight_en: 一句话英文洞察\n"
+            "- impact_category: safety | functional | durability | cosmetic | service\n"
+            "- failure_mode: \"具体失效模式中文短语\"\n\n"
             '不要返回其他内容，只返回 JSON 对象。\n\n'
             f"输入：\n{json.dumps(items_payload, ensure_ascii=False)}"
         )
@@ -332,6 +341,10 @@ class TranslationWorker:
                     features = item.get("features") if isinstance(item.get("features"), list) else None
                     insight_cn = (item.get("insight_cn") or "").strip() or None
                     insight_en = (item.get("insight_en") or "").strip() or None
+                    impact_category = (item.get("impact_category") or "").strip().lower() or None
+                    if impact_category and impact_category not in ("safety", "functional", "durability", "cosmetic", "service"):
+                        impact_category = None
+                    failure_mode = (item.get("failure_mode") or "").strip() or None
 
                     models.save_review_analysis(
                         review_id=review["id"],
@@ -343,6 +356,8 @@ class TranslationWorker:
                         insight_en=insight_en,
                         llm_model=config.LLM_MODEL,
                         prompt_version=self._prompt_version,
+                        impact_category=impact_category,
+                        failure_mode=failure_mode,
                     )
                 except Exception:
                     logger.debug(
