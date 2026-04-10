@@ -534,6 +534,21 @@ def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:
     return round(avg * 100)
 
 
+def has_estimated_dates(reviews, logical_date_str):
+    """Check if >30% of review dates cluster on the same MM-DD as logical_date.
+
+    Indicates relative dates ('3 years ago') parsed to the same day-of-year.
+    """
+    if not reviews:
+        return False
+    logical_mmdd = logical_date_str[5:]  # "MM-DD" from "YYYY-MM-DD"
+    count_matching = sum(
+        1 for r in reviews
+        if (r.get("date_published_parsed") or "").endswith(logical_mmdd)
+    )
+    return count_matching / len(reviews) > 0.30
+
+
 # ── Previous analytics loader ───────────────────────────────────────────────
 
 

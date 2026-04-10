@@ -323,6 +323,31 @@ class TestAlertLevelV3:
         assert level == "green"
 
 
+from qbu_crawler.server.report_common import has_estimated_dates
+
+
+class TestEstimatedDates:
+    def test_detects_clustered_dates(self):
+        reviews = [
+            {"date_published_parsed": "2022-04-10"},
+            {"date_published_parsed": "2023-04-10"},
+            {"date_published_parsed": "2024-04-10"},
+            {"date_published_parsed": "2026-01-15"},
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is True
+
+    def test_no_clustering(self):
+        reviews = [
+            {"date_published_parsed": "2026-01-01"},
+            {"date_published_parsed": "2026-02-15"},
+            {"date_published_parsed": "2026-03-20"},
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is False
+
+    def test_empty(self):
+        assert has_estimated_dates([], "2026-04-10") is False
+
+
 import sqlite3
 import pytest
 from qbu_crawler import config, models
