@@ -23,4 +23,4 @@ def test_default_health_yellow():
 
 def test_default_high_risk_threshold():
     from qbu_crawler import config
-    assert config.HIGH_RISK_THRESHOLD == 8
+    assert config.HIGH_RISK_THRESHOLD == 35
