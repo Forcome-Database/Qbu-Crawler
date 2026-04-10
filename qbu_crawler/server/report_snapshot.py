@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from qbu_crawler import config, models
-from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
+from qbu_crawler.server import report, report_analytics, report_html, report_llm
 
 _logger = logging.getLogger(__name__)
 
@@ -660,10 +660,6 @@ def generate_full_report_from_snapshot(
         config.REPORT_DIR,
         f"workflow-run-{snapshot['run_id']}-analytics-{snapshot['logical_date']}.json",
     )
-    pdf_output_path = os.path.join(
-        config.REPORT_DIR,
-        f"workflow-run-{snapshot['run_id']}-full-report.pdf",
-    )
     html_output_path = os.path.join(
         config.REPORT_DIR,
         f"workflow-run-{snapshot['run_id']}-full-report.html",
@@ -671,7 +667,6 @@ def generate_full_report_from_snapshot(
     excel_path = None
     pdf_path = None
     html_path = None
-    v3_html_path = None
 
     try:
         synced_labels = report_analytics.sync_review_labels(snapshot)
@@ -712,12 +707,9 @@ def generate_full_report_from_snapshot(
             output_path=output_path,
             analytics=analytics,
         )
-        pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, pdf_output_path)
 
-        # 保存完整交互式 HTML 报告（含 Plotly 图表，浏览器打开可交互）
-        report_html = report_pdf.render_report_html(snapshot, analytics)
-        Path(html_output_path).write_text(report_html, encoding="utf-8")
-        html_path = html_output_path
+        # V3 HTML report (replaces V2 PDF + HTML pipeline)
+        html_path = report_html.render_v3_html(snapshot, analytics, output_path=html_output_path)
     except Exception as exc:
         if isinstance(exc, FullReportGenerationError):
             raise
@@ -725,15 +717,8 @@ def generate_full_report_from_snapshot(
             str(exc),
             analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
             excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
-            pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
+            pdf_path=None,
         ) from exc
-
-    # V3 HTML output (parallel with V2 PDF during Phase 3a)
-    try:
-        v3_html_path = report_pdf.render_v3_html(snapshot, analytics)
-        _logger.info("V3 HTML report generated: %s", v3_html_path)
-    except Exception:
-        _logger.exception("V3 HTML generation failed (non-blocking)")
 
     email_result = None
     if send_email:
@@ -745,7 +730,7 @@ def generate_full_report_from_snapshot(
                 subject=subject,
                 body_text=body,
                 body_html=body_html,
-                attachment_paths=[excel_path, pdf_path, html_path],
+                attachment_paths=[excel_path, html_path],
             )
         except Exception as exc:
             email_result = {"success": False, "error": str(exc), "recipients": 0}
@@ -761,6 +746,5 @@ def generate_full_report_from_snapshot(
         "analytics_path": analytics_path,
         "pdf_path": pdf_path,
         "html_path": html_path,
-        "v3_html_path": v3_html_path,
         "email": email_result,
     }
