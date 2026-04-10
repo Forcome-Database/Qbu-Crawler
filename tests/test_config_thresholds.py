@@ -13,12 +13,12 @@ def test_default_low_rating_threshold():
 
 def test_default_health_red():
     from qbu_crawler import config
-    assert config.HEALTH_RED == 60
+    assert config.HEALTH_RED == 45
 
 
 def test_default_health_yellow():
     from qbu_crawler import config
-    assert config.HEALTH_YELLOW == 80
+    assert config.HEALTH_YELLOW == 60
 
 
 def test_default_high_risk_threshold():

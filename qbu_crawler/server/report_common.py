@@ -431,37 +431,27 @@ def _humanize_bullets(normalized):
 
 
 def compute_health_index(analytics: dict) -> float:
-    """Compute 0-100 health index. Higher = healthier.
+    """NPS-proxy health index.
 
-    Weights: 20% site rating (lagging) + 25% sample rating (leading)
-             + 35% negative rate + 20% risk score.
+    Maps Net Promoter Score (-100..+100) to a 0..100 scale:
+        promoters (rating >= 4) minus detractors (rating <= NEGATIVE_THRESHOLD),
+        divided by total own reviews, times 100, then linearly mapped.
+
+    Industry benchmarks for consumer products:
+        > 75 excellent, 60-75 good, 50-60 needs attention, < 50 critical.
     """
-    kpis = analytics.get("kpis", {})
-    own_count = kpis.get("own_product_count", 0) or 1
+    kpis = analytics.get("kpis", {}) if isinstance(analytics, dict) else {}
+    own_reviews = kpis.get("own_review_rows", 0)
+    if own_reviews == 0:
+        return 50.0  # No data → neutral sentinel
 
-    site_rating = kpis.get("own_avg_rating", 0) or 0
-    site_rating_score = min(site_rating / 5.0, 1.0)
+    promoters = kpis.get("own_positive_review_rows", 0)
+    detractors = kpis.get("own_negative_review_rows", 0)
 
-    sample_rating = kpis.get("sample_avg_rating") or site_rating or 0
-    sample_rating_score = min(sample_rating / 5.0, 1.0)
+    nps = ((promoters - detractors) / own_reviews) * 100
+    health = (nps + 100) / 2
 
-    neg_rate = kpis.get("own_negative_review_rate") or kpis.get("negative_review_rate", 0) or 0
-    neg_score = 1.0 - min(neg_rate, 1.0)
-
-    high_risk_count = sum(
-        1 for p in analytics.get("self", {}).get("risk_products", [])
-        if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
-    )
-    risk_ratio = high_risk_count / max(own_count, 1)
-    risk_score = 1.0 - min(risk_ratio, 1.0)
-
-    index = (
-        site_rating_score * 0.20
-        + sample_rating_score * 0.25
-        + neg_score * 0.35
-        + risk_score * 0.20
-    ) * 100
-    return round(max(0, min(100, index)), 1)
+    return round(max(0.0, min(100.0, health)), 1)
 
 
 def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:

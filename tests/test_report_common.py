@@ -400,20 +400,27 @@ from qbu_crawler.server import report_common
 
 
 def test_compute_health_index_perfect():
+    # NPS-proxy: all promoters → NPS=100, health=100
     analytics = {
-        "kpis": {"own_avg_rating": 5.0, "negative_review_rate": 0, "own_product_count": 3},
-        "self": {"risk_products": []},
+        "kpis": {
+            "own_review_rows": 10,
+            "own_positive_review_rows": 10,
+            "own_negative_review_rows": 0,
+        },
     }
     assert report_common.compute_health_index(analytics) == 100.0
 
 
 def test_compute_health_index_worst():
-    from qbu_crawler import config
+    # NPS-proxy: all detractors → NPS=-100, health=0
     analytics = {
-        "kpis": {"own_avg_rating": 1.0, "negative_review_rate": 1.0, "own_product_count": 1},
-        "self": {"risk_products": [{"risk_score": config.HIGH_RISK_THRESHOLD + 1}]},
+        "kpis": {
+            "own_review_rows": 10,
+            "own_positive_review_rows": 0,
+            "own_negative_review_rows": 10,
+        },
     }
-    assert report_common.compute_health_index(analytics) == 9.0  # 0.2*20 + 0.2*25 + 0*35 + 0*20 = 9
+    assert report_common.compute_health_index(analytics) == 0.0
 
 
 def test_compute_competitive_gap_index():
@@ -733,7 +740,7 @@ def test_parse_date_flexible_month_precision():
     assert result == real_date(2025, 11, 7), \
         f"Expected 2025-11-07 but got {result}"
 
-    # Create analytics with high health (> 80)
+    # Create analytics with high health (NPS-proxy: 9 promoters, 1 detractor → health=90)
     analytics2 = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -741,8 +748,10 @@ def test_parse_date_flexible_month_precision():
             "translated_count": 10,
             "own_product_count": 1,
             "own_review_rows": 10,
-            "own_negative_review_rate": 0.1,  # Low negative rate
-            "own_avg_rating": 4.8,  # Very high rating
+            "own_positive_review_rows": 9,  # 9 promoters
+            "own_negative_review_rows": 1,  # 1 detractor → health=90
+            "own_negative_review_rate": 0.1,
+            "own_avg_rating": 4.8,
         },
         "self": {
             "risk_products": [],
@@ -991,18 +1000,24 @@ def test_cluster_summary_prefers_date_published_parsed():
 
 
 def test_health_index_sensitive_to_negative_spike():
-    """Health index should drop significantly when negative rate spikes."""
+    """Health index should drop significantly when detractor count spikes (NPS-proxy)."""
     from qbu_crawler.server.report_common import compute_health_index
 
+    # Baseline: 19 promoters, 1 detractor out of 20 → NPS=90, health=95
     baseline = {
-        "kpis": {"own_avg_rating": 4.5, "own_negative_review_rate": 0.05,
-                 "own_product_count": 5, "sample_avg_rating": 4.5},
-        "self": {"risk_products": []},
+        "kpis": {
+            "own_review_rows": 20,
+            "own_positive_review_rows": 19,
+            "own_negative_review_rows": 1,
+        },
     }
+    # Spiked: 14 promoters, 6 detractors out of 20 → NPS=40, health=70
     spiked = {
-        "kpis": {"own_avg_rating": 4.5, "own_negative_review_rate": 0.30,
-                 "own_product_count": 5, "sample_avg_rating": 3.0},
-        "self": {"risk_products": []},
+        "kpis": {
+            "own_review_rows": 20,
+            "own_positive_review_rows": 14,
+            "own_negative_review_rows": 6,
+        },
     }
     idx_baseline = compute_health_index(baseline)
     idx_spiked = compute_health_index(spiked)
