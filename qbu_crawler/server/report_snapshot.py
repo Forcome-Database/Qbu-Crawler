@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 
 from qbu_crawler import config, models
 from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
+
+_logger = logging.getLogger(__name__)
 
 
 class FullReportGenerationError(RuntimeError):
@@ -149,6 +152,7 @@ def generate_full_report_from_snapshot(
     excel_path = None
     pdf_path = None
     html_path = None
+    v3_html_path = None
 
     try:
         synced_labels = report_analytics.sync_review_labels(snapshot)
@@ -205,6 +209,13 @@ def generate_full_report_from_snapshot(
             pdf_path=pdf_path if pdf_path and os.path.isfile(pdf_path) else None,
         ) from exc
 
+    # V3 HTML output (parallel with V2 PDF during Phase 3a)
+    try:
+        v3_html_path = report_pdf.render_v3_html(snapshot, analytics)
+        _logger.info("V3 HTML report generated: %s", v3_html_path)
+    except Exception:
+        _logger.exception("V3 HTML generation failed (non-blocking)")
+
     email_result = None
     if send_email:
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
@@ -231,5 +242,6 @@ def generate_full_report_from_snapshot(
         "analytics_path": analytics_path,
         "pdf_path": pdf_path,
         "html_path": html_path,
+        "v3_html_path": v3_html_path,
         "email": email_result,
     }
