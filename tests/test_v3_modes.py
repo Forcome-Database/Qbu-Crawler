@@ -217,3 +217,148 @@ class TestComputeClusterChanges:
         previous = [{"label_code": "qc", "review_count": 5, "severity": "low"}]
         changes = compute_cluster_changes(current, previous, "2026-04-10")
         assert len(changes["improving"]) == 1
+
+
+from qbu_crawler.server.report_snapshot import _change_report_subject_prefix
+
+
+class TestChangeReportSubjectPrefix:
+    def test_single_price(self):
+        assert _change_report_subject_prefix({"price_changes": [1]}) == "[价格变动]"
+
+    def test_single_stock(self):
+        assert _change_report_subject_prefix({"stock_changes": [1]}) == "[库存变动]"
+
+    def test_multiple_types(self):
+        assert _change_report_subject_prefix({"price_changes": [1], "stock_changes": [1]}) == "[数据变化]"
+
+    def test_empty(self):
+        assert _change_report_subject_prefix({}) == "[数据变化]"
+
+    def test_new_products(self):
+        assert _change_report_subject_prefix({"new_products": [1]}) == "[产品变动]"
+
+
+class TestGenerateReportFromSnapshot:
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "test.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+        models.init_db()
+        return tmp_path
+
+    def test_quiet_mode_returns_no_change(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        snapshot = {
+            "run_id": 1, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["mode"] == "quiet"
+        assert result["status"] == "completed_no_change"
+        assert result["excel_path"] is None
+
+    def test_change_mode_detected(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        # Create a previous run with different price
+        analytics_path = str(db / "prev_analytics.json")
+        snapshot_path = str(db / "prev_snapshot.json")
+        Path(analytics_path).write_text('{"kpis": {"health_index": 60}}')
+        Path(snapshot_path).write_text(json.dumps({
+            "products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+        }))
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-09", "trigger_key": "daily:2026-04-09",
+            "analytics_path": analytics_path, "snapshot_path": snapshot_path,
+        })
+
+        snapshot = {
+            "run_id": 2, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["mode"] == "change"
+        assert result["status"] == "completed"
+
+    def test_full_mode_with_reviews(self, db, monkeypatch):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        # Mock the full report generation to avoid needing real data
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_snapshot.generate_full_report_from_snapshot",
+            lambda snapshot, send_email=True, output_path=None: {
+                "status": "completed",
+                "run_id": snapshot["run_id"],
+                "products_count": 1, "reviews_count": 1,
+            },
+        )
+        snapshot = {
+            "run_id": 3, "logical_date": "2026-04-10",
+            "products": [], "reviews": [{"id": 1}],
+            "products_count": 1, "reviews_count": 1,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["mode"] == "full"
+
+    def test_quiet_mode_generates_html(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        snapshot = {
+            "run_id": 1, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["html_path"] is not None
+        assert Path(result["html_path"]).exists()
+        html_content = Path(result["html_path"]).read_text(encoding="utf-8")
+        assert "2026-04-10" in html_content
+
+    def test_change_mode_generates_html(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        analytics_path = str(db / "prev_analytics.json")
+        snapshot_path = str(db / "prev_snapshot.json")
+        Path(analytics_path).write_text('{"kpis": {"health_index": 60}}')
+        Path(snapshot_path).write_text(json.dumps({
+            "products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+        }))
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-09", "trigger_key": "daily:2026-04-09",
+            "analytics_path": analytics_path, "snapshot_path": snapshot_path,
+        })
+
+        snapshot = {
+            "run_id": 2, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["html_path"] is not None
+        assert "change" in result["html_path"]
+
+    def test_failure_raises(self, db, monkeypatch):
+        """When full mode raises, generate_report_from_snapshot re-raises."""
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+
+        def _boom(snapshot, send_email=True, output_path=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_snapshot.generate_full_report_from_snapshot",
+            _boom,
+        )
+        snapshot = {
+            "run_id": 99, "logical_date": "2026-04-10",
+            "products": [], "reviews": [{"id": 1}],
+            "products_count": 1, "reviews_count": 1,
+        }
+        with pytest.raises(RuntimeError, match="boom"):
+            generate_report_from_snapshot(snapshot, send_email=False)

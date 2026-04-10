@@ -306,6 +306,259 @@ def build_fast_report(snapshot: dict) -> dict:
     }
 
 
+def _change_report_subject_prefix(changes):
+    """Build dynamic subject prefix based on change types."""
+    types = []
+    if changes.get("price_changes"):
+        types.append("价格")
+    if changes.get("stock_changes"):
+        types.append("库存")
+    if changes.get("rating_changes"):
+        types.append("评分")
+    if changes.get("removed_products") or changes.get("new_products"):
+        types.append("产品")
+    if len(types) == 1:
+        return f"[{types[0]}变动]"
+    return "[数据变化]"
+
+
+def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None):
+    """Render the quiet day or change report HTML using the quiet day template."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("quiet_day_report.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    css_text = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+
+    translate_stats = models.get_translate_stats()
+
+    html = template.render(
+        logical_date=snapshot.get("logical_date", ""),
+        snapshot=snapshot,
+        previous_analytics=prev_analytics,
+        translate_stats=translate_stats,
+        last_full_report_path=None,  # TODO: resolve from previous run
+        css_text=css_text,
+        threshold=config.NEGATIVE_THRESHOLD,
+        changes=changes,
+    )
+
+    run_id = snapshot.get("run_id", 0)
+    mode_tag = "change" if changes else "quiet"
+    output_path = os.path.join(
+        config.REPORT_DIR,
+        f"workflow-run-{run_id}-{mode_tag}-report.html",
+    )
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    Path(output_path).write_text(html, encoding="utf-8")
+    _logger.info("%s report HTML generated: %s", mode_tag, output_path)
+    return output_path
+
+
+def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
+                     report_url=None, analytics=None, risk_products=None):
+    """Send email for any report mode using the appropriate template."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+
+    logical_date = snapshot.get("logical_date", "")
+    kpis = (  # noqa: F841 — kept for future template use
+        (prev_analytics or {}).get("kpis", {}) if mode != "full"
+        else (analytics or {}).get("kpis", {})
+    )
+
+    # Build subject
+    if mode == "full":
+        subject = f"产品评论日报 {logical_date}"
+    elif mode == "change":
+        prefix = _change_report_subject_prefix(changes or {})
+        subject = f"{prefix} 产品监控简报 {logical_date}"
+    else:
+        subject = f"[无变化] 产品监控简报 {logical_date}"
+
+    # Render email template
+    template_name = f"email_{mode}.html.j2"
+    try:
+        template = env.get_template(template_name)
+    except Exception:
+        _logger.warning("Email template %s not found, skipping", template_name)
+        return {"success": False, "error": f"Template {template_name} not found", "recipients": []}
+
+    try:
+        body_html = template.render(
+            logical_date=logical_date,
+            snapshot=snapshot,
+            analytics=analytics or prev_analytics or {},
+            previous_analytics=prev_analytics,
+            changes=changes,
+            report_url=report_url,
+            risk_products=risk_products or [],
+            threshold=config.NEGATIVE_THRESHOLD,
+            alert_level=(analytics or {}).get("alert_level", ("green", ""))[0] if analytics else "green",
+            alert_text=(analytics or {}).get("alert_level", ("green", ""))[1] if analytics else "",
+            report_copy=(analytics or {}).get("report_copy", {}),
+            translate_stats=models.get_translate_stats() if mode == "quiet" else None,
+            consecutive_quiet_days=0,  # TODO: count from DB in T6
+        )
+    except Exception as e:
+        _logger.exception("Email template rendering failed for mode %s", mode)
+        return {"success": False, "error": f"Template render error: {e}", "recipients": []}
+
+    # Load recipients and send
+    recipients_file = os.path.join(
+        os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
+    )
+    recipients = report.load_email_recipients(recipients_file) if os.path.exists(recipients_file) else []
+
+    if not recipients:
+        return {"success": True, "error": "No recipients configured", "recipients": []}
+
+    try:
+        result = report.send_email(
+            recipients=recipients,
+            subject=subject,
+            body_text=subject,  # Plain text fallback
+            body_html=body_html,
+        )
+        return result
+    except Exception as e:
+        _logger.warning("Email send failed: %s", e)
+        return {"success": False, "error": str(e), "recipients": recipients}
+
+
+def _generate_change_report(snapshot, send_email, prev_analytics, context):
+    """Generate a change report (no new reviews, but price/stock/rating changed)."""
+    run_id = snapshot.get("run_id", 0)
+    changes = context.get("changes", {})
+
+    # Render quiet day HTML with change info
+    html_path = None
+    try:
+        html_path = _render_quiet_or_change_html(snapshot, prev_analytics, changes=changes)
+    except Exception:
+        _logger.exception("Change report HTML generation failed")
+
+    # Send email
+    email_result = {"success": False, "error": None, "recipients": []}
+    if send_email:
+        try:
+            email_result = _send_mode_email("change", snapshot, prev_analytics, changes=changes)
+        except Exception as e:
+            email_result = {"success": False, "error": str(e), "recipients": []}
+
+    return {
+        "mode": "change",
+        "status": "completed",
+        "run_id": run_id,
+        "products_count": snapshot.get("products_count", 0),
+        "reviews_count": 0,
+        "html_path": html_path,
+        "excel_path": None,
+        "analytics_path": None,
+        "email": email_result,
+    }
+
+
+def _generate_quiet_report(snapshot, send_email, prev_analytics):
+    """Generate a quiet day report (no new reviews, no changes)."""
+    run_id = snapshot.get("run_id", 0)
+
+    html_path = None
+    try:
+        html_path = _render_quiet_or_change_html(snapshot, prev_analytics)
+    except Exception:
+        _logger.exception("Quiet report HTML generation failed")
+
+    email_result = {"success": False, "error": None, "recipients": []}
+    if send_email:
+        try:
+            email_result = _send_mode_email("quiet", snapshot, prev_analytics)
+        except Exception as e:
+            email_result = {"success": False, "error": str(e), "recipients": []}
+
+    return {
+        "mode": "quiet",
+        "status": "completed_no_change",
+        "run_id": run_id,
+        "products_count": snapshot.get("products_count", 0),
+        "reviews_count": 0,
+        "html_path": html_path,
+        "excel_path": None,
+        "analytics_path": None,
+        "email": email_result,
+    }
+
+
+def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
+    """Generate report for any mode (full/change/quiet).
+
+    Replaces generate_full_report_from_snapshot with 3-mode routing.
+
+    Returns dict with:
+        mode: "full" | "change" | "quiet"
+        status: "completed" | "completed_no_change"
+        run_id, products_count, reviews_count
+        html_path, excel_path, analytics_path (None for non-full modes)
+        email: {success, error, recipients}
+    """
+    run_id = snapshot.get("run_id", 0)
+
+    # Load previous context
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+
+    # Determine mode
+    mode, context = determine_report_mode(snapshot, prev_snapshot, prev_analytics)
+
+    # Write report_mode to workflow_runs
+    try:
+        models.update_workflow_run(run_id, report_mode=mode)
+    except Exception:
+        _logger.debug("Could not update report_mode for run %d", run_id, exc_info=True)
+
+    _logger.info("Report mode: %s for run %d", mode, run_id)
+
+    try:
+        if mode == "full":
+            # Delegate to existing function (which handles its own email)
+            result = generate_full_report_from_snapshot(
+                snapshot, send_email=send_email, output_path=output_path,
+            )
+            result["mode"] = "full"
+            return result
+        elif mode == "change":
+            return _generate_change_report(snapshot, send_email, prev_analytics, context)
+        else:
+            return _generate_quiet_report(snapshot, send_email, prev_analytics)
+    except Exception as e:
+        _logger.exception("Report generation failed for run %d", run_id)
+        # Send failure notification
+        try:
+            recipients_file = os.path.join(
+                os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
+            )
+            recipients = report.load_email_recipients(recipients_file) if os.path.exists(recipients_file) else []
+            if recipients:
+                report.send_email(
+                    recipients=recipients,
+                    subject=f"[报告失败] 产品监控 {snapshot.get('logical_date', '')}",
+                    body_text=f"报告生成失败: {str(e)[:200]}\n请检查服务日志。",
+                )
+        except Exception:
+            _logger.exception("Failed to send failure notification")
+        raise
+
+
 def generate_full_report_from_snapshot(
     snapshot: dict,
     send_email: bool = True,
