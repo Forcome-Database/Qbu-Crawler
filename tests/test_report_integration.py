@@ -11,7 +11,7 @@ from unittest.mock import patch
 from datetime import datetime
 
 from qbu_crawler import models, config
-from qbu_crawler.server import report, report_analytics, report_common, report_pdf
+from qbu_crawler.server import report, report_analytics, report_common, report_html
 from qbu_crawler.server.report_charts import build_chart_html_fragments
 from qbu_crawler.server.report_llm import generate_report_insights
 
@@ -234,29 +234,29 @@ class TestChartGeneration:
 
 
 class TestReportHTML:
-    """Test full HTML rendering (without Playwright PDF conversion)."""
+    """Test V3 HTML rendering via report_html.render_v3_html."""
 
-    def test_render_report_html_produces_valid_html(self, populated_db, sample_snapshot):
+    def test_render_v3_html_produces_valid_html(self, populated_db, sample_snapshot, tmp_path):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
+        output_path = str(tmp_path / "test_report.html")
 
-        # Prevent actual HTTP image downloads inside the renderer
-        with patch("qbu_crawler.server.report_pdf._inline_image_data_uri", return_value=None):
-            html = report_pdf.render_report_html(sample_snapshot, analytics)
+        result = report_html.render_v3_html(sample_snapshot, analytics, output_path=output_path)
 
+        html = Path(result).read_text(encoding="utf-8")
         assert "<!doctype html>" in html.lower() or "<html" in html.lower()
 
-    def test_render_report_html_contains_plotly(self, populated_db, sample_snapshot):
+    def test_render_v3_html_contains_chart_js(self, populated_db, sample_snapshot, tmp_path):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
+        output_path = str(tmp_path / "test_report.html")
 
-        with patch("qbu_crawler.server.report_pdf._inline_image_data_uri", return_value=None):
-            html = report_pdf.render_report_html(sample_snapshot, analytics)
+        result = report_html.render_v3_html(sample_snapshot, analytics, output_path=output_path)
 
-        # Plotly.js must be inlined (offline bundle)
-        assert "plotly" in html.lower()
+        html = Path(result).read_text(encoding="utf-8")
+        # V3 uses Chart.js instead of Plotly
+        assert "chart" in html.lower()
 
-    def test_render_report_html_contains_hero_headline(self, populated_db, sample_snapshot):
+    def test_render_v3_html_contains_hero_headline(self, populated_db, sample_snapshot, tmp_path):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
-        # Inject a known hero headline via report_copy
         analytics["report_copy"] = {
             "hero_headline": "测试集成标题",
             "executive_bullets": ["要点1"],
@@ -264,19 +264,20 @@ class TestReportHTML:
             "improvement_priorities": [],
             "competitive_insight": "",
         }
+        output_path = str(tmp_path / "test_report.html")
 
-        with patch("qbu_crawler.server.report_pdf._inline_image_data_uri", return_value=None):
-            html = report_pdf.render_report_html(sample_snapshot, analytics)
+        result = report_html.render_v3_html(sample_snapshot, analytics, output_path=output_path)
 
+        html = Path(result).read_text(encoding="utf-8")
         assert "测试集成标题" in html
 
-    def test_render_report_html_contains_health_section(self, populated_db, sample_snapshot):
+    def test_render_v3_html_contains_health_section(self, populated_db, sample_snapshot, tmp_path):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
+        output_path = str(tmp_path / "test_report.html")
 
-        with patch("qbu_crawler.server.report_pdf._inline_image_data_uri", return_value=None):
-            html = report_pdf.render_report_html(sample_snapshot, analytics)
+        result = report_html.render_v3_html(sample_snapshot, analytics, output_path=output_path)
 
-        # Template should contain health-related content
+        html = Path(result).read_text(encoding="utf-8")
         assert "健康" in html or "health" in html.lower()
 
 

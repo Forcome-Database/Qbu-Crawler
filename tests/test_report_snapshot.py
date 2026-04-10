@@ -152,9 +152,9 @@ def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
 
     monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(snapshot_db["tmp_path"] / "full.pdf"),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(snapshot_db["tmp_path"] / "full.html"),
     )
 
     frozen = freeze_report_snapshot(snapshot_db["run"]["id"], now="2026-03-29T12:00:00+08:00")
@@ -278,11 +278,11 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
             "competitive_insight": "",
         },
     )
-    pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
+    html_report_path = tmp_path / "workflow-run-1-full-report.html"
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
 
     captured = {}
@@ -322,15 +322,14 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     assert "2026-03-27" in captured["subject"]
     assert "Own Stuffer" in captured["subject"]
     assert "需要关注" in captured["body_text"]
-    assert "详见附件 PDF" in captured["body_text"]
     assert captured["attachment_path"] is None
     paths = captured["attachment_paths"]
     assert paths[0] == str(excel_path)
-    assert paths[1] == str(pdf_path)
-    assert len(paths) == 3 and paths[2].endswith(".html")
+    assert paths[1] == str(html_report_path)
+    assert len(paths) == 2
 
 
-def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_path, monkeypatch):
+def test_generate_full_report_from_snapshot_returns_analytics_and_html_paths(tmp_path, monkeypatch):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
@@ -338,7 +337,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
     excel_path = tmp_path / "workflow-run-1-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-1-full-report.pdf"
+    html_report_path = tmp_path / "workflow-run-1-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -362,9 +361,9 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
         },
     )
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
 
     snapshot = {
@@ -383,11 +382,12 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     result = generate_full_report_from_snapshot(snapshot, send_email=False, output_path=str(excel_path))
 
     assert result["analytics_path"].endswith(".json")
-    assert result["pdf_path"] == str(pdf_path)
+    assert result["pdf_path"] is None
+    assert result["html_path"] == str(html_report_path)
     assert Path(result["analytics_path"]).is_file()
 
 
-def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp_path, monkeypatch):
+def test_generate_full_report_from_snapshot_passes_insights_to_html_and_email(tmp_path, monkeypatch):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
@@ -396,8 +396,7 @@ def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp
     monkeypatch.setattr(config, "EMAIL_RECIPIENTS", ["leo.xia@forcome.com"])
     excel_path = tmp_path / "workflow-run-9-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-9-full-report.pdf"
-    pdf_path.write_text("pdf", encoding="utf-8")
+    html_report_path = tmp_path / "workflow-run-9-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -430,11 +429,11 @@ def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp
 
     monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", fake_generate_report_insights)
 
-    def fake_generate_pdf_report(snapshot, analytics, output_path):
-        captured["pdf_analytics"] = analytics
-        return str(pdf_path)
+    def fake_render_v3_html(snapshot, analytics, output_path=None):
+        captured["html_analytics"] = analytics
+        return str(html_report_path)
 
-    monkeypatch.setattr(report_snapshot.report_pdf, "generate_pdf_report", fake_generate_pdf_report)
+    monkeypatch.setattr(report_snapshot.report_html, "render_v3_html", fake_render_v3_html)
 
     def fake_build_email(snapshot, analytics):
         captured["email_analytics"] = analytics
@@ -466,15 +465,15 @@ def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp
 
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
-    assert result["pdf_path"] == str(pdf_path)
-    # The analytics passed to PDF should have report_copy from generate_report_insights
-    assert captured["pdf_analytics"]["report_copy"]["hero_headline"] == "聚焦可靠性"
+    assert result["html_path"] == str(html_report_path)
+    # The analytics passed to HTML renderer should have report_copy from generate_report_insights
+    assert captured["html_analytics"]["report_copy"]["hero_headline"] == "聚焦可靠性"
     # The analytics JSON should be persisted with the insights
     saved = json.loads(Path(result["analytics_path"]).read_text(encoding="utf-8"))
     assert saved["report_copy"]["hero_headline"] == "聚焦可靠性"
 
 
-def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp_path):
+def test_generate_full_report_from_snapshot_sends_excel_and_html(monkeypatch, tmp_path):
     from qbu_crawler.server import report
     from qbu_crawler.server import report_snapshot
     from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
@@ -484,7 +483,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
 
     excel_path = tmp_path / "workflow-run-2-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-2-full-report.pdf"
+    html_report_path = tmp_path / "workflow-run-2-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -502,9 +501,9 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
 
     captured = {}
@@ -531,12 +530,13 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
 
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
-    assert result["pdf_path"] == str(pdf_path)
+    assert result["pdf_path"] is None
+    assert result["html_path"] == str(html_report_path)
     assert captured["attachment_path"] is None
     paths = captured["attachment_paths"]
     assert paths[0] == str(excel_path)
-    assert paths[1] == str(pdf_path)
-    assert len(paths) == 3 and paths[2].endswith(".html")
+    assert paths[1] == str(html_report_path)
+    assert len(paths) == 2
 
 
 def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_artifacts(
@@ -552,8 +552,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
 
     excel_path = tmp_path / "workflow-run-3-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-3-full-report.pdf"
-    pdf_path.write_text("pdf", encoding="utf-8")
+    html_report_path = tmp_path / "workflow-run-3-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -571,9 +570,9 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
     monkeypatch.setattr(
         report,
@@ -602,7 +601,8 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
 
     assert result["email"] == {"success": False, "error": "smtp failed", "recipients": 0}
     assert result["excel_path"] == str(excel_path)
-    assert result["pdf_path"] == str(pdf_path)
+    assert result["pdf_path"] is None
+    assert result["html_path"] == str(html_report_path)
     assert result["analytics_path"].endswith(".json")
 
 
@@ -619,8 +619,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
 
     excel_path = tmp_path / "workflow-run-4-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-4-full-report.pdf"
-    pdf_path.write_text("pdf", encoding="utf-8")
+    html_report_path = tmp_path / "workflow-run-4-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -638,9 +637,9 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
 
     def _raise_send_email(recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None):
@@ -665,7 +664,8 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
 
     assert result["email"] == {"success": False, "error": "smtp exploded", "recipients": 0}
     assert result["excel_path"] == str(excel_path)
-    assert result["pdf_path"] == str(pdf_path)
+    assert result["pdf_path"] is None
+    assert result["html_path"] == str(html_report_path)
 
 
 def test_freeze_snapshot_reviews_enriched_with_analysis_fields(snapshot_db):
@@ -716,8 +716,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
 
     excel_path = tmp_path / "workflow-run-5-full-report.xlsx"
     excel_path.write_text("stub", encoding="utf-8")
-    pdf_path = tmp_path / "workflow-run-5-full-report.pdf"
-    pdf_path.write_text("pdf", encoding="utf-8")
+    html_report_path = tmp_path / "workflow-run-5-full-report.html"
     monkeypatch.setattr(
         report,
         "generate_excel",
@@ -735,9 +734,9 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
-        report_snapshot.report_pdf,
-        "generate_pdf_report",
-        lambda snapshot, analytics, output_path: str(pdf_path),
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(html_report_path),
     )
     monkeypatch.setattr(
         report,
@@ -762,4 +761,5 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
 
     assert result["email"] is None
     assert result["excel_path"] == str(excel_path)
-    assert result["pdf_path"] == str(pdf_path)
+    assert result["pdf_path"] is None
+    assert result["html_path"] == str(html_report_path)

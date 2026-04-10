@@ -1,4 +1,4 @@
-"""Shared constants and helper functions used by report.py and report_pdf.py."""
+"""Shared constants and helper functions used by report.py and report_html.py."""
 
 import calendar
 import json
