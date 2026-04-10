@@ -238,8 +238,8 @@ def test_competitor_gap_analysis_one_sided_competitor():
     assert len(gaps) == 1
     assert gaps[0]["label_code"] == "solid_build"
     assert gaps[0]["own_negative_count"] == 0
-    assert gaps[0]["gap_type"] == "竞品领先"
-    assert gaps[0]["priority"] == "low"  # own_cnt == 0 → low
+    assert gaps[0]["gap_type"] in ("追赶", "监控")  # new algo: no own negatives → catch_up or monitor
+    assert gaps[0]["fix_urgency"] == 0  # own_rate = 0
 
 
 def test_gap_analysis_includes_one_sided_dimensions():
@@ -264,17 +264,17 @@ def test_gap_analysis_includes_one_sided_dimensions():
     assert "solid_build" in codes
     assert "strong_performance" in codes
     assert len(gaps) >= 2
-    # Verify gap_type is present
+    # Verify gap_type is present and uses new taxonomy
     for g in gaps:
         assert "gap_type" in g
-        assert g["gap_type"] in ("双侧差距", "竞品领先", "自有短板")
-    # solid_build has only competitor data → 竞品领先
+        assert g["gap_type"] in ("止血", "追赶", "监控")
+    # solid_build has only competitor data → 追赶 (catch_up_gap = 9/36 = 25% ≥ 20%)
     sb = next(g for g in gaps if g["label_code"] == "solid_build")
-    assert sb["gap_type"] == "竞品领先"
+    assert sb["gap_type"] == "追赶"
     assert sb["own_negative_count"] == 0
-    # strong_performance has only own negative data → 自有短板
+    # strong_performance has only own negative data → 监控 (own_rate = 8/112 ≈ 7.1% < 10%)
     sp = next(g for g in gaps if g["label_code"] == "strong_performance")
-    assert sp["gap_type"] == "自有短板"
+    assert sp["gap_type"] == "监控"
     assert sp["competitor_positive_count"] == 0
 
 

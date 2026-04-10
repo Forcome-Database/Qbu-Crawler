@@ -1345,9 +1345,13 @@ def build_report_analytics(snapshot, synced_labels=None):
     if use_feature_clusters:
         top_negative_clusters = _build_feature_clusters(snapshot_reviews, ownership="own", polarity="negative")
         top_positive_themes = _build_feature_clusters(snapshot_reviews, ownership="competitor", polarity="positive")
+        # Own positive clusters (for gap analysis catch_up_gap)
+        own_positive_clusters = _build_feature_clusters(snapshot_reviews, ownership="own", polarity="positive")
     else:
         top_negative_clusters = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
         top_positive_themes = _cluster_summary_items(labeled_reviews, ownership="competitor", polarity="positive")
+        # Own positive clusters (for gap analysis catch_up_gap)
+        own_positive_clusters = _cluster_summary_items(labeled_reviews, ownership="own", polarity="positive")
 
     # Override cluster severity with computed V3 severity (4-factor: volume/breadth/recency/safety)
     from datetime import datetime as _dt
@@ -1483,6 +1487,7 @@ def build_report_analytics(snapshot, synced_labels=None):
             "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", []),
                                             logical_date=snapshot.get("logical_date")),
             "top_negative_clusters": top_negative_clusters,
+            "top_positive_clusters": own_positive_clusters,
             "recommendations": _recommendations(top_negative_clusters),
         },
         "competitor": {

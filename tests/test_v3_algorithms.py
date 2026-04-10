@@ -194,3 +194,75 @@ class TestRiskScoreV3:
             assert 0 <= p["risk_score"] <= 100
             assert "negative_rate" in p
             assert "top_labels" in p
+
+
+from qbu_crawler.server.report_common import _competitor_gap_analysis
+
+
+def _build_normalized_with_clusters(own_neg, own_pos, comp_pos, own_total, comp_total):
+    """Build minimal normalized analytics dict for gap analysis testing."""
+    def _clusters(d, polarity):
+        return [{"label_code": code, "review_count": count, "label_polarity": polarity,
+                 "affected_product_count": 1, "severity": "high"} for code, count in d.items()]
+    return {
+        "kpis": {"own_review_rows": own_total, "competitor_review_rows": comp_total},
+        "self": {
+            "top_negative_clusters": _clusters(own_neg, "negative"),
+            "top_positive_clusters": _clusters(own_pos, "positive"),
+        },
+        "competitor": {"top_positive_themes": _clusters(comp_pos, "positive")},
+    }
+
+
+class TestGapAnalysisV3:
+    def test_fix_urgency_high_own_negative(self):
+        normalized = _build_normalized_with_clusters(
+            own_neg={"quality_stability": 62}, own_pos={},
+            comp_pos={"solid_build": 108}, own_total=141, comp_total=569,
+        )
+        result = _competitor_gap_analysis(normalized)
+        # quality_stability maps to solid_build dimension via _NEGATIVE_TO_POSITIVE_DIMENSION
+        dim = next((g for g in result if g.get("own_negative_count", 0) > 0), None)
+        assert dim is not None
+        assert dim["gap_type"] == "止血"
+        assert dim["fix_urgency"] > 0
+        assert dim["priority"] == "high"
+
+    def test_catch_up_gap_no_own_negative(self):
+        normalized = _build_normalized_with_clusters(
+            own_neg={}, own_pos={},
+            comp_pos={"strong_performance": 318}, own_total=141, comp_total=569,
+        )
+        result = _competitor_gap_analysis(normalized)
+        perf_dim = next((g for g in result if g.get("competitor_positive_count", 0) > 0), None)
+        assert perf_dim is not None
+        assert perf_dim["gap_type"] == "追赶"
+        assert perf_dim["fix_urgency"] == 0
+        assert perf_dim["catch_up_gap"] > 0
+
+    def test_uncategorized_filtered(self):
+        normalized = _build_normalized_with_clusters(
+            own_neg={}, own_pos={}, comp_pos={"_uncategorized": 10},
+            own_total=100, comp_total=500,
+        )
+        result = _competitor_gap_analysis(normalized)
+        assert not any("uncategorized" in str(g.get("label_code", "")) for g in result)
+
+    def test_empty_returns_empty(self):
+        normalized = _build_normalized_with_clusters(
+            own_neg={}, own_pos={}, comp_pos={}, own_total=0, comp_total=0,
+        )
+        assert _competitor_gap_analysis(normalized) == []
+
+    def test_priority_based_on_priority_score(self):
+        """Priority should be based on priority_score, not just own_rate."""
+        normalized = _build_normalized_with_clusters(
+            own_neg={}, own_pos={},
+            comp_pos={"strong_performance": 318}, own_total=141, comp_total=569,
+        )
+        result = _competitor_gap_analysis(normalized)
+        perf = next((g for g in result if g.get("competitor_positive_count", 0) > 0), None)
+        if perf:
+            # comp_rate = 318/569 ≈ 55.9%, fix_urgency = 0, catch_up = 55.9%
+            # priority_score = 0*0.7 + 0.559*0.3 ≈ 17 → medium
+            assert perf["priority"] == "medium"

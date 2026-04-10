@@ -157,7 +157,13 @@ _DIMENSION_DISPLAY = {
 
 
 def _competitor_gap_analysis(normalized):
-    """Find dimensions where competitors are praised but our products are criticised."""
+    """Find dimensions where competitors are praised but our products are criticised.
+
+    Dual-dimension algorithm:
+    - fix_urgency: own negative rate (止血 signal — we have problems to fix)
+    - catch_up_gap: competitor positive rate minus own positive rate (追赶 signal — they lead us)
+    - priority_score: fix_urgency * 0.7 + catch_up_gap * 0.3
+    """
     kpis = normalized.get("kpis", {})
     competitor_total = kpis.get("competitor_review_rows", 0) or 1
     own_total = kpis.get("own_review_rows", 0) or 1
@@ -167,6 +173,10 @@ def _competitor_gap_analysis(normalized):
         for t in normalized.get("competitor", {}).get("top_positive_themes", [])
     }
     own_negative_clusters = normalized.get("self", {}).get("top_negative_clusters", [])
+
+    # Own positive clusters (for catch_up_gap computation)
+    own_positive_clusters = normalized.get("self", {}).get("top_positive_clusters", [])
+    own_positive = {t["label_code"]: t for t in own_positive_clusters}
 
     # Group own negatives by their positive-taxonomy dimension
     dimension_own_negative: dict[str, int] = {}
@@ -183,28 +193,51 @@ def _competitor_gap_analysis(normalized):
     gap_dims = set(comp_positive) | set(dimension_own_negative)
     gaps = []
     for dim in gap_dims:
+        if dim.startswith("_"):
+            continue
         comp_theme = comp_positive.get(dim)
         comp_cnt = comp_theme.get("review_count", 0) if comp_theme else 0
         own_cnt = dimension_own_negative.get(dim, 0)
-        # Rate-based gap: how prevalent is the signal relative to each side's total
+
+        # Rate-based signals
         comp_rate = comp_cnt / max(competitor_total, 1)
         own_rate = own_cnt / max(own_total, 1)
-        # gap_rate: weight by half when only one side has data
+
+        # Own positive count for the same dimension (for catch_up_gap)
+        own_pos_theme = own_positive.get(dim)
+        own_pos_cnt = own_pos_theme.get("review_count", 0) if own_pos_theme else 0
+        own_pos_rate = own_pos_cnt / max(own_total, 1)
+
+        # Dual-dimension signals
+        fix_urgency = own_rate  # own negative rate (0-1)
+        catch_up_gap = max(comp_rate - own_pos_rate, 0)  # competitor lead over own positive (0-1)
+        priority_score = fix_urgency * 0.7 + catch_up_gap * 0.3  # weighted composite (0-1)
+        priority_score_pct = round(priority_score * 100)
+
+        # gap_type classification
+        if own_rate >= 0.10:
+            gap_type = "止血"
+        elif catch_up_gap >= 0.20:
+            gap_type = "追赶"
+        else:
+            gap_type = "监控"
+
+        # Priority based on priority_score
+        if priority_score_pct >= 25:
+            priority, priority_display = "high", "高"
+        elif priority_score_pct >= 10:
+            priority, priority_display = "medium", "中"
+        else:
+            priority, priority_display = "low", "低"
+
+        # Backward-compat gap_rate (kept for downstream consumers)
         if comp_cnt > 0 and own_cnt > 0:
             gap_rate = round((comp_rate + own_rate) / 2 * 100)
         elif comp_cnt > 0:
             gap_rate = round(comp_rate * 50)
         else:
             gap_rate = round(own_rate * 50)
-        gap_type = "双侧差距" if comp_cnt > 0 and own_cnt > 0 else ("竞品领先" if comp_cnt > 0 else "自有短板")
-        if own_cnt == 0:
-            priority, priority_display = "low", "低"
-        elif own_rate >= 0.15:
-            priority, priority_display = "high", "高"
-        elif own_rate >= 0.05:
-            priority, priority_display = "medium", "中"
-        else:
-            priority, priority_display = "low", "低"
+
         gaps.append({
             "label_code": dim,
             "label_display": _DIMENSION_DISPLAY.get(dim, _LABEL_DISPLAY.get(dim, dim)),
@@ -219,8 +252,11 @@ def _competitor_gap_analysis(normalized):
             "gap_type": gap_type,
             "priority": priority,
             "priority_display": priority_display,
+            "fix_urgency": round(fix_urgency * 100),
+            "catch_up_gap": round(catch_up_gap * 100),
+            "priority_score": priority_score_pct,
         })
-    return sorted(gaps, key=lambda g: g["gap_rate"], reverse=True)
+    return sorted(gaps, key=lambda g: g["priority_score"], reverse=True)
 
 
 # ── KPI delta computation ───────────────────────────────────────────────────
