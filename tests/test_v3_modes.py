@@ -362,3 +362,103 @@ class TestGenerateReportFromSnapshot:
         }
         with pytest.raises(RuntimeError, match="boom"):
             generate_report_from_snapshot(snapshot, send_email=False)
+
+
+class TestShouldSendQuietEmail:
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "test.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        models.init_db()
+        return db_file
+
+    def _create_runs(self, modes):
+        """Create sequential runs with given modes, setting report_mode via update."""
+        for i, mode in enumerate(modes, 1):
+            run = models.create_workflow_run({
+                "workflow_type": "daily", "status": "completed",
+                "report_phase": "full_done",
+                "logical_date": f"2026-04-{i:02d}",
+                "trigger_key": f"daily:2026-04-{i:02d}",
+            })
+            models.update_workflow_run(run["id"], report_mode=mode)
+
+    def test_first_quiet_day_sends(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        self._create_runs(["full"])  # Previous was full
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is True
+        assert mode is None
+
+    def test_third_quiet_day_sends(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        self._create_runs(["full", "quiet", "quiet"])  # 2 consecutive quiet before this one
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is True
+
+    def test_fourth_quiet_day_skips(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        self._create_runs(["full", "quiet", "quiet", "quiet"])  # 3 consecutive quiet
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is False
+
+    def test_seventh_quiet_day_sends_weekly(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        self._create_runs(["full"] + ["quiet"] * 6)  # 6 consecutive quiet
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is True
+        assert mode == "weekly_digest"
+
+    def test_no_previous_runs_sends(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is True
+
+    def test_fifth_quiet_day_skips(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        self._create_runs(["full"] + ["quiet"] * 4)  # 4 consecutive quiet
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is False
+        assert mode is None
+
+    def test_fourteenth_quiet_day_sends_weekly(self, db):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        # 13 consecutive quiet → 14th is also quiet, (13+1)%7 == 0
+        self._create_runs(["full"] + ["quiet"] * 13)
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is True
+        assert mode == "weekly_digest"
+
+    def test_custom_threshold_via_env(self, db, monkeypatch):
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        monkeypatch.setenv("REPORT_QUIET_EMAIL_DAYS", "1")
+        # With threshold=1: day 2 (1 consecutive quiet) should skip
+        self._create_runs(["full", "quiet"])
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is False
+
+    def test_null_report_mode_breaks_streak(self, db):
+        """Runs with NULL report_mode (pre-V3) should break the consecutive quiet count."""
+        from qbu_crawler.server.report_snapshot import should_send_quiet_email
+        # Create a run with NULL report_mode (default) then quiet runs
+        run = models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed",
+            "report_phase": "full_done",
+            "logical_date": "2026-04-01",
+            "trigger_key": "daily:2026-04-01",
+        })
+        # Don't set report_mode → it stays NULL
+        # Then add 5 quiet runs
+        for i in range(2, 7):
+            r = models.create_workflow_run({
+                "workflow_type": "daily", "status": "completed",
+                "report_phase": "full_done",
+                "logical_date": f"2026-04-{i:02d}",
+                "trigger_key": f"daily:2026-04-{i:02d}",
+            })
+            models.update_workflow_run(r["id"], report_mode="quiet")
+        # 5 consecutive quiet runs precede run_id=999
+        # NULL run appears before those 5, but the streak stops at NULL
+        send, mode = should_send_quiet_email(run_id=999)
+        assert send is False  # 5 consecutive quiet > threshold=3, not at day 7

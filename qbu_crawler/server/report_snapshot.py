@@ -15,6 +15,47 @@ from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
 _logger = logging.getLogger(__name__)
 
 
+def should_send_quiet_email(run_id):
+    """Determine whether to send a quiet-day email or skip.
+
+    Returns (should_send: bool, digest_mode: str | None).
+    digest_mode is "weekly_digest" on day 7, 14, 21...
+
+    Rules (spec 15.5):
+    - First N quiet days (default 3): always send
+    - Days N+1 to 6: skip
+    - Day 7 (and 14, 21...): send as weekly digest
+    - Days 8+: repeat 7-day cycle
+    """
+    threshold = int(os.getenv("REPORT_QUIET_EMAIL_DAYS", "3"))
+
+    conn = models.get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT report_mode FROM workflow_runs
+            WHERE workflow_type = 'daily' AND status = 'completed' AND id < ?
+            ORDER BY id DESC LIMIT 30
+            """,
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    consecutive = 0
+    for row in rows:
+        if row["report_mode"] == "quiet":
+            consecutive += 1
+        else:
+            break
+
+    if consecutive < threshold:
+        return True, None
+    if (consecutive + 1) % 7 == 0:  # +1 because current run is also quiet
+        return True, "weekly_digest"
+    return False, None
+
+
 def load_previous_report_context(run_id):
     """Load most recent completed run's analytics and snapshot.
 
@@ -362,7 +403,8 @@ def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None):
 
 
 def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
-                     report_url=None, analytics=None, risk_products=None):
+                     report_url=None, analytics=None, risk_products=None,
+                     consecutive_quiet=0):
     """Send email for any report mode using the appropriate template."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -409,7 +451,7 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
             alert_text=(analytics or {}).get("alert_level", ("green", ""))[1] if analytics else "",
             report_copy=(analytics or {}).get("report_copy", {}),
             translate_stats=models.get_translate_stats() if mode == "quiet" else None,
-            consecutive_quiet_days=0,  # TODO: count from DB in T6
+            consecutive_quiet_days=consecutive_quiet,
         )
     except Exception as e:
         _logger.exception("Email template rendering failed for mode %s", mode)
@@ -474,6 +516,9 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     """Generate a quiet day report (no new reviews, no changes)."""
     run_id = snapshot.get("run_id", 0)
 
+    # Check if we should send this quiet-day email
+    should_send, digest_mode = should_send_quiet_email(run_id)
+
     html_path = None
     try:
         html_path = _render_quiet_or_change_html(snapshot, prev_analytics)
@@ -481,11 +526,36 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         _logger.exception("Quiet report HTML generation failed")
 
     email_result = {"success": False, "error": None, "recipients": []}
-    if send_email:
+    if send_email and should_send:
         try:
-            email_result = _send_mode_email("quiet", snapshot, prev_analytics)
+            # Count consecutive quiet runs for template rendering
+            conn = models.get_conn()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT report_mode FROM workflow_runs
+                    WHERE workflow_type = 'daily' AND status = 'completed' AND id < ?
+                    ORDER BY id DESC LIMIT 30
+                    """,
+                    (run_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+            consecutive = 0
+            for row in rows:
+                if row["report_mode"] == "quiet":
+                    consecutive += 1
+                else:
+                    break
+            email_result = _send_mode_email(
+                "quiet", snapshot, prev_analytics,
+                consecutive_quiet=consecutive,
+            )
         except Exception as e:
             email_result = {"success": False, "error": str(e), "recipients": []}
+    elif not should_send:
+        email_result = {"success": True, "error": "Skipped (quiet day frequency)", "recipients": []}
+        _logger.info("Quiet-day email skipped (consecutive quiet: reached skip window)")
 
     return {
         "mode": "quiet",
@@ -497,6 +567,8 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "excel_path": None,
         "analytics_path": None,
         "email": email_result,
+        "email_skipped": not should_send,
+        "digest_mode": digest_mode,
     }
 
 
