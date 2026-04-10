@@ -152,8 +152,7 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 # ── Report ────────────────────────────────────────
 REPORT_LABEL_MODE = _enum_env("REPORT_LABEL_MODE", "rule", ("rule", "hybrid"))
-REPORT_PDF_TIMEOUT_SECONDS = int(os.getenv("REPORT_PDF_TIMEOUT_SECONDS", "60"))
-REPORT_PDF_FONT_FAMILY = os.getenv("REPORT_PDF_FONT_FAMILY", "Noto Sans CJK SC").strip()
+# PDF config removed in V3 — Playwright pipeline eliminated
 # ── Report Thresholds ─────────────────────────────
 NEGATIVE_THRESHOLD = int(os.getenv("REPORT_NEGATIVE_THRESHOLD", "2"))
 LOW_RATING_THRESHOLD = int(os.getenv("REPORT_LOW_RATING_THRESHOLD", "3"))
