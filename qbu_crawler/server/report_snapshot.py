@@ -162,6 +162,21 @@ def generate_full_report_from_snapshot(
         insights = report_llm.generate_report_insights(pre_normalized, snapshot=snapshot)
         analytics["report_copy"] = insights
 
+        # Cluster deep analysis (top N clusters with ≥5 reviews)
+        if config.REPORT_CLUSTER_ANALYSIS:
+            from qbu_crawler.server.report_llm import analyze_cluster_deep
+            top_clusters = analytics.get("self", {}).get("top_negative_clusters", [])
+            for cluster in top_clusters[:config.REPORT_MAX_CLUSTER_ANALYSIS]:
+                if cluster.get("review_count", 0) >= 5:
+                    cluster_reviews = models.query_cluster_reviews(
+                        label_code=cluster["label_code"],
+                        ownership="own",
+                        limit=30,
+                    )
+                    deep = analyze_cluster_deep(cluster, cluster_reviews)
+                    if deep:
+                        cluster["deep_analysis"] = deep
+
         Path(analytics_path).write_text(
             json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",

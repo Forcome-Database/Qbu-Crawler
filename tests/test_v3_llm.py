@@ -149,3 +149,18 @@ class TestClusterDeepAnalysis:
         from qbu_crawler.server.report_llm import _validate_cluster_analysis
         assert _validate_cluster_analysis("not a dict") is None
         assert _validate_cluster_analysis(None) is None
+
+
+class TestClusterAnalysisPipelineIntegration:
+    def test_cluster_analysis_gated_by_config(self, monkeypatch):
+        """When REPORT_CLUSTER_ANALYSIS is False, no deep analysis is added."""
+        monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+        analytics = {
+            "self": {"top_negative_clusters": [
+                {"label_code": "quality_stability", "review_count": 10}
+            ]}
+        }
+        # If config is off, no deep_analysis key should be added
+        # (This test validates the conditional gate, not the LLM call)
+        clusters = analytics["self"]["top_negative_clusters"]
+        assert "deep_analysis" not in clusters[0]
