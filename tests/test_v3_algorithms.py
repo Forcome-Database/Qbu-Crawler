@@ -58,6 +58,59 @@ class TestHealthIndexV3:
         assert compute_health_index(None) == 50.0
 
 
+from datetime import date
+from qbu_crawler.server.report_analytics import compute_cluster_severity
+
+
+class TestClusterSeverity:
+    """4-factor: volume + breadth + recency + safety signal."""
+
+    def test_critical_high_volume_safety(self):
+        cluster = {
+            "review_count": 36, "affected_product_count": 3,
+            "review_dates": ["2026-01-01"] * 34 + ["2026-03-20", "2026-04-01"],
+        }
+        reviews = [{"headline": "metal shavings dangerous", "body": "rust everywhere"}]
+        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "critical"
+
+    def test_high_moderate_volume_safety(self):
+        cluster = {
+            "review_count": 14, "affected_product_count": 2,
+            "review_dates": ["2025-01-01"] * 14,
+        }
+        reviews = [{"headline": "metal debris", "body": ""}]
+        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "high"
+
+    def test_medium_no_safety(self):
+        cluster = {
+            "review_count": 12, "affected_product_count": 3,
+            "review_dates": ["2025-01-01"] * 12,
+        }
+        reviews = [{"headline": "design flaw", "body": "poor quality"}]
+        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "medium"
+
+    def test_low_few_reviews(self):
+        cluster = {
+            "review_count": 4, "affected_product_count": 2,
+            "review_dates": ["2025-06-01"] * 4,
+        }
+        reviews = [{"headline": "missing parts", "body": ""}]
+        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "low"
+
+    def test_empty_reviews_low(self):
+        cluster = {"review_count": 0, "affected_product_count": 0, "review_dates": []}
+        assert compute_cluster_severity(cluster, [], date(2026, 4, 10)) == "low"
+
+    def test_recency_boosts_score(self):
+        cluster = {
+            "review_count": 8, "affected_product_count": 2,
+            "review_dates": ["2026-03-01"] * 8,
+        }
+        reviews = [{"headline": "problem", "body": ""}]
+        result = compute_cluster_severity(cluster, reviews, date(2026, 4, 10))
+        assert result in ("medium", "high")  # 1(vol) + 1(breadth) + 2(recency 100%) = 4 → medium+
+
+
 from qbu_crawler.server.report_analytics import _risk_products
 from qbu_crawler import config
 

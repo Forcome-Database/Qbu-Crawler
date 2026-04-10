@@ -262,6 +262,79 @@ _POSITIVE_RULES = {
 
 _SEVERITY_SCORE = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
+_SAFETY_KEYWORDS = frozenset({
+    "metal shaving", "metal debris", "metal flake", "metal particle",
+    "broke", "broken", "snapped", "shattered", "exploded",
+    "dangerous", "hazard", "injury", "hurt", "unsafe",
+    "rust", "rusted", "corrosion",
+    "金属屑", "金属碎", "断裂", "爆裂", "危险", "安全隐患", "锈",
+})
+
+
+def compute_cluster_severity(cluster, reviews_in_cluster, logical_date):
+    """Compute severity at cluster level from volume, breadth, recency, safety.
+
+    Args:
+        cluster: dict with review_count, affected_product_count, review_dates
+        reviews_in_cluster: list of review dicts (for safety keyword scan)
+        logical_date: date object for recency calculation
+
+    Returns one of: "critical", "high", "medium", "low".
+    """
+    from datetime import datetime, timedelta
+
+    review_count = cluster.get("review_count", 0)
+    affected_products = cluster.get("affected_product_count", 0)
+
+    # Recency: count reviews from last 90 days
+    recent_cutoff = logical_date - timedelta(days=90)
+    recent_count = 0
+    for d in cluster.get("review_dates", []):
+        try:
+            if datetime.strptime(d, "%Y-%m-%d").date() >= recent_cutoff:
+                recent_count += 1
+        except (ValueError, TypeError):
+            pass
+    recency_rate = recent_count / max(review_count, 1)
+
+    # Safety signal
+    has_safety = False
+    for r in reviews_in_cluster:
+        text = f"{r.get('headline', '')} {r.get('body', '')}".lower()
+        if any(kw in text for kw in _SAFETY_KEYWORDS):
+            has_safety = True
+            break
+
+    score = 0
+    if review_count >= 20:
+        score += 3
+    elif review_count >= 10:
+        score += 2
+    elif review_count >= 5:
+        score += 1
+
+    if affected_products >= 3:
+        score += 2
+    elif affected_products >= 2:
+        score += 1
+
+    if recency_rate >= 0.30:
+        score += 2
+    elif recency_rate >= 0.10:
+        score += 1
+
+    if has_safety:
+        score += 3
+
+    if score >= 7:
+        return "critical"
+    if score >= 5:
+        return "high"
+    if score >= 3:
+        return "medium"
+    return "low"
+
+
 _RECOMMENDATION_MAP = {
     "quality_stability": {
         "possible_cause_boundary": "可能与核心部件耐久性、负载冗余或质检拦截不足有关",
@@ -1275,6 +1348,22 @@ def build_report_analytics(snapshot, synced_labels=None):
     else:
         top_negative_clusters = _cluster_summary_items(labeled_reviews, ownership="own", polarity="negative")
         top_positive_themes = _cluster_summary_items(labeled_reviews, ownership="competitor", polarity="positive")
+
+    # Override cluster severity with computed V3 severity (4-factor: volume/breadth/recency/safety)
+    from datetime import datetime as _dt
+    _logical_date = _dt.strptime(snapshot.get("logical_date", "2026-01-01"), "%Y-%m-%d").date()
+    for cluster in top_negative_clusters:
+        # Collect reviews matching this cluster for safety scan
+        _cluster_reviews = [
+            item["review"] for item in labeled_reviews
+            if any(
+                l["label_code"] == cluster["label_code"] and l["label_polarity"] == "negative"
+                for l in item["labels"]
+            )
+            and item["review"].get("ownership") == "own"
+        ]
+        cluster["severity"] = compute_cluster_severity(cluster, _cluster_reviews, _logical_date)
+
     image_reviews = []
     for item in labeled_reviews:
         if item["images"]:
