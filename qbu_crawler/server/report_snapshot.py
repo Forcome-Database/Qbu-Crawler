@@ -101,6 +101,107 @@ def detect_snapshot_changes(current_snapshot, previous_snapshot):
     return changes
 
 
+def determine_report_mode(snapshot, previous_snapshot, previous_analytics):
+    """Central routing for report mode selection.
+
+    Returns:
+        mode: "full" | "change" | "quiet"
+        context: dict with mode-specific metadata
+    """
+    has_reviews = bool(snapshot.get("reviews"))
+
+    if has_reviews:
+        changes = detect_snapshot_changes(snapshot, previous_snapshot)
+        return "full", {"changes": changes}
+
+    changes = detect_snapshot_changes(snapshot, previous_snapshot)
+    if changes.get("has_changes"):
+        return "change", {"changes": changes}
+
+    return "quiet", {"previous_analytics": previous_analytics}
+
+
+def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
+    """Diff two cluster lists to detect new, escalated, improving, and de-escalated clusters.
+
+    Args:
+        current_clusters: list of cluster dicts from current analytics
+        previous_clusters: list of cluster dicts from previous analytics (may be None)
+        logical_date: date object for "improving" detection
+
+    Returns dict with keys: new, escalated, improving, de_escalated
+    """
+    from datetime import datetime, timedelta  # noqa: F401 (timedelta imported for completeness)
+
+    prev_by_code = {c["label_code"]: c for c in (previous_clusters or [])}
+    sev_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+    changes = {"new": [], "escalated": [], "improving": [], "de_escalated": []}
+
+    for cluster in current_clusters:
+        code = cluster.get("label_code", "")
+        prev = prev_by_code.get(code)
+
+        if prev is None:
+            changes["new"].append({
+                "label_display": cluster.get("label_display", code),
+                "review_count": cluster.get("review_count", 0),
+                "affected_products": cluster.get("affected_products", []),
+            })
+            continue
+
+        delta = cluster.get("review_count", 0) - prev.get("review_count", 0)
+        cur_sev = sev_order.get(cluster.get("severity"), 0)
+        prev_sev = sev_order.get(prev.get("severity"), 0)
+
+        if delta > 0:
+            changes["escalated"].append({
+                "label_display": cluster.get("label_display", code),
+                "delta": delta,
+                "old_count": prev.get("review_count", 0),
+                "new_count": cluster.get("review_count", 0),
+                "severity": cluster.get("severity", "low"),
+                "severity_changed": cur_sev > prev_sev,
+            })
+        elif cur_sev < prev_sev:
+            changes["de_escalated"].append({
+                "label_display": cluster.get("label_display", code),
+                "old_severity": prev.get("severity"),
+                "new_severity": cluster.get("severity"),
+            })
+
+    # Improving: clusters unchanged for 7+ days
+    if isinstance(logical_date, str):
+        try:
+            from datetime import datetime
+            logical_date = datetime.strptime(logical_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            logical_date = None
+
+    if logical_date:
+        for cluster in current_clusters:
+            code = cluster.get("label_code", "")
+            prev = prev_by_code.get(code)
+            if prev is None:
+                continue
+            last_seen = cluster.get("last_seen")
+            if not last_seen:
+                continue
+            try:
+                from datetime import datetime
+                last_seen_date = datetime.strptime(last_seen, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            days_quiet = (logical_date - last_seen_date).days
+            if days_quiet >= 7 and cluster.get("review_count", 0) == prev.get("review_count", 0):
+                changes["improving"].append({
+                    "label_display": cluster.get("label_display", code),
+                    "days_quiet": days_quiet,
+                })
+
+    return changes
+
+
 class FullReportGenerationError(RuntimeError):
     def __init__(self, message, *, analytics_path=None, excel_path=None, pdf_path=None):
         super().__init__(message)

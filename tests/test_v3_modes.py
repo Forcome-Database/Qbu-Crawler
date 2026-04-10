@@ -138,3 +138,82 @@ class TestDetectSnapshotChanges:
         result = detect_snapshot_changes(current, previous)
         assert result["has_changes"] is True
         assert len(result["rating_changes"]) == 1
+
+
+from qbu_crawler.server.report_snapshot import determine_report_mode, compute_cluster_changes
+
+
+class TestDetermineReportMode:
+    def test_full_when_reviews_present(self):
+        snapshot = {"reviews": [{"id": 1}], "products": []}
+        mode, ctx = determine_report_mode(snapshot, None, None)
+        assert mode == "full"
+
+    def test_change_when_price_changed(self):
+        snapshot = {"reviews": [], "products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        prev = {"products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        mode, ctx = determine_report_mode(snapshot, prev, None)
+        assert mode == "change"
+        assert ctx["changes"]["has_changes"] is True
+
+    def test_quiet_when_nothing_changed(self):
+        snapshot = {"reviews": [], "products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        prev = {"products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        mode, ctx = determine_report_mode(snapshot, prev, {"kpis": {}})
+        assert mode == "quiet"
+
+    def test_full_even_when_also_price_changed(self):
+        snapshot = {"reviews": [{"id": 1}], "products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        prev = {"products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        mode, _ = determine_report_mode(snapshot, prev, None)
+        assert mode == "full"  # Reviews take precedence
+
+    def test_quiet_no_previous_snapshot(self):
+        snapshot = {"reviews": [], "products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
+        mode, _ = determine_report_mode(snapshot, None, None)
+        assert mode == "quiet"
+
+
+class TestComputeClusterChanges:
+    def test_new_cluster(self):
+        current = [{"label_code": "quality_stability", "label_display": "质量稳定性",
+                     "review_count": 5, "affected_product_count": 1, "severity": "high",
+                     "review_dates": [], "last_seen": "2026-04-01"}]
+        changes = compute_cluster_changes(current, [], date(2026, 4, 10))
+        assert len(changes["new"]) == 1
+        assert changes["new"][0]["label_display"] == "质量稳定性"
+
+    def test_escalated(self):
+        current = [{"label_code": "qc", "label_display": "QC", "review_count": 10,
+                     "severity": "high", "last_seen": "2026-04-09", "review_dates": []}]
+        previous = [{"label_code": "qc", "review_count": 7, "severity": "medium"}]
+        changes = compute_cluster_changes(current, previous, date(2026, 4, 10))
+        assert len(changes["escalated"]) == 1
+        assert changes["escalated"][0]["delta"] == 3
+        assert changes["escalated"][0]["severity_changed"] is True
+
+    def test_improving(self):
+        current = [{"label_code": "qc", "label_display": "QC", "review_count": 5,
+                     "severity": "low", "last_seen": "2026-03-01", "review_dates": []}]
+        previous = [{"label_code": "qc", "review_count": 5, "severity": "low"}]
+        changes = compute_cluster_changes(current, previous, date(2026, 4, 10))
+        assert len(changes["improving"]) == 1
+        assert changes["improving"][0]["days_quiet"] >= 7
+
+    def test_none_previous(self):
+        current = [{"label_code": "qc", "label_display": "QC", "review_count": 5,
+                     "severity": "high", "last_seen": "2026-04-01", "review_dates": []}]
+        changes = compute_cluster_changes(current, None, date(2026, 4, 10))
+        assert len(changes["new"]) == 1
+
+    def test_empty_current(self):
+        changes = compute_cluster_changes([], [{"label_code": "qc", "review_count": 5}], date(2026, 4, 10))
+        assert changes == {"new": [], "escalated": [], "improving": [], "de_escalated": []}
+
+    def test_string_logical_date(self):
+        """Accept string dates as well as date objects."""
+        current = [{"label_code": "qc", "label_display": "QC", "review_count": 5,
+                     "severity": "low", "last_seen": "2026-03-01", "review_dates": []}]
+        previous = [{"label_code": "qc", "review_count": 5, "severity": "low"}]
+        changes = compute_cluster_changes(current, previous, "2026-04-10")
+        assert len(changes["improving"]) == 1
