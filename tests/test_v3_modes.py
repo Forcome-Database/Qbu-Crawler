@@ -90,7 +90,7 @@ class TestDetectSnapshotChanges:
 
     def test_price_change(self):
         current = {"products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
-        previous = {"products": [{"sku": "A", "name": "P", "price": 169.99, "stock_style": "in_stock", "rating": 4.5, "review_count": 50}]}
+        previous = {"products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}]}
         result = detect_snapshot_changes(current, previous)
         assert result["has_changes"] is True
         assert len(result["price_changes"]) == 1
