@@ -260,7 +260,7 @@ _POSITIVE_RULES = {
     },
 }
 
-_SEVERITY_SCORE = {"high": 3, "medium": 2, "low": 1}
+_SEVERITY_SCORE = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
 _RECOMMENDATION_MAP = {
     "quality_stability": {

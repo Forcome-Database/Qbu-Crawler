@@ -28,8 +28,8 @@ _LABEL_DISPLAY = {
     "good_packaging": "包装到位",
 }
 
-_PRIORITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
-_SEVERITY_DISPLAY = {"high": "高", "medium": "中", "low": "低"}
+_PRIORITY_DISPLAY = {"critical": "危急", "high": "高", "medium": "中", "low": "低"}
+_SEVERITY_DISPLAY = {"critical": "危急", "high": "高", "medium": "中", "low": "低"}
 
 CODE_TO_DIMENSION = {
     "quality_stability": "耐久性与质量",
