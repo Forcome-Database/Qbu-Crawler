@@ -242,6 +242,7 @@ def init_db():
         "ALTER TABLE workflow_runs ADD COLUMN pdf_path TEXT",
         "ALTER TABLE notification_outbox ADD COLUMN delivered_at TIMESTAMP",
         "ALTER TABLE reviews ADD COLUMN date_published_parsed TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN report_mode TEXT",
     ]
     for sql in migrations:
         try:
@@ -667,6 +668,7 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         "started_at",
         "finished_at",
         "error",
+        "report_mode",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
@@ -781,6 +783,33 @@ def get_previous_completed_run(current_run_id: int) -> dict | None:
             (current_run_id,),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def query_cluster_reviews(label_code: str, ownership: str | None = None, limit: int = 50) -> list[dict]:
+    """Fetch reviews tagged with a given label_code from the full corpus."""
+    conn = get_conn()
+    try:
+        query = """
+            SELECT r.id, r.headline, r.body, r.rating, r.author,
+                   r.date_published_parsed, r.images, r.scraped_at,
+                   r.headline_cn, r.body_cn,
+                   p.name AS product_name, p.sku AS product_sku,
+                   p.ownership, p.site
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            JOIN review_issue_labels ril ON ril.review_id = r.id
+            WHERE ril.label_code = ?
+        """
+        params: list = [label_code]
+        if ownership:
+            query += " AND p.ownership = ?"
+            params.append(ownership)
+        query += " ORDER BY r.scraped_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 

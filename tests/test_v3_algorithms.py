@@ -321,3 +321,57 @@ class TestAlertLevelV3:
         }
         level, _ = _compute_alert_level(normalized)
         assert level == "green"
+
+
+import sqlite3
+import pytest
+from qbu_crawler import config, models
+
+
+def _get_test_conn(db_file):
+    conn = sqlite3.connect(db_file)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+class TestDBSupport:
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "test.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        models.init_db()
+        return db_file
+
+    def test_report_mode_column_exists(self, db):
+        conn = _get_test_conn(db)
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()]
+        assert "report_mode" in cols
+
+    def test_update_workflow_run_accepts_report_mode(self, db):
+        run = models.create_workflow_run({
+            "workflow_type": "daily", "status": "pending", "report_phase": "none",
+            "logical_date": "2026-04-10", "trigger_key": "daily:2026-04-10:test-rm",
+        })
+        models.update_workflow_run(run["id"], report_mode="quiet")
+        updated = models.get_workflow_run(run["id"])
+        assert updated["report_mode"] == "quiet"
+
+    def test_query_cluster_reviews(self, db):
+        conn = _get_test_conn(db)
+        conn.execute("INSERT INTO products (url, site, name, sku, ownership) VALUES (?, ?, ?, ?, ?)",
+                     ("http://test.com/p1", "test", "Test Product", "TP1", "own"))
+        pid = conn.execute("SELECT id FROM products WHERE sku='TP1'").fetchone()["id"]
+        conn.execute("INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, scraped_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (pid, "user1", "Bad", "Broke", "abc123", 1.0, "2026-04-01 10:00:00"))
+        rid = conn.execute("SELECT id FROM reviews WHERE author='user1'").fetchone()["id"]
+        conn.execute("INSERT INTO review_issue_labels (review_id, label_code, label_polarity, severity, confidence, source, taxonomy_version) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (rid, "quality_stability", "negative", "high", 0.9, "rule_based", "v1"))
+        conn.commit()
+        result = models.query_cluster_reviews("quality_stability", ownership="own", limit=10)
+        assert len(result) == 1
+        assert result[0]["product_sku"] == "TP1"
