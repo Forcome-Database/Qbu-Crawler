@@ -28,13 +28,139 @@
 
 ---
 
+### Task 0: Implement `load_previous_report_context` (P3b-01 fix)
+
+**Files:**
+- Modify: `qbu_crawler/server/report_snapshot.py`
+- Modify: `qbu_crawler/models.py` (no change needed — `get_previous_completed_run` already filters `analytics_path IS NOT NULL`, per spec 15.2)
+- Test: `tests/test_v3_modes.py` (create)
+
+**Spec ref:** Section 4.1.5, 15.2
+
+**Critical note (P3b-01):** Without this function, Change and Quiet modes cannot access previous analytics. The existing `get_previous_completed_run` at `models.py:767` already includes `AND analytics_path IS NOT NULL AND analytics_path != ''`, which satisfies spec 15.2's requirement to skip non-full runs.
+
+- [ ] **Step 1: Write tests**
+
+```python
+# tests/test_v3_modes.py
+"""Tests for Report V3 three-mode routing (Phase 3b)."""
+
+import json
+import sqlite3
+from pathlib import Path
+import pytest
+from qbu_crawler import config, models
+from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+
+def _get_test_conn(db_file):
+    conn = sqlite3.connect(db_file)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+class TestLoadPreviousContext:
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "test.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        models.init_db()
+        return tmp_path
+
+    def test_returns_none_when_no_previous(self, db):
+        analytics, snapshot = load_previous_report_context(run_id=1)
+        assert analytics is None
+        assert snapshot is None
+
+    def test_loads_from_previous_full_run(self, db):
+        # Create a completed run with analytics file
+        analytics_path = str(db / "analytics.json")
+        Path(analytics_path).write_text('{"kpis": {"test": 1}}')
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-08", "trigger_key": "daily:2026-04-08",
+            "analytics_path": analytics_path,
+        })
+        analytics, snapshot = load_previous_report_context(run_id=999)
+        assert analytics is not None
+        assert analytics["kpis"]["test"] == 1
+
+    def test_skips_quiet_run_without_analytics(self, db):
+        # Run 1: full with analytics
+        analytics_path = str(db / "analytics.json")
+        Path(analytics_path).write_text('{"kpis": {"from": "full"}}')
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-07", "trigger_key": "daily:2026-04-07",
+            "analytics_path": analytics_path,
+        })
+        # Run 2: quiet without analytics
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-08", "trigger_key": "daily:2026-04-08",
+            "analytics_path": None,
+        })
+        # Should skip run 2 and return run 1's analytics
+        analytics, _ = load_previous_report_context(run_id=999)
+        assert analytics["kpis"]["from"] == "full"
+```
+
+- [ ] **Step 2: Implement `load_previous_report_context`**
+
+Add to `report_snapshot.py`:
+
+```python
+def load_previous_report_context(run_id):
+    """Load the most recent completed run's analytics and snapshot.
+    
+    Skips runs without analytics (quiet/change mode runs).
+    Returns (analytics_dict, snapshot_dict) or (None, None).
+    """
+    prev_run = models.get_previous_completed_run(run_id)
+    if not prev_run or not prev_run.get("analytics_path"):
+        return None, None
+    
+    try:
+        analytics = json.loads(Path(prev_run["analytics_path"]).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("Failed to load previous analytics: %s", e)
+        return None, None
+    
+    snapshot = None
+    if prev_run.get("snapshot_path"):
+        try:
+            snapshot = json.loads(Path(prev_run["snapshot_path"]).read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load previous snapshot: %s", e)
+    
+    return analytics, snapshot
+```
+
+- [ ] **Step 3: Run tests, commit**
+
+```bash
+uv run pytest tests/test_v3_modes.py::TestLoadPreviousContext -v
+git add qbu_crawler/server/report_snapshot.py tests/test_v3_modes.py
+git commit -m "feat(report): implement load_previous_report_context
+
+Loads most recent completed run with analytics. Skips quiet/change runs
+(analytics_path IS NULL). Handles missing files gracefully."
+```
+
+---
+
 ### Task 1: Implement `detect_snapshot_changes`
 
 **Files:**
 - Modify: `qbu_crawler/server/report_snapshot.py`
-- Test: `tests/test_v3_modes.py` (create)
+- Test: `tests/test_v3_modes.py` (append)
 
 **Spec ref:** Section 4.1.4, 14.4 (float tolerance), 14.12 (partial scrape)
+
+**Note (P3b-03):** The implementation MUST handle `previous_snapshot=None` with an early return guard.
 
 - [ ] **Step 1: Write change detection tests**
 

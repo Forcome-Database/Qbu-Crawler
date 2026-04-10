@@ -345,28 +345,31 @@ def _select_insight_samples(snapshot, analytics):
                 if added >= limit:
                     break
 
+    # NOTE (P2-02 fix): models.query_reviews returns (list[dict], int) tuple.
+    # Always unpack: reviews, _ = models.query_reviews(...)
+    
     # 1. Worst reviews per risk product
     for product in risk_products[:3]:
         sku = product.get("product_sku", "")
         if not sku:
             continue
-        worst = models.query_reviews(
+        worst, _ = models.query_reviews(
             sku=sku, max_rating=config.NEGATIVE_THRESHOLD,
             sort_by="rating", order="asc", limit=5,
         )
         add(worst, 2)
 
     # 2. Image-bearing own negatives
-    img_neg = models.query_reviews(
+    img_neg, _ = models.query_reviews(
         ownership="own", has_images=True, max_rating=config.NEGATIVE_THRESHOLD,
         sort_by="rating", order="asc", limit=10,
     )
     add([r for r in img_neg if r.get("id") not in seen_ids], 3)
 
-    # 3. Top competitor reviews
-    comp_best = models.query_reviews(
+    # 3. Top competitor reviews  (sort_by="scraped_at" — P2-03 fix: "date_published_parsed" not in allowed_sorts)
+    comp_best, _ = models.query_reviews(
         ownership="competitor", min_rating=5,
-        sort_by="date_published_parsed", order="desc", limit=10,
+        sort_by="scraped_at", order="desc", limit=10,
     )
     add([r for r in comp_best if r.get("id") not in seen_ids], 3)
 
@@ -414,7 +417,17 @@ Update `_build_insights_prompt` signature to accept `snapshot`:
 def _build_insights_prompt(analytics, snapshot=None):
 ```
 
-Update caller `generate_report_insights` to pass snapshot.
+Update `generate_report_insights` signature at line 475 to accept and pass snapshot:
+```python
+def generate_report_insights(analytics, snapshot=None):  # NEW: add snapshot param
+    # ... inside, change:
+    prompt = _build_insights_prompt(analytics, snapshot=snapshot)
+```
+
+Update the caller in `report_snapshot.py` (line ~162):
+```python
+insights = report_llm.generate_report_insights(analytics, snapshot=snapshot)
+```
 
 - [ ] **Step 4: Run all tests**
 

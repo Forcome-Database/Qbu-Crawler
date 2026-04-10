@@ -611,7 +611,36 @@ class TestGapAnalysisV3:
         assert result == []
 ```
 
-Note: `_build_normalized_with_clusters` is a test helper that constructs the analytics dict structure expected by `_competitor_gap_analysis`. It needs to be defined based on the actual input format. Define it as a module-level helper in the test file.
+Define `_build_normalized_with_clusters` as a module-level helper in `tests/test_v3_algorithms.py`:
+
+```python
+def _build_normalized_with_clusters(own_neg, own_pos, comp_pos, own_total, comp_total):
+    """Build a minimal normalized analytics dict for gap analysis testing.
+    
+    Args:
+        own_neg: dict {label_code: review_count} for own negative clusters
+        own_pos: dict {label_code: review_count} for own positive clusters
+        comp_pos: dict {label_code: review_count} for competitor positive clusters
+        own_total: total own review count
+        comp_total: total competitor review count
+    """
+    def _clusters_from_dict(d, polarity):
+        return [
+            {"label_code": code, "review_count": count, "label_polarity": polarity,
+             "affected_product_count": 1, "severity": "high"}
+            for code, count in d.items()
+        ]
+    return {
+        "kpis": {"own_review_rows": own_total, "competitor_review_rows": comp_total},
+        "self": {
+            "top_negative_clusters": _clusters_from_dict(own_neg, "negative"),
+            "top_positive_clusters": _clusters_from_dict(own_pos, "positive"),
+        },
+        "competitor": {
+            "top_positive_themes": _clusters_from_dict(comp_pos, "positive"),
+        },
+    }
+```
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -900,13 +929,15 @@ Add gap_fix_count, gap_catch_count to KPIs after gap analysis."
 
 ---
 
-### Task 8: Add DB support — report_mode column + query_cluster_reviews
+### Task 8: Add DB support — report_mode column + query_cluster_reviews + update_workflow_run allowed set
 
 **Files:**
-- Modify: `qbu_crawler/models.py` (migrations, `query_cluster_reviews`, `update_workflow_run`)
+- Modify: `qbu_crawler/models.py` (migrations, `query_cluster_reviews`, `update_workflow_run` allowed set)
 - Test: `tests/test_v3_algorithms.py` (append)
 
 **Spec ref:** Section 10.1 (models.py), 15.1
+
+**Critical note (P1-02):** `update_workflow_run` at line 652 uses an `allowed` whitelist. The `report_mode` field MUST be added to this set, otherwise `update_workflow_run(run_id, report_mode="quiet")` will be silently ignored.
 
 - [ ] **Step 1: Write DB tests**
 
@@ -939,6 +970,16 @@ class TestDBSupport:
         conn = _get_test_conn(db)
         cols = [row[1] for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()]
         assert "report_mode" in cols
+
+    def test_update_workflow_run_accepts_report_mode(self, db):
+        """P1-02 fix: report_mode must be in the allowed set of update_workflow_run."""
+        run = models.create_workflow_run({
+            "workflow_type": "daily", "status": "pending", "report_phase": "none",
+            "logical_date": "2026-04-10", "trigger_key": "daily:2026-04-10:test",
+        })
+        models.update_workflow_run(run["id"], report_mode="quiet")
+        updated = models.get_workflow_run(run["id"])
+        assert updated["report_mode"] == "quiet"
 
     def test_query_cluster_reviews_returns_reviews(self, db):
         conn = _get_test_conn(db)
@@ -980,7 +1021,21 @@ In `qbu_crawler/models.py`, add to the `migrations` list (around line 244):
 "ALTER TABLE workflow_runs ADD COLUMN report_mode TEXT",
 ```
 
-- [ ] **Step 4: Implement `query_cluster_reviews`**
+- [ ] **Step 4: Add `report_mode` to `update_workflow_run` allowed set**
+
+In `qbu_crawler/models.py:653`, add `"report_mode"` to the `allowed` set:
+
+```python
+    allowed = {
+        "status",
+        "report_phase",
+        "report_mode",  # NEW — V3 report mode (full/change/quiet)
+        "data_since",
+        # ... rest unchanged ...
+    }
+```
+
+- [ ] **Step 5: Implement `query_cluster_reviews`**
 
 Add to `qbu_crawler/models.py` (after `get_previous_completed_run`):
 
@@ -1016,24 +1071,25 @@ def query_cluster_reviews(label_code: str, ownership: str | None = None, limit: 
         conn.close()
 ```
 
-- [ ] **Step 5: Run all tests**
+- [ ] **Step 6: Run all tests**
 
 Run: `uv run pytest tests/ -x -q --ignore=tests/test_report_charts.py`
 Expected: All pass
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add qbu_crawler/models.py tests/test_v3_algorithms.py
 git commit -m "feat(report): add report_mode column + query_cluster_reviews()
 
 DB migration adds report_mode to workflow_runs.
+report_mode added to update_workflow_run allowed set.
 query_cluster_reviews fetches full-corpus reviews by label_code."
 ```
 
 ---
 
-### Task 9: Update config — HIGH_RISK_THRESHOLD recalibration
+### Task 9: Update config — HIGH_RISK_THRESHOLD + REPORT_OFFLINE_MODE + REPORT_HTML_PUBLIC_URL
 
 **Files:**
 - Modify: `qbu_crawler/config.py:162`
@@ -1052,6 +1108,13 @@ to:
 HIGH_RISK_THRESHOLD = int(os.getenv("REPORT_HIGH_RISK_THRESHOLD", "35"))
 ```
 
+Also add new config variables (spec 11.1, GLOBAL-02, P3a-03):
+
+```python
+REPORT_OFFLINE_MODE = os.getenv("REPORT_OFFLINE_MODE", "false").lower() == "true"
+REPORT_HTML_PUBLIC_URL = os.getenv("REPORT_HTML_PUBLIC_URL", "")
+```
+
 - [ ] **Step 2: Fix any tests asserting old value**
 
 Run: `uv run pytest tests/ -x -q --ignore=tests/test_report_charts.py`
@@ -1063,6 +1126,83 @@ If `test_config_thresholds.py` asserts `HIGH_RISK_THRESHOLD == 8`, update to `35
 ```bash
 git add qbu_crawler/config.py tests/test_config_thresholds.py
 git commit -m "feat(report): recalibrate HIGH_RISK_THRESHOLD 8→35 for V3 risk score range"
+```
+
+---
+
+### Task 9.5: Add `has_estimated_dates` detection (GLOBAL-01 fix)
+
+**Files:**
+- Modify: `qbu_crawler/server/report_common.py` (add function)
+- Test: `tests/test_v3_algorithms.py` (append)
+
+**Spec ref:** Section 6.5
+
+- [ ] **Step 1: Write test**
+
+```python
+from qbu_crawler.server.report_common import has_estimated_dates
+
+
+class TestEstimatedDates:
+    def test_detects_relative_date_clustering(self):
+        """When >30% of reviews parse to same MM-DD as logical_date → True."""
+        reviews = [
+            {"date_published_parsed": "2022-04-10"},  # matches MM-DD
+            {"date_published_parsed": "2023-04-10"},  # matches
+            {"date_published_parsed": "2024-04-10"},  # matches
+            {"date_published_parsed": "2025-04-10"},  # matches
+            {"date_published_parsed": "2025-01-15"},  # doesn't match
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is True
+
+    def test_returns_false_for_natural_dates(self):
+        reviews = [
+            {"date_published_parsed": "2025-01-15"},
+            {"date_published_parsed": "2025-03-22"},
+            {"date_published_parsed": "2025-06-01"},
+            {"date_published_parsed": "2025-09-14"},
+        ]
+        assert has_estimated_dates(reviews, "2026-04-10") is False
+
+    def test_empty_reviews(self):
+        assert has_estimated_dates([], "2026-04-10") is False
+```
+
+- [ ] **Step 2: Implement**
+
+Add to `report_common.py`:
+
+```python
+def has_estimated_dates(reviews, logical_date_str):
+    """Detect if >30% of review dates cluster on the same MM-DD as logical_date.
+    
+    This indicates relative dates ("3 years ago") were parsed anchored to logical_date.
+    Returns True if the dates are likely estimated, False otherwise.
+    """
+    if not reviews:
+        return False
+    logical_mmdd = logical_date_str[-5:]  # "MM-DD" from "YYYY-MM-DD"
+    matching = sum(
+        1 for r in reviews
+        if (r.get("date_published_parsed") or "").endswith(logical_mmdd)
+    )
+    return matching / len(reviews) > 0.30
+```
+
+This function is used by:
+1. Templates: show footnote "部分日期为估算值" on timeline charts
+2. `compute_cluster_changes` (spec 14.9): suppress "improving" detection when dates are estimated
+
+- [ ] **Step 3: Run tests, commit**
+
+```bash
+uv run pytest tests/test_v3_algorithms.py::TestEstimatedDates -v
+git add qbu_crawler/server/report_common.py tests/test_v3_algorithms.py
+git commit -m "feat(report): add has_estimated_dates detection for relative date warning
+
+Detects >30% review date clustering on logical_date MM-DD pattern.
+Used by templates for footnote and by cluster change detection for accuracy guard."
 ```
 
 ---

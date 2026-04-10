@@ -264,6 +264,28 @@ class TestV3TemplateRender:
         assert "_uncategorized" not in html
 ```
 
+- [ ] **Step 1.5: Build "Top Actions" data structure** (P3a-02 fix)
+
+The template's Action Board tab needs a `top_actions` list. Add to `normalize_deep_report_analytics` in `report_common.py`:
+
+```python
+# Build top_actions from improvement_priorities (LLM) + top_negative_clusters
+top_actions = []
+priorities = analytics.get("report_copy", {}).get("improvement_priorities", [])
+clusters_by_code = {c["label_code"]: c for c in normalized.get("self", {}).get("top_negative_clusters", [])}
+for i, p in enumerate(priorities[:3]):
+    cluster = clusters_by_code.get(p.get("label_code", ""))
+    top_actions.append({
+        "rank": i + 1,
+        "title": p.get("action", "")[:80],
+        "evidence_summary": f"{cluster['review_count']}条投诉" if cluster else "",
+        "affected_products": cluster.get("affected_products", []) if cluster else [],
+        "recommendation": p.get("action", ""),
+        "linked_cluster": p.get("label_code", ""),
+    })
+normalized["top_actions"] = top_actions
+```
+
 - [ ] **Step 2: Build the template**
 
 Create `daily_report_v3.html.j2` following the structure from spec Section 4.2.4:

@@ -142,15 +142,44 @@ Removes embedded images (URL links only). Removes analytical sheets
 - Modify: `qbu_crawler/server/report_snapshot.py` (remove PDF generation call)
 - Modify: `pyproject.toml` (remove playwright)
 
-- [ ] **Step 1: Remove PDF call from report pipeline**
+- [ ] **Step 1a: Create `report_html.py` and move `render_v3_html`** (P3a-04 fix)
 
-In `report_snapshot.py::generate_full_report_from_snapshot` (or the new `_generate_full_report`), remove:
-```python
-# Remove these lines:
-pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, ...)
+Create `qbu_crawler/server/report_html.py` and move the `render_v3_html` function from `report_pdf.py`:
+
+```bash
+# Copy the function (not the whole file — report_pdf.py has Playwright imports we don't want)
 ```
 
-Move `render_v3_html` from `report_pdf.py` to `report_snapshot.py` or a new `report_html.py` before deleting `report_pdf.py`.
+```python
+# qbu_crawler/server/report_html.py
+"""V3 HTML report rendering."""
+import os
+import json
+import logging
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
+from qbu_crawler import config
+from qbu_crawler.server.report_common import normalize_deep_report_analytics
+from qbu_crawler.server.report_charts import build_chartjs_configs
+
+logger = logging.getLogger(__name__)
+
+def render_v3_html(snapshot, analytics, output_path=None):
+    # ... (moved from report_pdf.py — full implementation from Phase 3a Task 5)
+    pass
+```
+
+Update all imports: `report_snapshot.py` should import from `report_html` instead of `report_pdf`.
+
+- [ ] **Step 1b: Remove PDF call from report pipeline**
+
+In `report_snapshot.py`, remove:
+```python
+# Remove:
+pdf_path = report_pdf.generate_pdf_report(snapshot, analytics, ...)
+# Remove:
+from qbu_crawler.server import report_pdf
+```
 
 - [ ] **Step 2: Remove import of report_pdf**
 
