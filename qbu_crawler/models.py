@@ -243,6 +243,8 @@ def init_db():
         "ALTER TABLE notification_outbox ADD COLUMN delivered_at TIMESTAMP",
         "ALTER TABLE reviews ADD COLUMN date_published_parsed TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN report_mode TEXT",
+        "ALTER TABLE review_analysis ADD COLUMN impact_category TEXT",
+        "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
     ]
     for sql in migrations:
         try:
@@ -1842,6 +1844,8 @@ def save_review_analysis(
     prompt_version: str = "v1",
     token_usage: int | None = None,
     analyzed_at: str | None = None,
+    impact_category: str | None = None,      # NEW
+    failure_mode: str | None = None,          # NEW
 ) -> None:
     """UPSERT a review analysis row. Conflicts on (review_id, prompt_version) update all fields.
 
@@ -1855,8 +1859,9 @@ def save_review_analysis(
             """
             INSERT INTO review_analysis
                 (review_id, sentiment, sentiment_score, labels, features,
-                 insight_cn, insight_en, llm_model, prompt_version, token_usage, analyzed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 insight_cn, insight_en, llm_model, prompt_version, token_usage, analyzed_at,
+                 impact_category, failure_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(review_id, prompt_version) DO UPDATE SET
                 sentiment       = excluded.sentiment,
                 sentiment_score = excluded.sentiment_score,
@@ -1866,7 +1871,9 @@ def save_review_analysis(
                 insight_en      = excluded.insight_en,
                 llm_model       = excluded.llm_model,
                 token_usage     = excluded.token_usage,
-                analyzed_at     = excluded.analyzed_at
+                analyzed_at     = excluded.analyzed_at,
+                impact_category = excluded.impact_category,
+                failure_mode    = excluded.failure_mode
             """,
             (
                 review_id,
@@ -1880,6 +1887,8 @@ def save_review_analysis(
                 prompt_version,
                 token_usage,
                 ts,
+                impact_category,    # NEW
+                failure_mode,       # NEW
             ),
         )
         conn.commit()
