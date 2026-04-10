@@ -15,6 +15,92 @@ from qbu_crawler.server import report, report_analytics, report_llm, report_pdf
 _logger = logging.getLogger(__name__)
 
 
+def load_previous_report_context(run_id):
+    """Load most recent completed run's analytics and snapshot.
+
+    Skips runs without analytics (quiet/change mode runs).
+    Returns (analytics_dict, snapshot_dict) or (None, None).
+    """
+    prev_run = models.get_previous_completed_run(run_id)
+    if not prev_run or not prev_run.get("analytics_path"):
+        return None, None
+
+    try:
+        analytics = json.loads(Path(prev_run["analytics_path"]).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        _logger.warning("Failed to load previous analytics: %s", e)
+        return None, None
+
+    snapshot = None
+    if prev_run.get("snapshot_path"):
+        try:
+            snapshot = json.loads(Path(prev_run["snapshot_path"]).read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            _logger.warning("Failed to load previous snapshot: %s", e)
+
+    return analytics, snapshot
+
+
+def _price_changed(a, b):
+    """Compare prices with float tolerance."""
+    if a is None and b is None:
+        return False
+    if a is None or b is None:
+        return True
+    return abs(float(a) - float(b)) >= 0.01
+
+
+def detect_snapshot_changes(current_snapshot, previous_snapshot):
+    """Compare two snapshots for price/stock/rating changes.
+
+    Returns dict with: has_changes, price_changes, stock_changes,
+    rating_changes, review_count_changes, new_products, removed_products.
+    """
+    changes = {
+        "has_changes": False,
+        "price_changes": [], "stock_changes": [], "rating_changes": [],
+        "review_count_changes": [], "new_products": [], "removed_products": [],
+    }
+
+    if previous_snapshot is None:
+        return changes
+
+    prev_by_sku = {p["sku"]: p for p in previous_snapshot.get("products", [])}
+
+    for product in current_snapshot.get("products", []):
+        sku = product.get("sku", "")
+        prev = prev_by_sku.get(sku)
+        if not prev:
+            changes["new_products"].append(product)
+            changes["has_changes"] = True
+            continue
+
+        name = product.get("name", sku)
+
+        if _price_changed(product.get("price"), prev.get("price")):
+            changes["price_changes"].append({"sku": sku, "name": name, "old": prev.get("price"), "new": product.get("price")})
+            changes["has_changes"] = True
+
+        if product.get("stock_status") != prev.get("stock_status"):
+            changes["stock_changes"].append({"sku": sku, "name": name, "old": prev.get("stock_status"), "new": product.get("stock_status")})
+            changes["has_changes"] = True
+
+        if product.get("rating") != prev.get("rating"):
+            changes["rating_changes"].append({"sku": sku, "name": name, "old": prev.get("rating"), "new": product.get("rating")})
+            changes["has_changes"] = True
+
+        if product.get("review_count") != prev.get("review_count"):
+            changes["review_count_changes"].append({"sku": sku, "name": name, "old": prev.get("review_count"), "new": product.get("review_count")})
+
+    current_skus = {p.get("sku") for p in current_snapshot.get("products", [])}
+    for sku, prev_product in prev_by_sku.items():
+        if sku not in current_skus:
+            changes["removed_products"].append(prev_product)
+            changes["has_changes"] = True
+
+    return changes
+
+
 class FullReportGenerationError(RuntimeError):
     def __init__(self, message, *, analytics_path=None, excel_path=None, pdf_path=None):
         super().__init__(message)
