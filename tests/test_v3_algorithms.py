@@ -400,3 +400,180 @@ class TestDBSupport:
         result = models.query_cluster_reviews("quality_stability", ownership="own", limit=10)
         assert len(result) == 1
         assert result[0]["product_sku"] == "TP1"
+
+
+class TestPhase1Integration:
+    """End-to-end: build_report_analytics → normalize → verify V3 properties."""
+
+    @pytest.fixture()
+    def analytics_db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "integration.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        monkeypatch.setattr(config, "REPORT_LABEL_MODE", "rule")
+        models.init_db()
+        # Insert test products and reviews
+        conn = _get_test_conn(db_file)
+        # Own product with negative reviews
+        conn.execute(
+            "INSERT INTO products (url, site, name, sku, ownership, review_count, rating, scraped_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("http://test/own1", "test", "Own Grinder", "OWN1", "own", 20, 3.5, "2026-04-10 08:00:00"),
+        )
+        pid1 = conn.execute("SELECT id FROM products WHERE sku='OWN1'").fetchone()["id"]
+        # Competitor product with positive reviews
+        conn.execute(
+            "INSERT INTO products (url, site, name, sku, ownership, review_count, rating, scraped_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("http://test/comp1", "test", "Comp Grinder", "COMP1", "competitor", 50, 4.7, "2026-04-10 08:00:00"),
+        )
+        pid2 = conn.execute("SELECT id FROM products WHERE sku='COMP1'").fetchone()["id"]
+
+        # Own negative reviews (varied) — 10 rows (≥10 → vol_score=2; + safety → total=5 → "high")
+        for i in range(10):
+            conn.execute(
+                "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, scraped_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (pid1, f"neg_user{i}", "Bad quality", "Metal shavings and rust found", f"neg{i}", 1.0, "2026-04-10 08:00:00"),
+            )
+        # Own positive reviews — 14 rows (14 promoters, 10 detractors → NPS≈16.7 → health≈58)
+        for i in range(14):
+            conn.execute(
+                "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, scraped_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (pid1, f"pos_user{i}", "Great product", "Works perfectly fine", f"pos{i}", 5.0, "2026-04-10 08:00:00"),
+            )
+        # Competitor positive reviews — 15 rows
+        for i in range(15):
+            conn.execute(
+                "INSERT INTO reviews (product_id, author, headline, body, body_hash, rating, scraped_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (pid2, f"comp_user{i}", "Awesome grinder", "Very powerful and durable", f"comp{i}", 5.0, "2026-04-10 08:00:00"),
+            )
+        conn.commit()
+
+        # Fetch actual IDs from DB (auto-assigned) so snapshot IDs match DB
+        neg_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM reviews WHERE product_id=? ORDER BY id ASC", (pid1,)
+            ).fetchmany(10)
+        ]
+        pos_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM reviews WHERE product_id=? AND rating=5.0 ORDER BY id ASC", (pid1,)
+            ).fetchall()
+        ]
+        comp_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM reviews WHERE product_id=? ORDER BY id ASC", (pid2,)
+            ).fetchall()
+        ]
+
+        return {"db_file": db_file, "pid1": pid1, "pid2": pid2,
+                "neg_ids": neg_ids, "pos_ids": pos_ids, "comp_ids": comp_ids}
+
+    def test_v3_metrics_properties(self, analytics_db):
+        from qbu_crawler.server.report_analytics import build_report_analytics, sync_review_labels
+        from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+        neg_ids = analytics_db["neg_ids"]
+        pos_ids = analytics_db["pos_ids"]
+        comp_ids = analytics_db["comp_ids"]
+
+        snapshot = {
+            "logical_date": "2026-04-10",
+            "run_id": 1,
+            "snapshot_hash": "test123",
+            "products": [
+                {
+                    "url": "http://test/own1", "name": "Own Grinder", "sku": "OWN1",
+                    "ownership": "own", "price": 299.99, "stock_status": "in_stock",
+                    "rating": 3.5, "review_count": 20, "site": "test", "scraped_at": "2026-04-10 08:00:00",
+                },
+                {
+                    "url": "http://test/comp1", "name": "Comp Grinder", "sku": "COMP1",
+                    "ownership": "competitor", "price": 399.99, "stock_status": "in_stock",
+                    "rating": 4.7, "review_count": 50, "site": "test", "scraped_at": "2026-04-10 08:00:00",
+                },
+            ],
+            "reviews": [
+                {
+                    "id": neg_ids[i], "product_name": "Own Grinder", "product_sku": "OWN1",
+                    "author": f"neg_user{i}", "headline": "Bad quality",
+                    "body": "Metal shavings and rust found",
+                    "body_cn": "metal shavings and rust", "headline_cn": "bad quality", "rating": 1.0,
+                    "date_published_parsed": "2026-03-15", "images": None, "ownership": "own",
+                    "sentiment": "negative", "translate_status": "done",
+                }
+                for i in range(10)
+            ] + [
+                {
+                    "id": pos_ids[i], "product_name": "Own Grinder", "product_sku": "OWN1",
+                    "author": f"pos_user{i}", "headline": "Great",
+                    "body": "Works perfectly fine",
+                    "body_cn": "works fine", "headline_cn": "great", "rating": 5.0,
+                    "date_published_parsed": "2026-03-20", "images": None, "ownership": "own",
+                    "sentiment": "positive", "translate_status": "done",
+                }
+                for i in range(14)
+            ] + [
+                {
+                    "id": comp_ids[i], "product_name": "Comp Grinder", "product_sku": "COMP1",
+                    "author": f"comp_user{i}", "headline": "Awesome",
+                    "body": "Very powerful and durable",
+                    "body_cn": "very powerful and durable", "headline_cn": "awesome", "rating": 5.0,
+                    "date_published_parsed": "2026-03-25", "images": None, "ownership": "competitor",
+                    "sentiment": "positive", "translate_status": "done",
+                }
+                for i in range(15)
+            ],
+            "products_count": 2,
+            "reviews_count": 39,
+            "translated_count": 39,
+            "untranslated_count": 0,
+        }
+
+        synced = sync_review_labels(snapshot)
+        analytics = build_report_analytics(snapshot, synced)
+        normalized = normalize_deep_report_analytics(analytics)
+        kpis = normalized["kpis"]
+
+        # V3 Health index: NPS-proxy (0-100)
+        assert 0 <= kpis.get("health_index", -1) <= 100
+        # 14 promoters (≥4★), 10 detractors (≤2★), 24 total own: NPS=(14-10)/24*100≈16.7 → health≈58
+        assert 55 <= kpis["health_index"] <= 65
+
+        # Risk products use multi-factor scores (0-100)
+        risk = normalized.get("self", {}).get("risk_products", [])
+        for p in risk:
+            assert 0 <= p["risk_score"] <= 100
+
+        # Cluster severity has distinct levels (not all "high")
+        clusters = normalized.get("self", {}).get("top_negative_clusters", [])
+        if clusters:
+            severities = {c["severity"] for c in clusters}
+            # With safety keywords ("metal shavings", "rust"), at least one should be high/critical
+            assert severities & {"critical", "high"}, f"Expected safety-triggered severity, got {severities}"
+
+        # Gap analysis has V3 fields
+        gaps = normalized.get("competitor", {}).get("gap_analysis", [])
+        for g in gaps:
+            assert "gap_type" in g, f"Missing gap_type: {g}"
+            assert g["gap_type"] in ("止血", "追赶", "监控")
+            assert "fix_urgency" in g
+            assert "catch_up_gap" in g
+            assert "priority_score" in g
+            assert "_uncategorized" not in g.get("label_code", "")
+            assert "_uncategorized" not in g.get("label_display", "")
+
+        # KPIs have gap counts
+        assert "gap_fix_count" in kpis
+        assert "gap_catch_count" in kpis
+
+        # Alert level: with ~60 health, should be yellow or green (not always green for baseline)
+        alert = normalized.get("alert_level")
+        if alert:
+            assert alert[0] in ("red", "yellow", "green")
