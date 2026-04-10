@@ -4,7 +4,7 @@ import logging
 
 from json_repair import repair_json
 
-from qbu_crawler import config
+from qbu_crawler import config, models
 from qbu_crawler.server import report_analytics
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,72 @@ _INSIGHTS_KEYS = (
 )
 
 
-def _build_insights_prompt(analytics):
+def _select_insight_samples(snapshot, analytics):
+    """Select 15-20 diverse reviews for LLM synthesis from the full DB corpus.
+
+    Strategy: worst per risk product, image-bearing negatives, top competitor,
+    mixed sentiment, most recent.
+    """
+    risk_products = analytics.get("self", {}).get("risk_products", [])
+    samples = []
+    seen_ids = set()
+
+    def _add(review_list, limit):
+        added = 0
+        for r in review_list:
+            rid = r.get("id")
+            if rid and rid not in seen_ids and len(samples) < 20:
+                seen_ids.add(rid)
+                samples.append(r)
+                added += 1
+                if added >= limit:
+                    break
+
+    # 1. Worst reviews per risk product (from full DB)
+    for product in risk_products[:3]:
+        sku = product.get("product_sku", "")
+        if not sku:
+            continue
+        worst, _ = models.query_reviews(
+            sku=sku, max_rating=config.NEGATIVE_THRESHOLD,
+            sort_by="rating", order="asc", limit=5,
+        )
+        _add(worst, 2)
+
+    # 2. Image-bearing own negatives
+    img_neg, _ = models.query_reviews(
+        ownership="own", has_images=True, max_rating=config.NEGATIVE_THRESHOLD,
+        sort_by="rating", order="asc", limit=10,
+    )
+    _add([r for r in img_neg if r.get("id") not in seen_ids], 3)
+
+    # 3. Top competitor reviews (use scraped_at sort — date_published_parsed not in allowed_sorts)
+    comp_best, _ = models.query_reviews(
+        ownership="competitor", min_rating=5,
+        sort_by="scraped_at", order="desc", limit=10,
+    )
+    _add([r for r in comp_best if r.get("id") not in seen_ids], 3)
+
+    # 4. Mixed sentiment from snapshot
+    for r in snapshot.get("reviews", []):
+        if r.get("sentiment") == "mixed" and r.get("id") not in seen_ids and len(samples) < 20:
+            seen_ids.add(r["id"])
+            samples.append(r)
+            if len([s for s in samples if s.get("sentiment") == "mixed"]) >= 2:
+                break
+
+    # 5. Most recent from snapshot
+    recent = sorted(
+        [r for r in snapshot.get("reviews", []) if r.get("id") not in seen_ids],
+        key=lambda r: r.get("date_published_parsed") or "",
+        reverse=True,
+    )
+    _add(recent, 2)
+
+    return samples[:20]
+
+
+def _build_insights_prompt(analytics, snapshot=None):
     """Build a concise prompt summarizing analytics for LLM executive insights.
 
     Expects pre-normalized analytics with gap_analysis, enriched clusters, etc.
@@ -356,7 +421,7 @@ def _build_insights_prompt(analytics):
         )
     risk_text = "\n".join(risk_lines) if risk_lines else "  暂无高风险产品"
 
-    return f"""你是一位高级产品分析师。基于以下产品评论分析数据，生成执行摘要和改良建议。
+    prompt = f"""你是一位高级产品分析师。基于以下产品评论分析数据，生成执行摘要和改良建议。
 注意：你的分析必须基于下方提供的数据，不要编造数据或做无依据的推断。
 
 数据概要：
@@ -393,6 +458,25 @@ def _build_insights_prompt(analytics):
 }}
 
 重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
+
+    # Inject review samples for grounded insights
+    if snapshot:
+        sample_reviews = _select_insight_samples(snapshot, analytics)
+        if sample_reviews:
+            lines = []
+            for r in sample_reviews:
+                tag = "自有" if r.get("ownership") == "own" else "竞品"
+                body = (r.get("body_cn") or r.get("body") or "")[:250]
+                lines.append(
+                    f"[{tag}|{r.get('product_name', '')}|{r.get('rating', '')}星] {body}"
+                )
+            prompt += (
+                f"\n\n关键评论原文（{len(lines)}条，用于提炼洞察和引用客户语言）：\n"
+                + "\n".join(lines)
+                + "\n\n补充要求：hero_headline 必须反映评论中的核心客户体验痛点，不要只堆砌数字。"
+            )
+
+    return prompt
 
 
 def _fallback_insights(analytics):
@@ -472,7 +556,7 @@ def _validate_insights(llm_output: dict, analytics: dict) -> dict:
     return result
 
 
-def generate_report_insights(analytics):
+def generate_report_insights(analytics, snapshot=None):
     """Generate executive summary, headline, and recommendations via LLM.
 
     Makes a SINGLE LLM call to produce executive-level insights from the
@@ -485,7 +569,7 @@ def generate_report_insights(analytics):
         logger.info("LLM not configured, using fallback insights")
         return _fallback_insights(analytics)
 
-    prompt = _build_insights_prompt(analytics)
+    prompt = _build_insights_prompt(analytics, snapshot=snapshot)
 
     try:
         from openai import OpenAI

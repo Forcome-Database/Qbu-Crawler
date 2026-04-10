@@ -88,3 +88,21 @@ class TestTranslatorV2Prompt:
         # Removed fields from spec 15.6 should NOT be present
         assert "usage_context" not in prompt
         assert "purchase_intent_impact" not in prompt
+
+
+class TestInsightSampleSelection:
+    def test_function_exists(self):
+        from qbu_crawler.server.report_llm import _select_insight_samples
+        assert callable(_select_insight_samples)
+
+    def test_prompt_signature_accepts_snapshot(self):
+        from qbu_crawler.server.report_llm import _build_insights_prompt
+        # Should accept snapshot param without error
+        prompt = _build_insights_prompt({"kpis": {}}, snapshot={"reviews": []})
+        assert isinstance(prompt, str)
+
+    def test_generate_report_insights_accepts_snapshot(self):
+        from qbu_crawler.server.report_llm import generate_report_insights
+        import inspect
+        sig = inspect.signature(generate_report_insights)
+        assert "snapshot" in sig.parameters

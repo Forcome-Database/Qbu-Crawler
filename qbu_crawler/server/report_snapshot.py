@@ -159,7 +159,7 @@ def generate_full_report_from_snapshot(
         pre_normalized = normalize_deep_report_analytics(analytics)
 
         # LLM insights with full context (gap_analysis, top_symptoms, etc.)
-        insights = report_llm.generate_report_insights(pre_normalized)
+        insights = report_llm.generate_report_insights(pre_normalized, snapshot=snapshot)
         analytics["report_copy"] = insights
 
         Path(analytics_path).write_text(

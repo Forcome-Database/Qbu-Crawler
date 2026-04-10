@@ -270,7 +270,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {
+        lambda analytics, snapshot=None: {
             "hero_headline": "",
             "executive_summary": "",
             "executive_bullets": [],
@@ -353,7 +353,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_pdf_paths(tmp_
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {
+        lambda analytics, snapshot=None: {
             "hero_headline": "",
             "executive_summary": "",
             "executive_bullets": [],
@@ -418,7 +418,7 @@ def test_generate_full_report_from_snapshot_passes_insights_to_pdf_and_email(tmp
 
     captured = {}
 
-    def fake_generate_report_insights(analytics):
+    def fake_generate_report_insights(analytics, snapshot=None):
         captured["analytics_for_insights"] = analytics
         return {
             "hero_headline": "聚焦可靠性",
@@ -499,7 +499,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_pdf(monkeypatch, tmp
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
+        lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -568,7 +568,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
+        lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -635,7 +635,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
+        lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
@@ -732,7 +732,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     monkeypatch.setattr(
         report_snapshot.report_llm,
         "generate_report_insights",
-        lambda analytics: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
+        lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
         report_snapshot.report_pdf,
