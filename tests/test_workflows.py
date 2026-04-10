@@ -976,7 +976,7 @@ class TestWorkflowReconcile:
         monkeypatch.setattr(workflows_module, "build_fast_report", lambda snapshot: dict(snapshot))
         monkeypatch.setattr(
             workflows_module,
-            "generate_full_report_from_snapshot",
+            "generate_report_from_snapshot",
             lambda snapshot, send_email=True: {
                 "snapshot_hash": snapshot["snapshot_hash"],
                 "excel_path": str(tmp_path / "full.xlsx"),
@@ -1090,7 +1090,7 @@ class TestWorkflowReconcile:
 
         monkeypatch.setattr(
             workflows_module,
-            "generate_full_report_from_snapshot",
+            "generate_report_from_snapshot",
             fake_generate_full_report,
         )
 
@@ -1217,7 +1217,7 @@ class TestWorkflowReconcile:
         )
         monkeypatch.setattr(
             workflows_module,
-            "generate_full_report_from_snapshot",
+            "generate_report_from_snapshot",
             lambda snapshot, send_email=True: {
                 "snapshot_hash": snapshot["snapshot_hash"],
                 "excel_path": str(tmp_path / "full.xlsx"),
@@ -1271,7 +1271,7 @@ class TestWorkflowReconcile:
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"snapshot_hash": "hash-fast", "logical_date": "2026-03-29", "run_id": run["id"]})
         monkeypatch.setattr(
             workflows_module,
-            "generate_full_report_from_snapshot",
+            "generate_report_from_snapshot",
             lambda snapshot, send_email=True: (_ for _ in ()).throw(
                 FullReportGenerationError(
                     "pdf exploded",
@@ -1337,7 +1337,7 @@ class TestWorkflowReconcile:
         )
         monkeypatch.setattr(
             workflows_module,
-            "generate_full_report_from_snapshot",
+            "generate_report_from_snapshot",
             lambda snapshot, send_email=True: {
                 "snapshot_hash": "hash-pdf",
                 "analytics_path": str(tmp_path / "analytics.json"),

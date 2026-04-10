@@ -23,7 +23,7 @@ from qbu_crawler.server.report_snapshot import (
     FullReportGenerationError,
     build_fast_report,
     freeze_report_snapshot,
-    generate_full_report_from_snapshot,
+    generate_report_from_snapshot,
     load_report_snapshot,
 )
 
@@ -587,7 +587,7 @@ class WorkflowWorker:
             try:
                 snapshot = load_report_snapshot(run["snapshot_path"])
                 should_send_email = _should_send_workflow_email(task_rows, snapshot)
-                full_report = generate_full_report_from_snapshot(
+                full_report = generate_report_from_snapshot(
                     snapshot,
                     send_email=should_send_email,
                 )
@@ -604,10 +604,10 @@ class WorkflowWorker:
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
 
-            excel_path = full_report["excel_path"]
+            excel_path = full_report.get("excel_path")
             analytics_path = full_report.get("analytics_path")
             pdf_path = full_report.get("pdf_path")
-            html_path = full_report.get("html_path")
+            html_path = full_report.get("html_path") or full_report.get("v3_html_path")
             email = full_report.get("email")
             email_ok = (email or {}).get("success")
             models.update_workflow_run(
@@ -631,11 +631,12 @@ class WorkflowWorker:
                 payload={
                     "run_id": run_id,
                     "logical_date": run["logical_date"],
-                    "snapshot_hash": full_report["snapshot_hash"],
+                    "snapshot_hash": full_report.get("snapshot_hash", ""),
                     "excel_path": excel_path,
                     "analytics_path": analytics_path,
                     "pdf_path": pdf_path,
                     "html_path": html_path,
+                    "report_mode": full_report.get("mode", "full"),
                     "email_status": _workflow_email_status(
                         email_success=email_ok,
                         untranslated_count=snapshot.get("untranslated_count", 0),
@@ -743,7 +744,7 @@ def _maybe_trigger_ai_digest(run_id: int, run: dict, snapshot: dict, full_report
         f"products_count={snapshot['products_count']}\n"
         f"reviews_count={snapshot['reviews_count']}\n"
         f"translated_count={snapshot['translated_count']}\n"
-        f"excel_path={full_report['excel_path']}"
+        f"excel_path={full_report.get('excel_path', '')}"
     )
     base = config.OPENCLAW_HOOK_URL.rstrip("/").removesuffix("/hooks/wake").removesuffix("/hooks/agent")
     request = urllib.request.Request(
