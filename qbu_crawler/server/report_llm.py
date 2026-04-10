@@ -291,7 +291,7 @@ def _select_insight_samples(snapshot, analytics):
                 if added >= limit:
                     break
 
-    # 1. Worst reviews per risk product (from full DB)
+    # 1. Worst reviews per risk product (these are OWN products)
     for product in risk_products[:3]:
         sku = product.get("product_sku", "")
         if not sku:
@@ -300,28 +300,36 @@ def _select_insight_samples(snapshot, analytics):
             sku=sku, max_rating=config.NEGATIVE_THRESHOLD,
             sort_by="rating", order="asc", limit=5,
         )
+        for r in worst:
+            r.setdefault("ownership", "own")
         _add(worst, 2)
 
-    # 2. Image-bearing own negatives
+    # 2. Image-bearing own negatives — explicitly OWN
     img_neg, _ = models.query_reviews(
         ownership="own", has_images=True, max_rating=config.NEGATIVE_THRESHOLD,
         sort_by="rating", order="asc", limit=10,
     )
+    for r in img_neg:
+        r.setdefault("ownership", "own")
     _add([r for r in img_neg if r.get("id") not in seen_ids], 3)
 
-    # 3. Top competitor reviews (use scraped_at sort — date_published_parsed not in allowed_sorts)
+    # 3. Top competitor reviews — explicitly COMPETITOR
     comp_best, _ = models.query_reviews(
         ownership="competitor", min_rating=5,
         sort_by="scraped_at", order="desc", limit=10,
     )
+    for r in comp_best:
+        r.setdefault("ownership", "competitor")
     _add([r for r in comp_best if r.get("id") not in seen_ids], 3)
 
-    # 4. Mixed sentiment from snapshot
+    # 4. Mixed sentiment from snapshot (only if sentiment field available)
+    mixed_count = 0
     for r in snapshot.get("reviews", []):
         if r.get("sentiment") == "mixed" and r.get("id") not in seen_ids and len(samples) < 20:
             seen_ids.add(r["id"])
             samples.append(r)
-            if len([s for s in samples if s.get("sentiment") == "mixed"]) >= 2:
+            mixed_count += 1
+            if mixed_count >= 2:
                 break
 
     # 5. Most recent from snapshot
@@ -617,6 +625,8 @@ def analyze_cluster_deep(cluster, cluster_reviews):
         return None
     if not config.REPORT_CLUSTER_ANALYSIS:
         return None
+    if not cluster_reviews:
+        return None
 
     review_lines = []
     for r in cluster_reviews[:30]:
@@ -679,13 +689,20 @@ def _validate_cluster_analysis(parsed):
         "user_workarounds": parsed.get("user_workarounds", []),
         "actionable_summary": parsed.get("actionable_summary", ""),
     }
+    # Type guards for lists
     if not isinstance(result["failure_modes"], list):
         result["failure_modes"] = []
     if not isinstance(result["root_causes"], list):
         result["root_causes"] = []
     if not isinstance(result["user_workarounds"], list):
         result["user_workarounds"] = []
-    result["failure_modes"] = result["failure_modes"][:10]
-    result["root_causes"] = result["root_causes"][:5]
-    result["user_workarounds"] = result["user_workarounds"][:5]
+    # Type guards for strings
+    if not isinstance(result["temporal_pattern"], str):
+        result["temporal_pattern"] = ""
+    if not isinstance(result["actionable_summary"], str):
+        result["actionable_summary"] = ""
+    # Filter non-dict elements from lists and cap lengths
+    result["failure_modes"] = [m for m in result["failure_modes"] if isinstance(m, dict)][:10]
+    result["root_causes"] = [m for m in result["root_causes"] if isinstance(m, dict)][:5]
+    result["user_workarounds"] = [w for w in result["user_workarounds"] if isinstance(w, str)][:5]
     return result

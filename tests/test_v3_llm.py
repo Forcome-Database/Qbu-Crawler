@@ -150,6 +150,68 @@ class TestClusterDeepAnalysis:
         assert _validate_cluster_analysis("not a dict") is None
         assert _validate_cluster_analysis(None) is None
 
+    def test_validate_filters_non_dict_failure_modes(self):
+        from qbu_crawler.server.report_llm import _validate_cluster_analysis
+        raw = {
+            "failure_modes": [{"mode": "ok"}, "not a dict", 42, {"mode": "also ok"}],
+            "root_causes": [{"cause": "valid"}, None, "bad"],
+            "temporal_pattern": 123,  # wrong type — should become ""
+            "user_workarounds": ["str ok", {"bad": "dict"}, "another str"],
+            "actionable_summary": ["wrong type"],  # list — should become ""
+        }
+        result = _validate_cluster_analysis(raw)
+        assert result["failure_modes"] == [{"mode": "ok"}, {"mode": "also ok"}]
+        assert result["root_causes"] == [{"cause": "valid"}]
+        assert result["temporal_pattern"] == ""
+        assert result["user_workarounds"] == ["str ok", "another str"]
+        assert result["actionable_summary"] == ""
+
+    def test_returns_none_for_empty_cluster_reviews(self, monkeypatch):
+        monkeypatch.setattr(config, "LLM_API_BASE", "http://fake")
+        monkeypatch.setattr(config, "LLM_API_KEY", "fake")
+        monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", True)
+        from qbu_crawler.server.report_llm import analyze_cluster_deep
+        cluster = {"label_code": "quality_stability", "label_display": "质量稳定性", "review_count": 10}
+        result = analyze_cluster_deep(cluster, [])
+        assert result is None
+
+
+class TestSelectInsightSamplesOwnership:
+    """Ensure _select_insight_samples attaches correct ownership to DB results."""
+
+    def test_own_reviews_tagged_own(self, monkeypatch):
+        """Reviews from risk-product query (own) must have ownership='own'."""
+        from qbu_crawler.server import report_llm
+
+        fake_own = [{"id": 1, "rating": 1, "body": "broken", "product_name": "P1"}]
+        monkeypatch.setattr(
+            report_llm.models, "query_reviews",
+            lambda **kw: (fake_own, 1),
+        )
+        analytics = {"self": {"risk_products": [{"product_sku": "SKU1"}]}}
+        snapshot = {"reviews": []}
+        samples = report_llm._select_insight_samples(snapshot, analytics)
+        own_samples = [s for s in samples if s.get("id") == 1]
+        assert own_samples, "Review from risk product should appear in samples"
+        assert own_samples[0].get("ownership") == "own"
+
+    def test_existing_ownership_not_overwritten(self, monkeypatch):
+        """setdefault must NOT overwrite an existing ownership value."""
+        from qbu_crawler.server import report_llm
+
+        # Simulate a review that already has ownership='competitor' somehow
+        fake_own = [{"id": 2, "rating": 1, "body": "ok", "ownership": "competitor"}]
+        monkeypatch.setattr(
+            report_llm.models, "query_reviews",
+            lambda **kw: (fake_own, 1),
+        )
+        analytics = {"self": {"risk_products": [{"product_sku": "SKU2"}]}}
+        snapshot = {"reviews": []}
+        samples = report_llm._select_insight_samples(snapshot, analytics)
+        # setdefault should not overwrite — existing value preserved
+        own_samples = [s for s in samples if s.get("id") == 2]
+        assert own_samples[0].get("ownership") == "competitor"
+
 
 class TestClusterAnalysisPipelineIntegration:
     def test_cluster_analysis_gated_by_config(self, monkeypatch):
