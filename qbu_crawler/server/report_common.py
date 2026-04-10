@@ -331,6 +331,8 @@ def _compute_alert_level(normalized):
 
     neg_delta = kpis.get("own_negative_review_rows_delta", 0)
     clusters = normalized.get("self", {}).get("top_negative_clusters", [])
+    # is_new_or_escalated is populated by compute_cluster_changes() in Phase 3b.
+    # Until then, escalation detection relies on health index and delta thresholds only.
     has_escalation = any(
         c.get("severity") in ("critical", "high") and c.get("is_new_or_escalated")
         for c in clusters

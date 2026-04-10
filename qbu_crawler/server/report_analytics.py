@@ -267,7 +267,7 @@ _SAFETY_KEYWORDS = frozenset({
     "broke", "broken", "snapped", "shattered", "exploded",
     "dangerous", "hazard", "injury", "hurt", "unsafe",
     "rust", "rusted", "corrosion",
-    "金属屑", "金属碎", "断裂", "爆裂", "危险", "安全隐患", "锈",
+    "金属屑", "金属碎", "断裂", "爆裂", "危险", "安全", "锈",
 })
 
 
@@ -710,13 +710,15 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
 
     for item in items:
         item.pop("severity_score")
+        from qbu_crawler.server.report_common import _SEVERITY_DISPLAY
         item["label_display"] = _LABEL_DISPLAY.get(item["label_code"], item["label_code"])
-        item["severity_display"] = {"high": "高", "medium": "中", "low": "低"}.get(item["severity"], item["severity"])
+        item["severity_display"] = _SEVERITY_DISPLAY.get(item["severity"], item["severity"])
         item["affected_product_count"] = len(item.pop("affected_products"))
         dates = item.pop("dates")
         sorted_dates = sorted(dates, key=_date_sort_key)
         item["first_seen"] = sorted_dates[0] if sorted_dates else None
         item["last_seen"] = sorted_dates[-1] if sorted_dates else None
+        item["review_dates"] = sorted_dates  # needed by compute_cluster_severity recency factor
     return items
 
 
@@ -800,14 +802,16 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
             risk_score_raw = 0.0
         else:
             # ── factor 2: severity_avg (25%) ─────────────────────
-            severity_sum = 0.0
+            # Per-review-max: take max severity per review, normalise, then average
+            severity_scores = []
             for neg_item in neg_items:
-                for label in neg_item.get("labels", []):
-                    if label.get("label_polarity") == "negative":
-                        severity_sum += _SEVERITY_SCORE.get(label.get("severity", "low"), 1)
-            # severity per neg review, normalised to 0-1 using max possible per label
-            # Use a soft cap: average over neg_count labels (assume 1 label/review on average)
-            severity_avg = min(severity_sum / (neg_count * max_severity_score), 1.0)
+                neg_labels = [l for l in neg_item.get("labels", []) if l.get("label_polarity") == "negative"]
+                if neg_labels:
+                    max_sev = max(_SEVERITY_SCORE.get(l.get("severity", "low"), 1) for l in neg_labels)
+                else:
+                    max_sev = 2 if float(neg_item["review"].get("rating", 0)) <= 1 else 1
+                severity_scores.append(max_sev / max_severity_score)
+            severity_avg = sum(severity_scores) / len(severity_scores) if severity_scores else 0.0
 
             # ── factor 3: evidence_rate (15%) ────────────────────
             evidence_rate = entry["image_negative_count"] / neg_count
@@ -872,6 +876,8 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
             item["product_sku"] or "",
         )
     )
+    # Exclude zero-risk products (no negative reviews) from output
+    items = [item for item in items if item["risk_score"] > 0]
     return items
 
 
@@ -1010,7 +1016,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
     into the ``_uncategorized`` bucket.
     """
     from collections import defaultdict
-    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY, _SEVERITY_DISPLAY
 
     clusters = defaultdict(lambda: {
         "reviews": [],
@@ -1109,7 +1115,7 @@ def _build_feature_clusters(reviews_with_analysis, ownership="own", polarity="ne
             "review_count": len(reviews),
             "affected_product_count": len(data["products"]),
             "severity": max_sev,
-            "severity_display": {"high": "高", "medium": "中", "low": "低"}.get(max_sev, max_sev),
+            "severity_display": _SEVERITY_DISPLAY.get(max_sev, max_sev),
             "first_seen": sorted(dates, key=_date_sort_key)[0] if dates else None,
             "last_seen": sorted(dates, key=_date_sort_key)[-1] if dates else None,
             "example_reviews": _select_diverse_examples(reviews, max_count=3),
@@ -1367,6 +1373,8 @@ def build_report_analytics(snapshot, synced_labels=None):
             and item["review"].get("ownership") == "own"
         ]
         cluster["severity"] = compute_cluster_severity(cluster, _cluster_reviews, _logical_date)
+        from qbu_crawler.server.report_common import _SEVERITY_DISPLAY
+        cluster["severity_display"] = _SEVERITY_DISPLAY.get(cluster["severity"], cluster["severity"])
 
     image_reviews = []
     for item in labeled_reviews:
