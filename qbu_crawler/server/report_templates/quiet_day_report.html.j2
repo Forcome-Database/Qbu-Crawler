@@ -57,6 +57,87 @@
         </div>
       </div>
 
+      <!-- ===== DATA CHANGES ===== -->
+      {% if changes and changes.has_changes %}
+      <div class="section-kicker" style="margin-top:8px;">数据变化</div>
+      <h2 style="font-size:20px;letter-spacing:-0.02em;margin-bottom:14px;">本期变动明细</h2>
+
+      {% if changes.price_changes %}
+      <div class="section-kicker" style="margin-top:4px;">价格变化</div>
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <thead><tr>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原价</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现价</th>
+        </tr></thead>
+        <tbody>
+        {% for c in changes.price_changes %}
+        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">${{ c.old }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">${{ c.new }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if changes.stock_changes %}
+      <div class="section-kicker" style="margin-top:4px;">库存变化</div>
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <thead><tr>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原状态</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现状态</th>
+        </tr></thead>
+        <tbody>
+        {% for c in changes.stock_changes %}
+        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ c.old }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">{{ c.new }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if changes.rating_changes %}
+      <div class="section-kicker" style="margin-top:4px;">评分变化</div>
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <thead><tr>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原评分</th>
+          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现评分</th>
+        </tr></thead>
+        <tbody>
+        {% for c in changes.rating_changes %}
+        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ c.old }}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">{{ c.new }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if changes.new_products %}
+      <div class="section-kicker" style="margin-top:4px;">新增监控产品</div>
+      <ul style="font-size:13px;color:#201b16;margin:0 0 16px;padding-left:20px;">
+        {% for p in changes.new_products %}<li>{{ p.name }} ({{ p.sku }})</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if changes.removed_products %}
+      <div class="section-kicker" style="margin-top:4px;">产品不可用</div>
+      <ul style="font-size:13px;color:#93543f;margin:0 0 16px;padding-left:20px;">
+        {% for p in changes.removed_products %}<li>{{ p.name }} ({{ p.sku }})</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      {% endif %}
+
       <!-- ===== OUTSTANDING ISSUES ===== -->
       {% set clusters = ((previous_analytics or {}).get("self", {}) or {}).get("top_negative_clusters", []) %}
       {% set active_clusters = clusters | selectattr("severity", "in", ["critical", "high", "medium"]) | list %}

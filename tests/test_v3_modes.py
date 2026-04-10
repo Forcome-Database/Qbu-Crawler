@@ -387,56 +387,64 @@ class TestShouldSendQuietEmail:
     def test_first_quiet_day_sends(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full"])  # Previous was full
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is True
         assert mode is None
+        assert consecutive == 0
 
     def test_third_quiet_day_sends(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full", "quiet", "quiet"])  # 2 consecutive quiet before this one
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is True
+        assert consecutive == 2
 
     def test_fourth_quiet_day_skips(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full", "quiet", "quiet", "quiet"])  # 3 consecutive quiet
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False
+        assert consecutive == 3
 
     def test_seventh_quiet_day_sends_weekly(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full"] + ["quiet"] * 6)  # 6 consecutive quiet
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is True
         assert mode == "weekly_digest"
+        assert consecutive == 6
 
     def test_no_previous_runs_sends(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is True
+        assert consecutive == 0
 
     def test_fifth_quiet_day_skips(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full"] + ["quiet"] * 4)  # 4 consecutive quiet
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False
         assert mode is None
+        assert consecutive == 4
 
     def test_fourteenth_quiet_day_sends_weekly(self, db):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         # 13 consecutive quiet → 14th is also quiet, (13+1)%7 == 0
         self._create_runs(["full"] + ["quiet"] * 13)
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is True
         assert mode == "weekly_digest"
+        assert consecutive == 13
 
     def test_custom_threshold_via_env(self, db, monkeypatch):
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         monkeypatch.setenv("REPORT_QUIET_EMAIL_DAYS", "1")
         # With threshold=1: day 2 (1 consecutive quiet) should skip
         self._create_runs(["full", "quiet"])
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False
+        assert consecutive == 1
 
     def test_null_report_mode_breaks_streak(self, db):
         """Runs with NULL report_mode (pre-V3) should break the consecutive quiet count."""
@@ -460,5 +468,6 @@ class TestShouldSendQuietEmail:
             models.update_workflow_run(r["id"], report_mode="quiet")
         # 5 consecutive quiet runs precede run_id=999
         # NULL run appears before those 5, but the streak stops at NULL
-        send, mode = should_send_quiet_email(run_id=999)
+        send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False  # 5 consecutive quiet > threshold=3, not at day 7
+        assert consecutive == 5

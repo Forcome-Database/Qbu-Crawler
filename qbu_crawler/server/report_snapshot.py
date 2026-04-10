@@ -18,7 +18,7 @@ _logger = logging.getLogger(__name__)
 def should_send_quiet_email(run_id):
     """Determine whether to send a quiet-day email or skip.
 
-    Returns (should_send: bool, digest_mode: str | None).
+    Returns (should_send: bool, digest_mode: str | None, consecutive: int).
     digest_mode is "weekly_digest" on day 7, 14, 21...
 
     Rules (spec 15.5):
@@ -50,10 +50,10 @@ def should_send_quiet_email(run_id):
             break
 
     if consecutive < threshold:
-        return True, None
+        return True, None, consecutive
     if (consecutive + 1) % 7 == 0:  # +1 because current run is also quiet
-        return True, "weekly_digest"
-    return False, None
+        return True, "weekly_digest", consecutive
+    return False, None, consecutive
 
 
 def load_previous_report_context(run_id):
@@ -212,6 +212,9 @@ def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
             })
 
     # Improving: clusters unchanged for 7+ days
+    # TODO(14.9): When has_estimated_dates is true, this last_seen comparison
+    # may be unreliable due to relative date parsing. A future enhancement
+    # should pass the flag and fall back to scraped_at-based last_seen.
     if isinstance(logical_date, str):
         try:
             from datetime import datetime
@@ -379,12 +382,30 @@ def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None):
 
     translate_stats = models.get_translate_stats()
 
+    # Resolve last full report link from the previous completed run
+    last_full_report_path = None
+    run_id_for_lookup = snapshot.get("run_id", 0)
+    prev_run = models.get_previous_completed_run(run_id_for_lookup)
+    if prev_run:
+        # Construct expected path from run_id (v3 HTML naming convention)
+        expected = os.path.join(
+            config.REPORT_DIR,
+            f"workflow-run-{prev_run['id']}-full-report.html",
+        )
+        if Path(expected).exists():
+            last_full_report_path = expected
+            # If REPORT_HTML_PUBLIC_URL is configured, convert to a URL for the link
+            if config.REPORT_HTML_PUBLIC_URL:
+                last_full_report_path = (
+                    f"{config.REPORT_HTML_PUBLIC_URL}/{Path(expected).name}"
+                )
+
     html = template.render(
         logical_date=snapshot.get("logical_date", ""),
         snapshot=snapshot,
         previous_analytics=prev_analytics,
         translate_stats=translate_stats,
-        last_full_report_path=None,  # TODO: resolve from previous run
+        last_full_report_path=last_full_report_path,
         css_text=css_text,
         threshold=config.NEGATIVE_THRESHOLD,
         changes=changes,
@@ -516,8 +537,8 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     """Generate a quiet day report (no new reviews, no changes)."""
     run_id = snapshot.get("run_id", 0)
 
-    # Check if we should send this quiet-day email
-    should_send, digest_mode = should_send_quiet_email(run_id)
+    # Check if we should send this quiet-day email (also returns consecutive count)
+    should_send, digest_mode, consecutive = should_send_quiet_email(run_id)
 
     html_path = None
     try:
@@ -528,25 +549,6 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     email_result = {"success": False, "error": None, "recipients": []}
     if send_email and should_send:
         try:
-            # Count consecutive quiet runs for template rendering
-            conn = models.get_conn()
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT report_mode FROM workflow_runs
-                    WHERE workflow_type = 'daily' AND status = 'completed' AND id < ?
-                    ORDER BY id DESC LIMIT 30
-                    """,
-                    (run_id,),
-                ).fetchall()
-            finally:
-                conn.close()
-            consecutive = 0
-            for row in rows:
-                if row["report_mode"] == "quiet":
-                    consecutive += 1
-                else:
-                    break
             email_result = _send_mode_email(
                 "quiet", snapshot, prev_analytics,
                 consecutive_quiet=consecutive,
@@ -602,11 +604,16 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
 
     try:
         if mode == "full":
+            # Entry point for 3-mode routing. Phase 4 will update workflows.py to call this
+            # instead of generate_full_report_from_snapshot.
             # Delegate to existing function (which handles its own email)
             result = generate_full_report_from_snapshot(
                 snapshot, send_email=send_email, output_path=output_path,
             )
             result["mode"] = "full"
+            # NOTE: Full mode currently uses old email path inside generate_full_report_from_snapshot.
+            # Phase 4 will switch to _send_mode_email("full", ...) with email_full.html.j2.
+            result.setdefault("status", "completed")
             return result
         elif mode == "change":
             return _generate_change_report(snapshot, send_email, prev_analytics, context)
