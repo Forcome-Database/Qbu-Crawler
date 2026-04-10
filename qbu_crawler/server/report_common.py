@@ -269,7 +269,8 @@ def _compute_kpi_deltas(current_kpis, prev_analytics):
     prev_kpis = prev_analytics.get("kpis", {})
     deltas = {}
     for key in ("negative_review_rows", "own_negative_review_rows",
-                "ingested_review_rows", "product_count"):
+                "ingested_review_rows", "product_count",
+                "health_index", "recently_published_count"):
         curr = current_kpis.get(key, 0) or 0
         prev = prev_kpis.get(key, 0) or 0
         diff = curr - prev
@@ -839,6 +840,11 @@ def normalize_deep_report_analytics(analytics):
     # ── Compute gap analysis ──────────────────────────────────────────────
     if "gap_analysis" not in normalized.get("competitor", {}):
         normalized["competitor"]["gap_analysis"] = _competitor_gap_analysis(normalized)
+
+    gap_analysis = normalized.get("competitor", {}).get("gap_analysis", [])
+    kpis = normalized["kpis"]
+    kpis["gap_fix_count"] = sum(1 for g in gap_analysis if g.get("gap_type") == "止血")
+    kpis["gap_catch_count"] = sum(1 for g in gap_analysis if g.get("gap_type") == "追赶")
 
     # ── Compute health_index, competitive_gap_index, high_risk_count ─────
     normalized["kpis"]["health_index"] = compute_health_index(normalized)

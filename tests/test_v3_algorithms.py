@@ -268,6 +268,23 @@ class TestGapAnalysisV3:
             assert perf["priority"] == "medium"
 
 
+class TestKpiDeltasAndGapCounts:
+    def test_gap_fix_and_catch_counts(self):
+        from qbu_crawler.server.report_common import normalize_deep_report_analytics
+        analytics = {
+            "kpis": {"ingested_review_rows": 100, "own_review_rows": 50,
+                     "own_positive_review_rows": 30, "own_negative_review_rows": 10},
+            "competitor": {"gap_analysis": [
+                {"gap_type": "止血", "priority_score": 35},
+                {"gap_type": "追赶", "priority_score": 17},
+                {"gap_type": "监控", "priority_score": 2},
+            ]},
+        }
+        result = normalize_deep_report_analytics(analytics)
+        assert result["kpis"].get("gap_fix_count") == 1
+        assert result["kpis"].get("gap_catch_count") == 1
+
+
 from qbu_crawler.server.report_common import _compute_alert_level
 
 
