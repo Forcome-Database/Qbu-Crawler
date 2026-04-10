@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!--[if mso]><style>table{border-collapse:collapse;}td{font-family:Arial,sans-serif;}</style><![endif]-->
+</head>
+<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Microsoft YaHei',Arial,sans-serif;">
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;">
+<tr><td align="center" style="padding:20px 10px;">
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fffaf3;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+  <!-- ===== 1. HEADER BAR ===== -->
+  <tr>
+    <td style="background:#93543f;padding:16px 24px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Daily Product Intelligence</td>
+          <td style="color:rgba(255,255,255,0.7);font-size:12px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ===== 2. QUIET STATUS LINE ===== -->
+  <tr>
+    <td style="background:#dce9e3;padding:10px 24px;text-align:center;">
+      <span style="color:#345f57;font-size:13px;font-weight:600;">
+        &#10003;&nbsp;&nbsp;今日无新评论
+        {% if consecutive_quiet_days and consecutive_quiet_days > 1 %}
+        &nbsp;·&nbsp; 已连续静默 {{ consecutive_quiet_days }} 天
+        {% endif %}
+        &nbsp;·&nbsp; 采集于 {{ (snapshot.snapshot_at or "")[:16] }}
+      </span>
+    </td>
+  </tr>
+
+  <!-- ===== 3. KPI SNAPSHOT (4 cards) ===== -->
+  {% set _kpis = (previous_analytics or {}).get("kpis", {}) %}
+  <tr>
+    <td style="padding:20px 24px 8px;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">健康快照（上期数据）</div>
+
+      <!-- Row 1: 2 cards -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="49%" style="padding:14px 12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:8px;">健康指数</div>
+            <div style="font-size:32px;font-weight:900;color:#93543f;line-height:1;">{{ _kpis.get("health_index", "—") }}</div>
+            <div style="font-size:10px;color:#766d62;margin-top:4px;">/ 100</div>
+          </td>
+          <td width="2%"></td>
+          <td width="49%" style="padding:14px 12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:8px;">差评率</div>
+            <div style="font-size:32px;font-weight:900;color:#201b16;line-height:1;">{{ _kpis.get("own_negative_review_rate_display", "—") }}</div>
+            <div style="font-size:10px;color:#766d62;margin-top:4px;">自有产品</div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Spacer -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:8px;"></td></tr></table>
+
+      <!-- Row 2: 2 cards -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="49%" style="padding:14px 12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:8px;">评论样本量</div>
+            <div style="font-size:32px;font-weight:900;color:#201b16;line-height:1;">{{ _kpis.get("own_review_rows", 0) }}</div>
+            <div style="font-size:10px;color:#766d62;margin-top:4px;">累计条数</div>
+          </td>
+          <td width="2%"></td>
+          <td width="49%" style="padding:14px 12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#766d62;margin-bottom:8px;">高风险产品</div>
+            <div style="font-size:32px;font-weight:900;color:{% if _kpis.get('high_risk_count', 0) > 0 %}#93543f{% else %}#345f57{% endif %};line-height:1;">{{ _kpis.get("high_risk_count", 0) }}</div>
+            <div style="font-size:10px;color:#766d62;margin-top:4px;">自有 {{ _kpis.get("own_product_count", 0) }} / 竞品 {{ _kpis.get("competitor_product_count", 0) }}</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ===== 4. OUTSTANDING ISSUES LIST ===== -->
+  {% set _clusters = ((previous_analytics or {}).get("self", {}) or {}).get("top_negative_clusters", []) %}
+  {% set _active = [] %}
+  {% for c in _clusters %}
+    {% if c.get("severity") in ("critical", "high", "medium") %}
+      {% set _ = _active.append(c) %}
+    {% endif %}
+  {% endfor %}
+  {% if _active %}
+  <tr>
+    <td style="padding:8px 24px 16px;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">未解决问题</div>
+      {% for c in _active[:5] %}
+      {% set sev = c.get("severity", "medium") %}
+      {% if sev == "critical" %}
+      {% set sev_color = "#c0392b" %}
+      {% set sev_bg = "rgba(192,57,43,0.10)" %}
+      {% elif sev == "high" %}
+      {% set sev_color = "#93543f" %}
+      {% set sev_bg = "#f2d9d0" %}
+      {% else %}
+      {% set sev_color = "#b0823a" %}
+      {% set sev_bg = "#f5ecd4" %}
+      {% endif %}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+        <tr>
+          <td style="padding:10px 12px;background:#ffffff;border:1px solid #e8dfd4;border-left:3px solid {{ sev_color }};border-radius:0 6px 6px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="font-size:12px;color:#201b16;">
+                  <span style="display:inline-block;padding:2px 8px;background:{{ sev_bg }};color:{{ sev_color }};border-radius:999px;font-size:10px;font-weight:700;margin-right:6px;">{{ c.get("severity_display", sev) }}</span>
+                  <strong>{{ c.get("label_display", c.get("label_code", "")) }}</strong>
+                </td>
+                <td style="text-align:right;white-space:nowrap;font-size:11px;color:#766d62;">{{ c.get("review_count", 0) }} 条</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+      {% endfor %}
+      {% if _active | length > 5 %}
+      <p style="font-size:11px;color:#766d62;margin:6px 0 0;text-align:center;">还有 {{ (_active | length) - 5 }} 个中高风险问题，查看完整报告。</p>
+      {% endif %}
+    </td>
+  </tr>
+  {% endif %}
+
+  <!-- ===== 5. TRANSLATION PROGRESS ===== -->
+  {% if translate_stats %}
+  {% set _total = translate_stats.get("total", 0) %}
+  {% set _done = translate_stats.get("done", 0) %}
+  {% set _pending = translate_stats.get("pending", 0) %}
+  {% set _failed = translate_stats.get("failed", 0) %}
+  {% set _pct = ((_done / (_total or 1)) * 100) | round(0) | int %}
+  <tr>
+    <td style="padding:8px 24px 16px;background:#f0ebe2;border-top:1px solid #e8dfd4;">
+      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">翻译进度</div>
+      <!-- Progress bar via table -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+        <tr>
+          <td style="background:#e8dfd4;border-radius:999px;height:8px;overflow:hidden;">
+            <table role="presentation" height="8" cellpadding="0" cellspacing="0" style="height:8px;">
+              <tr>
+                <td width="{{ [_pct, 100] | min }}%" style="background:#93543f;height:8px;border-radius:999px;font-size:0;line-height:0;">&nbsp;</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:0;font-size:12px;color:#766d62;line-height:1.6;">
+        已翻译 <strong style="color:#201b16;">{{ _done }}</strong> / <strong style="color:#201b16;">{{ _total }}</strong> 条
+        （{{ _pct }}%）
+        {% if _pending > 0 %}&nbsp;·&nbsp; 待处理 <strong>{{ _pending }}</strong>{% endif %}
+        {% if _failed > 0 %}&nbsp;·&nbsp; <span style="color:#93543f;">失败 {{ _failed }}</span>{% endif %}
+      </p>
+    </td>
+  </tr>
+  {% endif %}
+
+  <!-- ===== 6. FOOTER ===== -->
+  <tr>
+    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e8dfd4;">
+      <p style="margin:0;font-size:10px;color:#a89e94;line-height:1.6;">
+        产品评论智能监控系统 &nbsp;·&nbsp; 差评定义：≤{{ threshold or 2 }}星 &nbsp;·&nbsp; 内部资料<br>
+        此邮件由自动化系统生成，请勿直接回复。
+      </p>
+    </td>
+  </tr>
+
+</table>
+
+</td></tr>
+</table>
+
+</body>
+</html>
