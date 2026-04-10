@@ -341,25 +341,34 @@ def test_hero_headline_no_risk():
 
 
 def test_alert_level_red():
+    # V3: red triggered by health below HEALTH_RED threshold with own reviews present
     normalized = {
-        "self": {"top_negative_clusters": [{"severity": "high", "review_count": 10}]},
-        "kpis": {"negative_review_rows_delta": 0},
+        "mode": "incremental",
+        "self": {"top_negative_clusters": [{"severity": "high", "review_count": 10, "is_new_or_escalated": True}]},
+        "kpis": {"own_review_rows": 100, "health_index": 40.0, "own_negative_review_rows_delta": 0},
     }
     level, _ = _compute_alert_level(normalized)
     assert level == "red"
 
 
 def test_alert_level_yellow():
+    # V3: yellow triggered by positive neg_delta with health above red threshold
     normalized = {
-        "self": {"top_negative_clusters": [{"severity": "medium", "review_count": 3}]},
-        "kpis": {"own_negative_review_rows_delta": 5},
+        "mode": "incremental",
+        "self": {"top_negative_clusters": []},
+        "kpis": {"own_review_rows": 100, "health_index": 70.0, "own_negative_review_rows_delta": 5},
     }
     level, _ = _compute_alert_level(normalized)
     assert level == "yellow"
 
 
 def test_alert_level_green():
-    normalized = {"self": {"top_negative_clusters": []}, "kpis": {"negative_review_rows_delta": 0}}
+    # V3: green when own reviews present, healthy index, no neg delta
+    normalized = {
+        "mode": "incremental",
+        "self": {"top_negative_clusters": []},
+        "kpis": {"own_review_rows": 50, "health_index": 80.0, "own_negative_review_rows_delta": 0},
+    }
     level, _ = _compute_alert_level(normalized)
     assert level == "green"
 
@@ -518,8 +527,9 @@ def test_alert_level_red_on_low_health(monkeypatch):
     from qbu_crawler import config as _config
     monkeypatch.setattr(_config, "HEALTH_RED", 60)
     normalized = {
+        "mode": "incremental",
         "self": {"top_negative_clusters": []},
-        "kpis": {"negative_review_rows_delta": 0, "health_index": 50},
+        "kpis": {"own_review_rows": 100, "own_negative_review_rows_delta": 0, "health_index": 50},
     }
     level, text = _compute_alert_level(normalized)
     assert level == "red"
@@ -531,8 +541,9 @@ def test_alert_level_yellow_on_moderate_health(monkeypatch):
     monkeypatch.setattr(_config, "HEALTH_YELLOW", 80)
     monkeypatch.setattr(_config, "HEALTH_RED", 60)
     normalized = {
+        "mode": "incremental",
         "self": {"top_negative_clusters": []},
-        "kpis": {"negative_review_rows_delta": 0, "health_index": 70},
+        "kpis": {"own_review_rows": 100, "own_negative_review_rows_delta": 0, "health_index": 70},
     }
     level, text = _compute_alert_level(normalized)
     assert level == "yellow"
@@ -853,26 +864,21 @@ def test_kpi_cards_value_class_high_risk_products():
 
 def test_alert_level_ignores_competitor_negative_delta():
     """Competitor negative review growth must NOT trigger own-product yellow/red alert."""
-    from qbu_crawler.server.report_common import _compute_alert_level, normalize_deep_report_analytics
+    from qbu_crawler.server.report_common import _compute_alert_level
 
-    analytics = {
+    # V3: build normalized dict directly with healthy own-product state.
+    # own_negative_review_rows_delta=0 and high health means green, even if
+    # total negative_review_rows_delta is large (competitor-driven).
+    normalized = {
+        "mode": "incremental",
+        "self": {"top_negative_clusters": []},
         "kpis": {
-            "ingested_review_rows": 50,
-            "negative_review_rows": 20,
-            "own_negative_review_rows": 2,
-            "own_review_rows": 20,
-            "competitor_review_rows": 30,
-            "own_negative_review_rate": 0.1,
-            "own_avg_rating": 4.5,
-            "translated_count": 50,
+            "own_review_rows": 100,
+            "health_index": 80.0,
+            "own_negative_review_rows_delta": 0,
+            "negative_review_rows_delta": 10,  # competitor driven — should be ignored
         },
-        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
-        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
     }
-    normalized = normalize_deep_report_analytics(analytics)
-    # Simulate previous run had 10 total negatives (mostly competitor)
-    normalized["kpis"]["negative_review_rows_delta"] = 10
-    normalized["kpis"]["own_negative_review_rows_delta"] = 0
 
     level, _ = _compute_alert_level(normalized)
     assert level == "green", f"Expected green but got {level} — competitor delta is inflating alert"
@@ -1234,15 +1240,13 @@ def test_risk_score_tooltip_mentions_threshold():
 
 
 def test_alert_level_green_for_baseline():
-    """Baseline mode should always return green regardless of data severity."""
+    """Baseline mode with healthy product should return green and mention 基线."""
     from qbu_crawler.server.report_common import _compute_alert_level
 
     normalized = {
         "mode": "baseline",
-        "kpis": {"own_negative_review_rows_delta": 50, "health_index": 30},
-        "self": {"top_negative_clusters": [
-            {"severity": "high", "review_count": 20}
-        ]},
+        "kpis": {"own_review_rows": 100, "own_negative_review_rows_delta": 0, "health_index": 80.0},
+        "self": {"top_negative_clusters": []},
     }
     level, text = _compute_alert_level(normalized)
     assert level == "green"

@@ -312,27 +312,48 @@ def _generate_hero_headline(normalized):
 
 
 def _compute_alert_level(normalized):
-    """Return ``(level, text)`` where *level* is ``"red"``/``"yellow"``/``"green"``."""
-    if normalized.get("mode") == "baseline":
-        return "green", "首次基线采集完成，环比预警将在第 4 期后启用"
-    top_neg = normalized.get("self", {}).get("top_negative_clusters") or []
-    high_sev = [c for c in top_neg if c.get("severity") == "high" and (c.get("review_count") or 0) >= 5]
-    delta = normalized.get("kpis", {}).get("own_negative_review_rows_delta", 0) or 0
-    health = normalized.get("kpis", {}).get("health_index")
+    """Compute alert level from health index, deltas, and mode."""
+    mode = normalized.get("mode", "baseline")
+    kpis = normalized.get("kpis", {})
+    health = kpis.get("health_index", 100)
+    own_reviews = kpis.get("own_review_rows", 0)
 
-    # Red conditions
-    if high_sev or delta >= 10:
-        return "red", "存在高严重度问题簇，建议今日跟进"
-    if health is not None and health < config.HEALTH_RED:
-        return "red", f"健康指数 {health} 低于警戒线 {config.HEALTH_RED}，建议今日跟进"
+    if own_reviews == 0:
+        return ("green", "自有评论数据不足，暂不预警")
 
-    # Yellow conditions
-    if delta > 0:
-        return "yellow", "自有产品差评数较上期有所上升，请持续关注"
-    if health is not None and health < config.HEALTH_YELLOW:
-        return "yellow", f"健康指数 {health} 偏低，请持续关注"
+    if mode == "baseline":
+        if health < config.HEALTH_RED:
+            return ("red", f"首次基线：健康指数 {health}/100，低于警戒线")
+        if health < config.HEALTH_YELLOW:
+            return ("yellow", f"首次基线：健康指数 {health}/100，需关注")
+        return ("green", "首次基线采集完成，整体状态良好")
 
-    return "green", "无新增高风险信号"
+    neg_delta = kpis.get("own_negative_review_rows_delta", 0)
+    clusters = normalized.get("self", {}).get("top_negative_clusters", [])
+    has_escalation = any(
+        c.get("severity") in ("critical", "high") and c.get("is_new_or_escalated")
+        for c in clusters
+    )
+
+    if health < config.HEALTH_RED or neg_delta >= 10 or has_escalation:
+        parts = []
+        if health < config.HEALTH_RED:
+            parts.append(f"健康指数 {health} 低于警戒线 {config.HEALTH_RED}")
+        if neg_delta >= 10:
+            parts.append(f"差评新增 {neg_delta} 条")
+        if has_escalation:
+            parts.append("存在高风险问题升级")
+        return ("red", "；".join(parts) if parts else "高风险信号")
+
+    if health < config.HEALTH_YELLOW or neg_delta > 0:
+        parts = []
+        if neg_delta > 0:
+            parts.append(f"差评新增 {neg_delta} 条")
+        if health < config.HEALTH_YELLOW:
+            parts.append(f"健康指数 {health} 偏低")
+        return ("yellow", "；".join(parts) if parts else "需关注")
+
+    return ("green", "整体健康度良好，无需紧急处理")
 
 
 def _parse_date_flexible(value: str | None, anchor_date=None):

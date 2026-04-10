@@ -266,3 +266,41 @@ class TestGapAnalysisV3:
             # comp_rate = 318/569 ≈ 55.9%, fix_urgency = 0, catch_up = 55.9%
             # priority_score = 0*0.7 + 0.559*0.3 ≈ 17 → medium
             assert perf["priority"] == "medium"
+
+
+from qbu_crawler.server.report_common import _compute_alert_level
+
+
+class TestAlertLevelV3:
+    def test_baseline_unhealthy_not_green(self):
+        normalized = {"mode": "baseline", "kpis": {"health_index": 57.4, "own_review_rows": 141}}
+        level, _ = _compute_alert_level(normalized)
+        assert level in ("yellow", "red")
+
+    def test_baseline_healthy_is_green(self):
+        normalized = {"mode": "baseline", "kpis": {"health_index": 75.0, "own_review_rows": 50}}
+        level, _ = _compute_alert_level(normalized)
+        assert level == "green"
+
+    def test_zero_own_reviews_is_green(self):
+        normalized = {"mode": "incremental", "kpis": {"health_index": 50.0, "own_review_rows": 0}}
+        level, text = _compute_alert_level(normalized)
+        assert level == "green"
+
+    def test_incremental_red_on_high_delta(self):
+        normalized = {
+            "mode": "incremental",
+            "kpis": {"health_index": 40.0, "own_review_rows": 100, "own_negative_review_rows_delta": 15},
+            "self": {"top_negative_clusters": []},
+        }
+        level, _ = _compute_alert_level(normalized)
+        assert level == "red"
+
+    def test_incremental_green_when_healthy(self):
+        normalized = {
+            "mode": "incremental",
+            "kpis": {"health_index": 70.0, "own_review_rows": 100, "own_negative_review_rows_delta": 0},
+            "self": {"top_negative_clusters": []},
+        }
+        level, _ = _compute_alert_level(normalized)
+        assert level == "green"
