@@ -76,3 +76,96 @@ class TestChartJsConfigs:
         # All configs must be JSON serializable
         for name, cfg in configs.items():
             json.dumps(cfg)  # Should not raise
+
+
+class TestV3TemplateRender:
+    def test_renders_without_error(self):
+        from jinja2 import Environment, FileSystemLoader
+        import os
+
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "qbu_crawler", "server", "report_templates"
+        )
+        env = Environment(loader=FileSystemLoader(template_dir), autoescape=False)
+        template = env.get_template("daily_report_v3.html.j2")
+
+        html = template.render(
+            logical_date="2026-04-10",
+            mode="baseline",
+            snapshot={"snapshot_at": "2026-04-10T06:00:00", "run_id": 1, "reviews": []},
+            analytics={
+                "kpis": {"health_index": 57.4, "own_review_rows": 141,
+                         "competitor_review_rows": 0, "product_count": 3,
+                         "own_product_count": 3, "competitor_product_count": 0},
+                "kpi_cards": [{"label": "健康指数", "value": "57.4", "tooltip": "test", "value_class": "", "delta_display": "", "delta_class": ""}],
+                "issue_cards": [],
+                "self": {"risk_products": []},
+                "competitor": {},
+                "report_copy": {"hero_headline": "Test headline", "executive_bullets": ["Point 1"]},
+                "mode_display": "首日全量基线版",
+                "top_actions": [],
+            },
+            charts={},
+            alert_level="yellow",
+            alert_text="测试预警",
+            report_copy={"hero_headline": "Test", "executive_bullets": ["P1"]},
+            css_text="body { color: black; }",
+            js_text="console.log('test');",
+            threshold=2,
+        )
+        assert "产品评论" in html
+        assert "57.4" in html
+        assert "_uncategorized" not in html
+        assert "tab-overview" in html
+        assert "tab-issues" in html
+        # Baseline mode: no changes tab
+        assert "tab-changes" not in html
+
+    def test_renders_with_issue_cards(self):
+        from jinja2 import Environment, FileSystemLoader
+        import os
+
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "qbu_crawler", "server", "report_templates"
+        )
+        env = Environment(loader=FileSystemLoader(template_dir), autoescape=False)
+        template = env.get_template("daily_report_v3.html.j2")
+
+        html = template.render(
+            logical_date="2026-04-10",
+            mode="incremental",
+            snapshot={"snapshot_at": "2026-04-10T06:00:00", "run_id": 2, "reviews": []},
+            analytics={
+                "kpis": {"health_index": 57.4, "own_review_rows": 141,
+                         "competitor_review_rows": 100, "product_count": 9,
+                         "own_product_count": 3, "competitor_product_count": 6},
+                "kpi_cards": [],
+                "issue_cards": [
+                    {"label_code": "quality_stability", "label_display": "质量稳定性",
+                     "feature_display": "质量稳定性", "review_count": 36,
+                     "affected_product_count": 3, "severity": "critical",
+                     "severity_display": "危急", "first_seen": "2021-04-08",
+                     "last_seen": "2026-03-13", "duration_display": "约 5 年",
+                     "recency_display": "近90天 2 条", "image_review_count": 5,
+                     "translated_rate": 1.0, "example_reviews": [],
+                     "image_evidence": [], "recommendation": None, "deep_analysis": None,
+                     "sub_features": [], "affected_products": [], "rating_breakdown": {}},
+                ],
+                "self": {"risk_products": []},
+                "competitor": {"gap_analysis": [], "benchmark_examples": []},
+                "report_copy": {"hero_headline": "Test", "executive_bullets": []},
+                "mode_display": "增量",
+                "top_actions": [],
+            },
+            charts={},
+            alert_level="green",
+            alert_text="",
+            report_copy={"hero_headline": "Test", "executive_bullets": []},
+            css_text="",
+            js_text="",
+            threshold=2,
+        )
+        assert "质量稳定性" in html
+        assert "危急" in html
+        # Incremental mode: changes tab button present
+        assert "tab-changes" in html

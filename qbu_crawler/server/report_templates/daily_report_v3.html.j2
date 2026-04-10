@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>产品评论分析报告 {{ logical_date }}</title>
+  <style>{{ css_text | safe }}</style>
+</head>
+<body>
+  <!-- Sticky KPI Bar -->
+  <header class="kpi-bar">
+    <span class="kpi-bar-title">产品评论分析</span>
+    {% for card in analytics.kpi_cards[:5] %}
+    <span class="kpi-bar-item">{{ card.label }}: <strong>{{ card.value }}</strong></span>
+    {% endfor %}
+    <button id="btn-print" class="btn-print" title="导出PDF">🖨</button>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tab-nav">
+    <button data-tab="overview" class="tab-btn active">总览</button>
+    {% if mode != "baseline" %}
+    <button data-tab="changes" class="tab-btn">今日变化</button>
+    {% endif %}
+    <button data-tab="issues" class="tab-btn">问题诊断</button>
+    <button data-tab="products" class="tab-btn">产品排行</button>
+    {% if (analytics.kpis.competitor_review_rows or 0) > 0 and (analytics.kpis.product_count or 0) > 1 %}
+    <button data-tab="competitive" class="tab-btn">竞品对标</button>
+    {% endif %}
+    <button data-tab="panorama" class="tab-btn">全景数据</button>
+  </nav>
+
+  <main class="report-main">
+    <!-- Tab 1: Overview -->
+    <section id="tab-overview" class="tab-panel tab-active">
+      <!-- Health gauge + Hero headline -->
+      <div class="hero-wrap">
+        {% if charts.health_gauge %}
+        <div class="hero-gauge">
+          <canvas data-chart-config='{{ charts.health_gauge | tojson }}'></canvas>
+          <div class="gauge-value">{{ analytics.kpis.health_index }}</div>
+        </div>
+        {% endif %}
+        <div class="hero-text">
+          <p class="section-kicker">Daily Product Intelligence</p>
+          <h1>产品评论深度分析报告</h1>
+          <p class="hero-headline">{{ (report_copy.hero_headline or analytics.kpis.health_index|string ~ '/100') }}</p>
+          <p class="hero-meta">Run #{{ snapshot.run_id }} ｜ {{ logical_date }} ｜ {{ analytics.mode_display }} ｜ 数据截至 {{ (snapshot.snapshot_at or '')[:16] }}</p>
+        </div>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid">
+        {% for card in analytics.kpi_cards %}
+        <div class="metric-card">
+          <span class="metric-label">{{ card.label }}{% if card.tooltip %} <span title="{{ card.tooltip }}">ⓘ</span>{% endif %}</span>
+          <strong class="metric-value {{ card.value_class or '' }}">{{ card.value }}</strong>
+          {% if card.delta_display %}<span class="delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>{% endif %}
+          {% if (analytics.kpis.own_review_rows or 0) < 5 %}<span class="badge-warn">样本不足</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Alert Signal -->
+      {% if alert_level and alert_text %}
+      <div class="alert-signal alert-{{ alert_level }}">{{ alert_text }}</div>
+      {% endif %}
+
+      <!-- Key Judgments + Report Scope -->
+      <div class="hero-support">
+        <article class="hero-block">
+          <h3>关键判断</h3>
+          <ul>{% for item in (report_copy.executive_bullets or [])[:3] %}<li>{{ item }}</li>{% endfor %}</ul>
+        </article>
+        <article class="hero-block">
+          <h3>报告口径</h3>
+          <p>模式：{{ analytics.mode_display }}</p>
+          <p>差评阈值：{{ threshold or 2 }} 星及以下</p>
+          <p>自有 {{ analytics.kpis.own_product_count or 0 }} 个产品，竞品 {{ analytics.kpis.competitor_product_count or 0 }} 个</p>
+          <p>自有评论 {{ analytics.kpis.own_review_rows or 0 }} 条，竞品 {{ analytics.kpis.competitor_review_rows or 0 }} 条</p>
+        </article>
+      </div>
+
+      <!-- Top Actions (from top_actions) -->
+      {% if analytics.top_actions %}
+      <div class="action-board">
+        <h2>建议行动</h2>
+        {% for action in analytics.top_actions %}
+        <div class="action-card">
+          <span class="action-rank">{{ ['\u2776','\u2777','\u2778'][loop.index0] if loop.index0 < 3 else loop.index }}</span>
+          <div class="action-body">
+            <strong>{{ action.title }}</strong>
+            <p class="action-evidence">{{ action.evidence_summary }}{% if action.affected_products %} | 涉及: {{ action.affected_products | join('、') }}{% endif %}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+
+    <!-- Tab 2: What Changed (hidden in baseline) -->
+    {% if mode != "baseline" %}
+    <section id="tab-changes" class="tab-panel">
+      <!-- This tab is populated by Phase 3b. For now, show placeholder. -->
+      <h2>今日变化</h2>
+      <div class="empty-state">变化追踪将在后续版本中启用。</div>
+    </section>
+    {% endif %}
+
+    <!-- Tab 3: Issue Diagnosis -->
+    <section id="tab-issues" class="tab-panel">
+      <h2>自有产品问题诊断</h2>
+      <p class="section-subtitle">按影响规模排序，每个问题簇附带证据引用和改良建议。</p>
+
+      {% if not analytics.issue_cards %}
+      <div class="empty-state">未发现问题，所有评论均为正面反馈。</div>
+      {% endif %}
+
+      {% for card in analytics.issue_cards %}
+      <div class="issue-card severity-{{ card.severity }}"
+           {% if loop.index > 4 %}data-default-collapsed="true"{% endif %}>
+        <div class="card-header">
+          <span class="card-number">#{{ loop.index }}</span>
+          <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
+          <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
+        </div>
+        <div class="card-body">
+          <div class="card-stats">
+            <span>评论 {{ card.review_count }} 条</span>
+            <span>涉及 {{ card.affected_product_count }} 个产品</span>
+            {% if card.recency_display %}<span>{{ card.recency_display }}</span>{% endif %}
+            {% if card.translated_rate is defined and card.translated_rate < 0.8 %}
+            <span class="badge-warn">翻译覆盖 {{ (card.translated_rate * 100) | int }}%</span>
+            {% endif %}
+          </div>
+          {% if card.first_seen and card.last_seen %}
+          <p class="card-timeline">{{ card.first_seen }} → {{ card.last_seen }}，持续 {{ card.duration_display }}</p>
+          {% endif %}
+
+          <!-- Example quotes -->
+          {% for review in (card.example_reviews or [])[:2] %}
+          <blockquote class="quote-block">
+            <p class="quote-cn">"{{ review.headline_cn or review.headline }}：{{ (review.body_cn or review.body or '')[:200] }}"</p>
+            {% if review.body and review.body != review.body_cn %}
+            <p class="quote-en">"{{ (review.body or '')[:150] }}"</p>
+            {% endif %}
+            <footer>评分 {{ review.rating }} {{ review.author }} {{ review.date_published or '' }}</footer>
+          </blockquote>
+          {% endfor %}
+
+          <!-- Image evidence -->
+          {% if card.image_evidence %}
+          <div class="evidence-strip">
+            {% for img in card.image_evidence[:4] %}
+            <img class="evidence-img" src="{{ img.url or img }}" alt="证据" data-full="{{ img.url or img }}" loading="lazy">
+            {% endfor %}
+            {% if card.image_evidence | length > 4 %}
+            <span class="evidence-more">+{{ card.image_evidence | length - 4 }} 更多</span>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          <!-- Deep analysis (from Phase 2 LLM) -->
+          {% if card.deep_analysis %}
+          <div class="recommendation-box">
+            <span class="ai-badge">AI 深度分析</span>
+            <p><strong>{{ card.deep_analysis.actionable_summary }}</strong></p>
+            {% if card.deep_analysis.failure_modes %}
+            <details>
+              <summary>失效模式 ({{ card.deep_analysis.failure_modes | length }}种)</summary>
+              {% for fm in card.deep_analysis.failure_modes %}
+              <div class="failure-mode">
+                <strong>{{ fm.mode }}</strong> — 约{{ fm.frequency }}例
+                {% if fm.example_quote %}<blockquote>"{{ fm.example_quote }}"</blockquote>{% endif %}
+              </div>
+              {% endfor %}
+            </details>
+            {% endif %}
+          </div>
+          {% elif card.recommendation %}
+          <div class="recommendation-box">
+            <span class="ai-badge">AI</span>
+            <p>{{ card.recommendation.text if card.recommendation is mapping else card.recommendation }}</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <!-- Tab 4: Product Health -->
+    <section id="tab-products" class="tab-panel">
+      <h2>自有产品健康度排名</h2>
+      <p class="section-subtitle">按风险分降序排列。</p>
+
+      {% set risk_products = analytics.self.risk_products if analytics.self is defined else [] %}
+      {% if risk_products %}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th data-sortable>产品</th>
+            <th data-sortable>SKU</th>
+            <th data-sortable>评分</th>
+            <th data-sortable>差评率</th>
+            <th data-sortable>差评数</th>
+            <th data-sortable>风险分</th>
+            <th>主要问题</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in risk_products %}
+          <tr class="severity-row severity-{{ 'high' if p.risk_score >= 50 else 'medium' if p.risk_score >= 20 else 'low' }}">
+            <td>{{ p.product_name }}</td>
+            <td>{{ p.product_sku }}</td>
+            <td>{{ p.rating_avg }}</td>
+            <td>{{ (p.negative_rate * 100) | round(0) if p.negative_rate else 'N/A' }}%</td>
+            <td>{{ p.negative_review_rows }}</td>
+            <td><strong>{{ p.risk_score }}</strong></td>
+            <td>{{ p.top_features_display }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">暂无产品风险数据。</div>
+      {% endif %}
+
+      <!-- Price-Rating Scatter -->
+      {% if charts.scatter %}
+      <div class="chart-container">
+        <h3>价格-评分象限图</h3>
+        <canvas data-chart-config='{{ charts.scatter | tojson }}'></canvas>
+      </div>
+      {% endif %}
+    </section>
+
+    <!-- Tab 5: Competitive Intelligence -->
+    {% if (analytics.kpis.competitor_review_rows or 0) > 0 %}
+    <section id="tab-competitive" class="tab-panel">
+      <h2>竞品差距分析与机会</h2>
+
+      {% set gap_analysis = analytics.competitor.gap_analysis if analytics.competitor is defined else [] %}
+      {% if gap_analysis %}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>类型</th>
+            <th data-sortable>修复紧迫度</th>
+            <th data-sortable>追赶差距</th>
+            <th data-sortable>综合优先级</th>
+            <th>竞品好评</th>
+            <th>自有差评</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in gap_analysis %}
+          <tr>
+            <td>{{ g.label_display }}</td>
+            <td><span class="badge badge-gap-{{ g.gap_type }}">{{ g.gap_type }}</span></td>
+            <td>{{ g.fix_urgency }}%</td>
+            <td>{{ g.catch_up_gap }}%</td>
+            <td><strong>{{ g.priority_score }}</strong> <span class="badge badge-{{ g.priority }}">{{ g.priority_display }}</span></td>
+            <td>{{ g.competitor_positive_count }} ({{ g.competitor_positive_rate }}%)</td>
+            <td>{{ g.own_negative_count }} ({{ g.own_negative_rate }}%)</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      <!-- AI Competitive Insight -->
+      {% if report_copy.competitive_insight %}
+      <div class="recommendation-box">
+        <span class="ai-badge">AI</span>
+        <p>{{ report_copy.competitive_insight }}</p>
+      </div>
+      {% endif %}
+
+      <!-- Charts -->
+      <div class="chart-grid">
+        {% if charts.radar %}
+        <div class="chart-container">
+          <h3>竞品对标雷达图</h3>
+          <canvas data-chart-config='{{ charts.radar | tojson }}'></canvas>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Benchmark Examples -->
+      {% set benchmarks = analytics.competitor.benchmark_examples if analytics.competitor is defined else [] %}
+      {% if benchmarks %}
+      <h3>高价值样本</h3>
+      {% for b in benchmarks[:3] %}
+      <div class="quote-block">
+        <strong>{{ b.product_name }}</strong> (SKU: {{ b.product_sku }})
+        {% if b.label_display_list %}<br>{{ b.label_display_list }}{% endif %}
+        <p>{{ b.summary_text or '' }}</p>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% if report_copy.benchmark_takeaway %}
+      <div class="recommendation-box">
+        <span class="ai-badge">AI</span>
+        <p>{{ report_copy.benchmark_takeaway }}</p>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <!-- Tab 6: Panorama -->
+    <section id="tab-panorama" class="tab-panel">
+      <h2>全景数据</h2>
+
+      <!-- Heatmap (as HTML table) -->
+      {% if charts.heatmap and charts.heatmap.y_labels | length >= 3 %}
+      <h3>特征情感热力图</h3>
+      <div class="heatmap-container">
+        <table class="heatmap-table">
+          <thead><tr><th></th>{% for x in charts.heatmap.x_labels %}<th>{{ x[:4] }}</th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for y_idx in range(charts.heatmap.y_labels | length) %}
+            <tr>
+              <th>{{ charts.heatmap.y_labels[y_idx][:20] }}</th>
+              {% for x_idx in range(charts.heatmap.x_labels | length) %}
+              {% set val = charts.heatmap.z[y_idx][x_idx] if y_idx < charts.heatmap.z | length and x_idx < charts.heatmap.z[y_idx] | length else 0 %}
+              <td class="heatmap-cell" style="background: {{ 'rgba(52,95,87,' ~ (val * 0.5) ~ ')' if val > 0 else 'rgba(147,84,63,' ~ (-val * 0.5) ~ ')' if val < 0 else 'transparent' }}">{{ val | round(2) }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <!-- Sentiment Distribution Charts -->
+      <div class="chart-grid">
+        {% if charts.sentiment_own %}
+        <div class="chart-container">
+          <h3>自有产品评分分布</h3>
+          <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
+        </div>
+        {% endif %}
+        {% if charts.sentiment_comp %}
+        <div class="chart-container">
+          <h3>竞品评分分布</h3>
+          <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Review Detail Table -->
+      {% if snapshot.reviews %}
+      <h3>评论明细</h3>
+      <div class="filter-bar">
+        <input type="text" class="filter-input" data-target="review-table" placeholder="搜索评论...">
+        <span class="filter-count"></span>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="review-table">
+          <thead>
+            <tr>
+              <th data-sortable>产品</th>
+              <th data-sortable>归属</th>
+              <th data-sortable>评分</th>
+              <th data-sortable>标题</th>
+              <th>正文</th>
+              <th>日期</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in snapshot.reviews %}
+            <tr id="review-{{ r.id }}">
+              <td>{{ r.product_name }}</td>
+              <td>{{ '自有' if r.ownership == 'own' else '竞品' }}</td>
+              <td>{{ r.rating }}</td>
+              <td>{{ r.headline_cn or r.headline }}</td>
+              <td class="review-body">{{ (r.body_cn or r.body or '')[:200] }}</td>
+              <td>{{ r.date_published_parsed or r.date_published }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if analytics.has_estimated_dates %}
+      <p class="footnote">⚠️ 部分评论日期为相对时间估算值（如"3 years ago"），时间分布仅供参考。</p>
+      {% endif %}
+      {% endif %}
+    </section>
+  </main>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox" style="display:none">
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-content">
+      <img class="lightbox-img" src="" alt="">
+      <button class="lightbox-close">&times;</button>
+    </div>
+  </div>
+
+  <!-- Chart.js CDN with offline fallback -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"
+          onerror="document.getElementById('chart-fallback-msg').style.display='block'"></script>
+  <div id="chart-fallback-msg" style="display:none" class="alert-signal alert-yellow">
+    ⚠️ 图表库加载失败（需要网络连接）。数据表格仍可正常查看。
+  </div>
+
+  <script>{{ js_text | safe }}</script>
+
+  <footer class="report-footer">
+    <p>产品评论智能监控系统 · 差评定义：≤{{ threshold or 2 }}星 · 内部资料</p>
+  </footer>
+</body>
+</html>

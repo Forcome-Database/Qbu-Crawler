@@ -1020,6 +1020,29 @@ def normalize_deep_report_analytics(analytics):
         issue_cards[-1]["recency_display"] = f"近90天 {recent} 条（{recency_pct}%）"
     normalized["self"]["issue_cards"] = issue_cards
 
+    # ── Top-level alias for V3 template convenience ─────────────────────
+    normalized["issue_cards"] = issue_cards
+
+    # ── Build top_actions from improvement_priorities (LLM) + top_negative_clusters
+    top_actions = []
+    priorities = (normalized.get("report_copy") or {}).get("improvement_priorities", [])
+    clusters_by_code = {
+        c.get("label_code"): c
+        for c in normalized.get("self", {}).get("top_negative_clusters", [])
+        if c.get("label_code")
+    }
+    for i, p in enumerate(priorities[:3]):
+        cluster = clusters_by_code.get(p.get("label_code", ""))
+        top_actions.append({
+            "rank": i + 1,
+            "title": (p.get("action") or "")[:80],
+            "evidence_summary": f"{cluster['review_count']}条投诉" if cluster else "",
+            "affected_products": (cluster.get("affected_products") or []) if cluster else [],
+            "recommendation": p.get("action", ""),
+            "linked_cluster": p.get("label_code", ""),
+        })
+    normalized["top_actions"] = top_actions
+
     if not normalized["report_copy"]["hero_headline"]:
         normalized["report_copy"]["hero_headline"] = _fallback_hero_headline(normalized)
     if not normalized["report_copy"]["executive_bullets"]:
