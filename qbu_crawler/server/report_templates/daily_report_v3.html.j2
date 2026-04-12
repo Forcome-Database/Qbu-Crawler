@@ -279,7 +279,7 @@
       {% if charts.scatter %}
       <div class="chart-container">
         <h3>价格-评分象限图</h3>
-        <canvas data-chart-config="{{ charts.scatter | tojson }}"></canvas>
+        <canvas data-chart-config='{{ charts.scatter | tojson }}'></canvas>
       </div>
       {% endif %}
     </section>
@@ -335,7 +335,7 @@
         {% if charts.radar %}
         <div class="chart-container">
           <h3>竞品对标雷达图</h3>
-          <canvas data-chart-config="{{ charts.radar | tojson }}"></canvas>
+          <canvas data-chart-config='{{ charts.radar | tojson }}'></canvas>
         </div>
         {% endif %}
       </div>
@@ -395,13 +395,13 @@
         {% if charts.sentiment_own %}
         <div class="chart-container">
           <h3>自有产品评分分布</h3>
-          <canvas data-chart-config="{{ charts.sentiment_own | tojson }}"></canvas>
+          <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
         </div>
         {% endif %}
         {% if charts.sentiment_comp %}
         <div class="chart-container">
           <h3>竞品评分分布</h3>
-          <canvas data-chart-config="{{ charts.sentiment_comp | tojson }}"></canvas>
+          <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
         </div>
         {% endif %}
       </div>
