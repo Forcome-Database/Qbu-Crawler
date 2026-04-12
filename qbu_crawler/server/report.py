@@ -695,12 +695,28 @@ def _generate_analytical_excel(
     review_headers = [
         "ID", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
         "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
-        "特征短语", "洞察", "评论时间", "图片链接",
+        "特征短语", "洞察", "评论时间", "照片",
     ]
     _write_headers(ws1, review_headers)
+    images_col = len(review_headers)  # "照片" column (1-indexed)
+
+    # Collect all image URLs for parallel pre-fetch
+    _all_img_urls = set()
+    for r in reviews:
+        _imgs = r.get("images") or []
+        if isinstance(_imgs, str):
+            try:
+                _imgs = json.loads(_imgs)
+            except Exception:
+                _imgs = []
+        if isinstance(_imgs, list):
+            for u in _imgs:
+                if isinstance(u, str) and u.startswith("http"):
+                    _all_img_urls.add(u)
+    _prefetched = _download_images_parallel(list(_all_img_urls)) if _all_img_urls else {}
 
     for r in reviews:
-        # Parse images: JSON string → newline-separated URLs (no downloading)
+        # Parse images
         images_raw = r.get("images")
         if isinstance(images_raw, str):
             try:
@@ -713,7 +729,6 @@ def _generate_analytical_excel(
             images_list = images_raw
         else:
             images_list = []
-        images_text = "\n".join(str(u) for u in images_list) if images_list else ""
 
         # Parse labels
         labels_raw = r.get("analysis_labels") or "[]"
@@ -758,10 +773,47 @@ def _generate_analytical_excel(
             features_text,
             r.get("analysis_insight_cn") or r.get("insight_cn") or "",
             r.get("date_published_parsed") or r.get("date_published") or "",
-            images_text,
+            "",  # placeholder for images column
         ])
 
+        # Embed images as thumbnails (same approach as legacy Excel)
+        row_idx = ws1.max_row
+        embedded_count = 0
+        for img_idx, url in enumerate(images_list):
+            xl_img = _prefetched.get(url) if isinstance(url, str) else None
+            if xl_img is None and isinstance(url, str) and url.startswith("http"):
+                xl_img = _download_and_resize(url)
+            if xl_img:
+                y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+                from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+                from openpyxl.drawing.xdr import XDRPositiveSize2D
+                from openpyxl.utils.units import pixels_to_EMU
+                marker = AnchorMarker(
+                    col=images_col - 1,
+                    row=row_idx - 1,
+                    colOff=0,
+                    rowOff=pixels_to_EMU(y_offset),
+                )
+                size = XDRPositiveSize2D(
+                    pixels_to_EMU(xl_img.width),
+                    pixels_to_EMU(xl_img.height),
+                )
+                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+                ws1.add_image(xl_img)
+                embedded_count += 1
+
+        if embedded_count > 0:
+            row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            ws1.row_dimensions[row_idx].height = row_height_px * 0.75
+        elif images_list:
+            # Fallback: write URLs as text
+            images_text = "\n".join(str(u) for u in images_list)
+            ws1.cell(row=row_idx, column=images_col, value=images_text)
+
     _auto_widths(ws1)
+    # Set images column width
+    from openpyxl.utils import get_column_letter
+    ws1.column_dimensions[get_column_letter(images_col)].width = _IMG_COL_WIDTH
 
     # ── Sheet 2: 产品概览 ──────────────────────────────────────────────────
     ws2 = wb.create_sheet("产品概览")
