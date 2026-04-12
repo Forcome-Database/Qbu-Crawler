@@ -5,20 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!--[if mso]><style>table{border-collapse:collapse;}td{font-family:Arial,sans-serif;}</style><![endif]-->
 </head>
-<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Microsoft YaHei',Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#f7f7f5;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;">
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f7f5;">
 <tr><td align="center" style="padding:20px 10px;">
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fffaf3;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
 
   <!-- ===== 1. HEADER BAR ===== -->
   <tr>
-    <td style="background:#93543f;padding:16px 24px;">
+    <td style="background:#4f46e5;padding:16px 24px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <td style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Daily Product Intelligence</td>
-          <td style="color:rgba(255,255,255,0.7);font-size:12px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
+          <td style="color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 网评监控</td>
+          <td style="color:rgba(255,255,255,0.6);font-size:11px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
         </tr>
       </table>
     </td>
@@ -26,41 +26,25 @@
 
   <!-- ===== 2. HEALTH INDEX HERO ===== -->
   {% set _kpis = analytics.kpis if analytics is defined else {} %}
-  {% set _alert = alert_level or (analytics.alert_level if analytics is defined else "green") %}
-  {% if _alert == "red" %}
-  {% set hero_bg = "#f2d9d0" %}
-  {% set hero_color = "#93543f" %}
-  {% elif _alert == "yellow" %}
-  {% set hero_bg = "#f5ecd4" %}
-  {% set hero_color = "#b0823a" %}
-  {% else %}
-  {% set hero_bg = "#dce9e3" %}
-  {% set hero_color = "#345f57" %}
-  {% endif %}
+  {% set _alert = alert_level or "green" %}
+  {% if _alert == "red" %}{% set hero_bg = "#fef2f2" %}{% set hero_color = "#b91c1c" %}
+  {% elif _alert == "yellow" %}{% set hero_bg = "#fefce8" %}{% set hero_color = "#a16207" %}
+  {% else %}{% set hero_bg = "#ecfdf5" %}{% set hero_color = "#047857" %}{% endif %}
   <tr>
     <td style="background:{{ hero_bg }};padding:28px 24px 20px;text-align:center;">
       <div style="font-size:10px;color:{{ hero_color }};letter-spacing:0.15em;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">产品健康指数</div>
-      <div style="font-size:56px;font-weight:900;color:{{ hero_color }};line-height:1;margin-bottom:6px;">{{ _kpis.get("health_index", "—") if _kpis else "—" }}</div>
-      <div style="font-size:13px;color:{{ hero_color }};opacity:0.7;">/ 100 &nbsp;·&nbsp; 深度日报</div>
+      <div style="font-size:52px;font-weight:900;color:{{ hero_color }};line-height:1;margin-bottom:6px;">{{ _kpis.get("health_index", "—") if _kpis else "—" }}</div>
+      <div style="font-size:12px;color:{{ hero_color }};opacity:0.6;">/ 100 · 深度日报</div>
     </td>
   </tr>
 
   <!-- ===== 3. ALERT BANNER ===== -->
-  {% set _alert_text = alert_text or (analytics.alert_text if analytics is defined else "") %}
+  {% set _alert_text = alert_text or "" %}
   {% if _alert_text %}
-  {% if _alert == "red" %}
-  {% set alert_bg = "#93543f" %}
-  {% set alert_icon = "&#9888;" %}
-  {% elif _alert == "yellow" %}
-  {% set alert_bg = "#b0823a" %}
-  {% set alert_icon = "&#9679;" %}
-  {% else %}
-  {% set alert_bg = "#345f57" %}
-  {% set alert_icon = "&#10003;" %}
-  {% endif %}
+  {% if _alert == "red" %}{% set abg = "#b91c1c" %}{% elif _alert == "yellow" %}{% set abg = "#a16207" %}{% else %}{% set abg = "#047857" %}{% endif %}
   <tr>
-    <td style="background:{{ alert_bg }};padding:10px 24px;text-align:center;">
-      <span style="color:#ffffff;font-size:13px;font-weight:600;">{{ alert_icon }}&nbsp;&nbsp;{{ _alert_text }}</span>
+    <td style="background:{{ abg }};padding:10px 24px;text-align:center;">
+      <span style="color:#ffffff;font-size:12px;font-weight:600;">{{ _alert_text }}</span>
     </td>
   </tr>
   {% endif %}
@@ -68,179 +52,111 @@
   <!-- ===== 4. KPI CARDS ===== -->
   <tr>
     <td style="padding:20px 24px 8px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">关键指标</div>
-
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">关键指标</div>
       <!-- Row 1: 3 cards -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有评论</div>
-            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ _kpis.get("own_review_rows", 0) if _kpis else 0 }}</div>
-            {% set _delta_r = _kpis.get("ingested_review_rows_delta_display", "") if _kpis else "" %}
-            {% if _delta_r %}<div style="font-size:11px;color:#766d62;margin-top:4px;">{{ _delta_r }}</div>{% endif %}
+          <td width="32%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">自有评论</div>
+            <div style="font-size:24px;font-weight:800;color:#1a1a2e;line-height:1;">{{ _kpis.get("own_review_rows", 0) if _kpis else 0 }}</div>
+            {% set _d1 = _kpis.get("ingested_review_rows_delta_display", "") if _kpis else "" %}
+            {% if _d1 %}<div style="font-size:10px;color:#8e8ea0;margin-top:4px;">{{ _d1 }}</div>{% endif %}
           </td>
           <td width="2%"></td>
-          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评</div>
-            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ _kpis.get("own_negative_review_rows", _kpis.get("negative_review_rows", 0)) if _kpis else 0 }}</div>
-            {% set _delta_n = _kpis.get("negative_review_rows_delta_display", "") if _kpis else "" %}
-            {% if _delta_n %}<div style="font-size:11px;color:#766d62;margin-top:4px;">{{ _delta_n }}</div>{% endif %}
+          <td width="32%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">自有差评</div>
+            <div style="font-size:24px;font-weight:800;color:#b91c1c;line-height:1;">{{ _kpis.get("own_negative_review_rows", 0) if _kpis else 0 }}</div>
+            {% set _d2 = _kpis.get("negative_review_rows_delta_display", "") if _kpis else "" %}
+            {% if _d2 %}<div style="font-size:10px;color:#8e8ea0;margin-top:4px;">{{ _d2 }}</div>{% endif %}
           </td>
           <td width="2%"></td>
-          <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评率</div>
-            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ _kpis.get("own_negative_review_rate_display", _kpis.get("negative_review_rate_display", "—")) if _kpis else "—" }}</div>
-            {% set _delta_rate = _kpis.get("negative_review_rate_delta_display", "") if _kpis else "" %}
-            {% if _delta_rate %}<div style="font-size:11px;color:#766d62;margin-top:4px;">{{ _delta_rate }}</div>{% endif %}
+          <td width="32%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">自有差评率</div>
+            <div style="font-size:24px;font-weight:800;color:#1a1a2e;line-height:1;">{{ _kpis.get("own_negative_review_rate_display", "—") if _kpis else "—" }}</div>
           </td>
         </tr>
       </table>
-
-      <!-- Spacer -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:8px;"></td></tr></table>
-
       <!-- Row 2: 2 cards -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">高风险产品</div>
-            <div style="font-size:26px;font-weight:800;color:#93543f;line-height:1;">{{ _kpis.get("high_risk_count", 0) if _kpis else 0 }}</div>
-            <div style="font-size:10px;color:#766d62;margin-top:4px;">
-              自有 {{ _kpis.get("own_product_count", 0) if _kpis else 0 }} / 竞品 {{ _kpis.get("competitor_product_count", 0) if _kpis else 0 }}
-            </div>
+          <td width="49%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">高风险产品</div>
+            <div style="font-size:24px;font-weight:800;color:#b91c1c;line-height:1;">{{ _kpis.get("high_risk_count", 0) if _kpis else 0 }}</div>
+            <div style="font-size:10px;color:#8e8ea0;margin-top:4px;">自有 {{ _kpis.get("own_product_count", 0) if _kpis else 0 }} / 竞品 {{ _kpis.get("competitor_product_count", 0) if _kpis else 0 }}</div>
           </td>
           <td width="2%"></td>
-          <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">竞品差距指数</div>
-            <div style="font-size:26px;font-weight:800;color:#345f57;line-height:1;">{{ _kpis.get("competitive_gap_index", "—") if _kpis else "—" }}</div>
-            {% set _delta_gap = _kpis.get("competitive_gap_index_delta_display", "") if _kpis else "" %}
-            {% if _delta_gap %}<div style="font-size:11px;color:#766d62;margin-top:4px;">{{ _delta_gap }}</div>{% endif %}
+          <td width="49%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+            <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">竞品差距指数</div>
+            <div style="font-size:24px;font-weight:800;color:#047857;line-height:1;">{{ _kpis.get("competitive_gap_index", "—") if _kpis else "—" }}</div>
           </td>
         </tr>
       </table>
-
     </td>
   </tr>
 
   <!-- ===== 5. TODAY'S CHANGES DIGEST ===== -->
   {% set _new_reviews = new_review_summary or {} %}
   {% set _changes = changes or {} %}
-  {% set _new_own = _new_reviews.get("own_count", 0) %}
-  {% set _new_own_neg = _new_reviews.get("own_negative", 0) %}
-  {% set _new_comp = _new_reviews.get("comp_count", 0) %}
   {% set _escalated = _changes.get("escalated", []) %}
-  {% set _improving = _changes.get("improving", []) %}
   {% set _new_issues = _changes.get("new", []) %}
-  {% if _new_own > 0 or _new_comp > 0 or _escalated or _new_issues %}
+  {% set _improving = _changes.get("improving", []) %}
+  {% if _new_reviews.get("own_count", 0) > 0 or _escalated or _new_issues %}
   <tr>
     <td style="padding:8px 24px 16px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">今日变化</div>
-
-      <!-- New reviews row -->
-      {% if _new_own > 0 or _new_comp > 0 %}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;background:#f5f0e8;border-radius:8px;">
-        <tr>
-          <td style="padding:12px 14px;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="font-size:12px;color:#766d62;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">新增评论</td>
-                <td style="text-align:right;">
-                  {% if _new_own > 0 %}
-                  <span style="display:inline-block;padding:2px 10px;background:#93543f;color:#ffffff;border-radius:999px;font-size:12px;font-weight:700;margin-left:6px;">自有 +{{ _new_own }}</span>
-                  {% endif %}
-                  {% if _new_own_neg > 0 %}
-                  <span style="display:inline-block;padding:2px 10px;background:#f2d9d0;color:#93543f;border-radius:999px;font-size:12px;font-weight:700;margin-left:6px;">差评 {{ _new_own_neg }}</span>
-                  {% endif %}
-                  {% if _new_comp > 0 %}
-                  <span style="display:inline-block;padding:2px 10px;background:#e8dfd4;color:#766d62;border-radius:999px;font-size:12px;font-weight:700;margin-left:6px;">竞品 +{{ _new_comp }}</span>
-                  {% endif %}
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">今日变化</div>
+      {% if _new_reviews.get("own_count", 0) > 0 or _new_reviews.get("comp_count", 0) > 0 %}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;background:#f7f7f5;border-radius:8px;">
+        <tr><td style="padding:12px 14px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="font-size:11px;color:#8e8ea0;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">新增评论</td>
+            <td style="text-align:right;">
+              {% if _new_reviews.get("own_count", 0) > 0 %}<span style="display:inline-block;padding:2px 10px;background:#4f46e5;color:#fff;border-radius:999px;font-size:11px;font-weight:700;">自有 +{{ _new_reviews.own_count }}</span>{% endif %}
+              {% if _new_reviews.get("own_negative", 0) > 0 %}<span style="display:inline-block;padding:2px 10px;background:#fef2f2;color:#b91c1c;border-radius:999px;font-size:11px;font-weight:700;margin-left:4px;">差评 {{ _new_reviews.own_negative }}</span>{% endif %}
+              {% if _new_reviews.get("comp_count", 0) > 0 %}<span style="display:inline-block;padding:2px 10px;background:#e5e4e0;color:#555770;border-radius:999px;font-size:11px;font-weight:700;margin-left:4px;">竞品 +{{ _new_reviews.comp_count }}</span>{% endif %}
+            </td>
+          </tr></table>
+        </td></tr>
       </table>
       {% endif %}
-
-      <!-- Escalated issues -->
-      {% if _escalated %}
-      <div style="font-size:11px;color:#93543f;font-weight:700;margin-bottom:6px;">&#9650; 问题升级（{{ _escalated | length }}个）</div>
       {% for iss in _escalated[:3] %}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:6px;">
-        <tr>
-          <td width="8" style="vertical-align:top;padding-top:5px;">
-            <div style="width:6px;height:6px;border-radius:50%;background:#93543f;"></div>
-          </td>
-          <td style="padding-left:8px;font-size:12px;color:#201b16;line-height:1.5;">
-            <strong>{{ iss.get("label_display", iss.get("label_code", "")) }}</strong>
-            <span style="color:#766d62;"> — {{ iss.get("review_count", 0) }} 条</span>
-          </td>
-        </tr>
-      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px;"><tr>
+        <td width="8" style="vertical-align:top;padding-top:5px;"><div style="width:6px;height:6px;border-radius:50%;background:#b91c1c;"></div></td>
+        <td style="padding-left:8px;font-size:12px;color:#1a1a2e;line-height:1.5;"><strong>{{ iss.get("label_display", "") }}</strong><span style="color:#8e8ea0;"> — {{ iss.get("review_count", 0) }} 条 ▲升级</span></td>
+      </tr></table>
       {% endfor %}
-      {% endif %}
-
-      <!-- New issues -->
-      {% if _new_issues %}
-      <div style="font-size:11px;color:#b0823a;font-weight:700;margin-bottom:6px;{% if _escalated %}margin-top:10px;{% endif %}">&#9733; 新发现问题（{{ _new_issues | length }}个）</div>
       {% for iss in _new_issues[:3] %}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:6px;">
-        <tr>
-          <td width="8" style="vertical-align:top;padding-top:5px;">
-            <div style="width:6px;height:6px;border-radius:50%;background:#b0823a;"></div>
-          </td>
-          <td style="padding-left:8px;font-size:12px;color:#201b16;line-height:1.5;">
-            <strong>{{ iss.get("label_display", iss.get("label_code", "")) }}</strong>
-            <span style="color:#766d62;"> — {{ iss.get("review_count", 0) }} 条</span>
-          </td>
-        </tr>
-      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px;"><tr>
+        <td width="8" style="vertical-align:top;padding-top:5px;"><div style="width:6px;height:6px;border-radius:50%;background:#a16207;"></div></td>
+        <td style="padding-left:8px;font-size:12px;color:#1a1a2e;line-height:1.5;"><strong>{{ iss.get("label_display", "") }}</strong><span style="color:#8e8ea0;"> — {{ iss.get("review_count", 0) }} 条 ★新发现</span></td>
+      </tr></table>
       {% endfor %}
-      {% endif %}
-
-      <!-- Improving -->
-      {% if _improving %}
-      <div style="font-size:11px;color:#345f57;font-weight:700;margin-bottom:6px;{% if _escalated or _new_issues %}margin-top:10px;{% endif %}">&#9660; 改善中（{{ _improving | length }}个）</div>
       {% for iss in _improving[:2] %}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:6px;">
-        <tr>
-          <td width="8" style="vertical-align:top;padding-top:5px;">
-            <div style="width:6px;height:6px;border-radius:50%;background:#345f57;"></div>
-          </td>
-          <td style="padding-left:8px;font-size:12px;color:#201b16;line-height:1.5;">
-            <strong>{{ iss.get("label_display", iss.get("label_code", "")) }}</strong>
-            <span style="color:#345f57;"> &#8595;</span>
-          </td>
-        </tr>
-      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:4px;"><tr>
+        <td width="8" style="vertical-align:top;padding-top:5px;"><div style="width:6px;height:6px;border-radius:50%;background:#047857;"></div></td>
+        <td style="padding-left:8px;font-size:12px;color:#1a1a2e;line-height:1.5;"><strong>{{ iss.get("label_display", "") }}</strong><span style="color:#047857;"> ▼改善中</span></td>
+      </tr></table>
       {% endfor %}
-      {% endif %}
-
     </td>
   </tr>
   {% endif %}
 
   <!-- ===== 6. TOP 3 ACTION ITEMS ===== -->
   {% set _bullets = [] %}
-  {% if report_copy is defined and report_copy %}
-    {% set _bullets = report_copy.get("executive_bullets", []) %}
-  {% elif analytics is defined and analytics.report_copy is defined %}
-    {% set _bullets = analytics.report_copy.get("executive_bullets", []) %}
-  {% endif %}
+  {% if report_copy is defined and report_copy %}{% set _bullets = report_copy.get("executive_bullets", []) %}
+  {% elif analytics is defined and analytics.report_copy is defined %}{% set _bullets = analytics.report_copy.get("executive_bullets", []) %}{% endif %}
   <tr>
     <td style="padding:8px 24px 16px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:14px;">需要关注</div>
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:14px;">需要关注</div>
       {% for item in _bullets[:3] %}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-        <tr>
-          <td width="28" valign="top" style="padding-top:1px;">
-            <div style="width:22px;height:22px;background:#93543f;border-radius:50%;text-align:center;line-height:22px;font-size:12px;font-weight:700;color:#ffffff;">{{ loop.index }}</div>
-          </td>
-          <td style="padding-left:10px;font-size:13px;color:#201b16;line-height:1.65;">{{ item }}</td>
-        </tr>
-      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;"><tr>
+        <td width="28" valign="top" style="padding-top:1px;">
+          <div style="width:22px;height:22px;background:#4f46e5;border-radius:50%;text-align:center;line-height:22px;font-size:11px;font-weight:700;color:#ffffff;">{{ loop.index }}</div>
+        </td>
+        <td style="padding-left:10px;font-size:12px;color:#1a1a2e;line-height:1.65;">{{ item }}</td>
+      </tr></table>
       {% else %}
-      <p style="font-size:13px;color:#766d62;margin:0;">当前暂无足够样本形成明确判断。</p>
+      <p style="font-size:12px;color:#8e8ea0;margin:0;">当前暂无足够样本形成明确判断。</p>
       {% endfor %}
     </td>
   </tr>
@@ -250,18 +166,18 @@
   {% if _risk %}
   <tr>
     <td style="padding:8px 24px 16px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">风险产品 TOP 3</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;">
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">风险产品 TOP 3</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:11px;">
         <tr>
-          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;border-radius:4px 0 0 0;">产品名称</td>
-          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;">主要问题</td>
-          <td style="padding:8px 10px;font-weight:700;background:#93543f;color:#ffffff;text-align:center;border-radius:0 4px 0 0;white-space:nowrap;">差评数</td>
+          <td style="padding:8px 10px;font-weight:700;background:#4f46e5;color:#fff;border-radius:4px 0 0 0;">产品名称</td>
+          <td style="padding:8px 10px;font-weight:700;background:#4f46e5;color:#fff;text-align:center;">主要问题</td>
+          <td style="padding:8px 10px;font-weight:700;background:#4f46e5;color:#fff;text-align:center;border-radius:0 4px 0 0;">差评数</td>
         </tr>
         {% for item in _risk[:3] %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ item.get("product_name", "") }}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ item.get("top_labels_display", "—") or "—" }}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;color:#93543f;">{{ item.get("negative_review_rows", 0) }}</td>
+        <tr style="background:{% if loop.index is odd %}#f7f7f5{% else %}#ffffff{% endif %};">
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;">{{ item.get("product_name", "") }}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;font-size:10px;">{{ item.get("top_labels_display", "—") or "—" }}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:#b91c1c;">{{ item.get("negative_review_rows", 0) }}</td>
         </tr>
         {% endfor %}
       </table>
@@ -269,38 +185,32 @@
   </tr>
   {% endif %}
 
-  <!-- ===== 8. LINK TO FULL HTML REPORT ===== -->
+  <!-- ===== 8. LINK TO FULL REPORT ===== -->
   {% if report_url %}
   <tr>
-    <td style="padding:8px 24px 16px;background:#f0ebe2;border-top:1px solid #e8dfd4;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:10px;">在线报告</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="padding:10px 14px;background:#ffffff;border:1px solid #e8dfd4;border-radius:6px;font-size:13px;color:#201b16;">
-            &#128196;&nbsp;
-            <a href="{{ report_url }}" style="color:#93543f;font-weight:700;text-decoration:none;">打开完整交互式分析报告</a>
-            <span style="color:#766d62;font-size:11px;">&nbsp;— 包含图表、问题详情与评论摘录</span>
-          </td>
-        </tr>
-      </table>
+    <td style="padding:8px 24px 16px;background:#f7f7f5;border-top:1px solid #e5e4e0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td style="padding:10px 14px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;font-size:12px;color:#1a1a2e;">
+          📄 <a href="{{ report_url }}" style="color:#4f46e5;font-weight:700;text-decoration:none;">打开完整交互式分析报告</a>
+          <span style="color:#8e8ea0;font-size:10px;"> — 包含图表、问题详情与评论摘录</span>
+        </td>
+      </tr></table>
     </td>
   </tr>
   {% endif %}
 
   <!-- ===== 9. FOOTER ===== -->
   <tr>
-    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e8dfd4;">
-      <p style="margin:0;font-size:10px;color:#a89e94;line-height:1.6;">
-        产品评论智能监控系统 &nbsp;·&nbsp; 差评定义：≤{{ threshold or 2 }}星 &nbsp;·&nbsp; 内部资料<br>
-        此邮件由自动化系统生成，请勿直接回复。
+    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e5e4e0;">
+      <p style="margin:0;font-size:10px;color:#8e8ea0;line-height:1.6;">
+        QBU 网评监控智能分析系统 · 差评定义：≤{{ threshold or 2 }}星 · 内部资料<br>
+        本报告由 AI 自动生成，数据及分析结论仅供参考 · 请勿直接回复此邮件
       </p>
     </td>
   </tr>
 
 </table>
-
 </td></tr>
 </table>
-
 </body>
 </html>

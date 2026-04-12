@@ -1,4 +1,4 @@
-{{ snapshot.logical_date }} 产品评论{{ "基线建档" if analytics.mode == "baseline" else "深度日报" }}
+{{ snapshot.logical_date }} QBU网评监控{{ "基线建档" if analytics.mode == "baseline" else "智能分析报告" }}
 
 健康指数: {{ analytics.kpis.health_index | default('N/A') }}/100
 差评数: {{ analytics.kpis.negative_review_rows }}{% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %} ({{ analytics.kpis.negative_review_rows_delta_display }}){% endif %}
@@ -10,5 +10,6 @@
 {{ loop.index }}. {{ item }}
 {% endfor %}
 
-详见附件 PDF（分析报告）和 Excel（数据明细）。
+详见附件 HTML（交互式分析报告）和 Excel（数据明细）。
 差评定义: ≤{{ threshold }}星 | 内部资料
+本报告由 AI 自动生成，数据及分析结论仅供参考。

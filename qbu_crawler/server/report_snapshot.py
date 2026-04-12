@@ -611,7 +611,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
                 snapshot, send_email=send_email, output_path=output_path,
             )
             result["mode"] = "full"
-            # TODO: switch full-mode email to email_full.html.j2 template
+            # Full-mode email now uses email_full.html.j2 via _render_full_email_html()
             result.setdefault("status", "completed")
             return result
         elif mode == "change":
@@ -635,6 +635,34 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         except Exception:
             _logger.exception("Failed to send failure notification")
         raise
+
+
+def _render_full_email_html(snapshot, analytics):
+    """Render email_full.html.j2 for the full-mode email body."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics, _compute_alert_level
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    normalized = normalize_deep_report_analytics(analytics)
+    alert = _compute_alert_level(normalized)
+    alert_level = alert[0] if isinstance(alert, (list, tuple)) else "green"
+    alert_text = alert[1] if isinstance(alert, (list, tuple)) else ""
+
+    tpl = env.get_template("email_full.html.j2")
+    return tpl.render(
+        logical_date=snapshot.get("logical_date", ""),
+        snapshot=snapshot,
+        analytics=normalized,
+        alert_level=alert_level,
+        alert_text=alert_text,
+        report_copy=normalized.get("report_copy") or analytics.get("report_copy") or {},
+        risk_products=(normalized.get("self") or {}).get("risk_products", [])[:3],
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
 
 
 def generate_full_report_from_snapshot(
@@ -722,7 +750,12 @@ def generate_full_report_from_snapshot(
     email_result = None
     if send_email:
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
-        body_html = report.render_daily_email_html(snapshot, analytics)
+        # Render email_full.html.j2 (replaces legacy daily_report_email.html.j2)
+        try:
+            body_html = _render_full_email_html(snapshot, analytics)
+        except Exception:
+            _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
+            body_html = report.render_daily_email_html(snapshot, analytics)
         try:
             email_result = report.send_email(
                 recipients=config.EMAIL_RECIPIENTS,

@@ -5,179 +5,141 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!--[if mso]><style>table{border-collapse:collapse;}td{font-family:Arial,sans-serif;}</style><![endif]-->
 </head>
-<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Microsoft YaHei',Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#f7f7f5;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;">
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f7f5;">
 <tr><td align="center" style="padding:20px 10px;">
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fffaf3;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
 
   <!-- ===== 1. HEADER BAR ===== -->
   <tr>
-    <td style="background:#93543f;padding:16px 24px;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">产品数据变动提醒</td>
-          <td style="color:rgba(255,255,255,0.7);font-size:12px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
-        </tr>
-      </table>
+    <td style="background:#4f46e5;padding:16px 24px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td style="color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 网评监控 · 数据变动</td>
+        <td style="color:rgba(255,255,255,0.6);font-size:11px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
+      </tr></table>
     </td>
   </tr>
 
   <!-- ===== 2. ALERT BANNER ===== -->
   <tr>
-    <td style="background:#b0823a;padding:10px 24px;text-align:center;">
-      <span style="color:#ffffff;font-size:13px;font-weight:600;">&#9679;&nbsp;&nbsp;检测到产品数据变动 — 采集快照于 {{ (snapshot.snapshot_at or "")[:16] }}</span>
+    <td style="background:#a16207;padding:10px 24px;text-align:center;">
+      <span style="color:#ffffff;font-size:12px;font-weight:600;">检测到产品数据变动 — 采集快照于 {{ (snapshot.snapshot_at or "")[:16] }}</span>
     </td>
   </tr>
 
-  <!-- ===== 3. KPI SNAPSHOT (from previous_analytics) ===== -->
+  <!-- ===== 3. KPI SNAPSHOT ===== -->
   {% set _kpis = (previous_analytics or {}).get("kpis", {}) %}
   <tr>
     <td style="padding:20px 24px 8px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">当前健康快照</div>
-
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td width="23%" style="padding:12px 10px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">健康指数</div>
-            <div style="font-size:22px;font-weight:800;color:#93543f;line-height:1;">{{ _kpis.get("health_index", "—") }}</div>
-            <div style="font-size:10px;color:#766d62;margin-top:2px;">/ 100</div>
-          </td>
-          <td width="2%"></td>
-          <td width="23%" style="padding:12px 10px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">差评率</div>
-            <div style="font-size:22px;font-weight:800;color:#201b16;line-height:1;">{{ _kpis.get("own_negative_review_rate_display", "—") }}</div>
-          </td>
-          <td width="2%"></td>
-          <td width="23%" style="padding:12px 10px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">评论总量</div>
-            <div style="font-size:22px;font-weight:800;color:#201b16;line-height:1;">{{ _kpis.get("own_review_rows", 0) }}</div>
-          </td>
-          <td width="2%"></td>
-          <td width="25%" style="padding:12px 10px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
-            <div style="font-size:10px;color:#766d62;margin-bottom:6px;">高风险产品</div>
-            <div style="font-size:22px;font-weight:800;color:{% if _kpis.get('high_risk_count', 0) > 0 %}#93543f{% else %}#201b16{% endif %};line-height:1;">{{ _kpis.get("high_risk_count", 0) }}</div>
-          </td>
-        </tr>
-      </table>
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">当前健康快照</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td width="23%" style="padding:10px 8px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+          <div style="font-size:9px;color:#8e8ea0;margin-bottom:4px;">健康指数</div>
+          <div style="font-size:20px;font-weight:800;color:#4f46e5;line-height:1;">{{ _kpis.get("health_index", "—") }}</div>
+        </td>
+        <td width="2%"></td>
+        <td width="23%" style="padding:10px 8px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+          <div style="font-size:9px;color:#8e8ea0;margin-bottom:4px;">差评率</div>
+          <div style="font-size:20px;font-weight:800;color:#1a1a2e;line-height:1;">{{ _kpis.get("own_negative_review_rate_display", "—") }}</div>
+        </td>
+        <td width="2%"></td>
+        <td width="23%" style="padding:10px 8px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+          <div style="font-size:9px;color:#8e8ea0;margin-bottom:4px;">评论总量</div>
+          <div style="font-size:20px;font-weight:800;color:#1a1a2e;line-height:1;">{{ _kpis.get("own_review_rows", 0) }}</div>
+        </td>
+        <td width="2%"></td>
+        <td width="25%" style="padding:10px 8px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
+          <div style="font-size:9px;color:#8e8ea0;margin-bottom:4px;">高风险产品</div>
+          <div style="font-size:20px;font-weight:800;color:{% if _kpis.get('high_risk_count', 0) > 0 %}#b91c1c{% else %}#1a1a2e{% endif %};line-height:1;">{{ _kpis.get("high_risk_count", 0) }}</div>
+        </td>
+      </tr></table>
     </td>
   </tr>
 
   <!-- ===== 4. CHANGE DETAILS ===== -->
   {% set _changes = changes or {} %}
-  {% set _price_changes = _changes.get("price_changes", []) %}
-  {% set _stock_changes = _changes.get("stock_changes", []) %}
-  {% set _rating_changes = _changes.get("rating_changes", []) %}
+  {% set _price = _changes.get("price_changes", []) %}
+  {% set _stock = _changes.get("stock_changes", []) %}
+  {% set _rating = _changes.get("rating_changes", []) %}
 
-  {% if _price_changes or _stock_changes or _rating_changes %}
+  {% if _price or _stock or _rating %}
   <tr>
     <td style="padding:16px 24px 8px;">
-      <div style="font-size:10px;color:#766d62;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:14px;">变动明细</div>
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:14px;">变动明细</div>
 
-      <!-- Price Changes -->
-      {% if _price_changes %}
-      <div style="font-size:11px;color:#b0823a;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">&#128176; 价格变动（{{ _price_changes | length }}个）</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:16px;">
+      {% if _price %}
+      <div style="font-size:10px;color:#a16207;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">💰 价格变动（{{ _price | length }}个）</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:11px;margin-bottom:14px;">
         <tr>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;border-radius:4px 0 0 0;">产品</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;">旧价格</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;border-radius:0 4px 0 0;">新价格</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;border-radius:4px 0 0 0;">产品</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;">旧价格</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;border-radius:0 4px 0 0;">新价格</td>
         </tr>
-        {% for item in _price_changes[:5] %}
-        {% set _went_up = item.get("new", 0) > item.get("old", 0) %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;font-size:11px;">{{ item.get("name", item.get("sku", "")) }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;text-decoration:line-through;">${{ item.get("old", "—") }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;color:{% if _went_up %}#93543f{% else %}#345f57{% endif %};">
-            ${{ item.get("new", "—") }}
-            {% if _went_up %} &#9650;{% else %} &#9660;{% endif %}
-          </td>
+        {% for item in _price[:5] %}
+        {% set _up = item.get("new", 0) > item.get("old", 0) %}
+        <tr style="background:{% if loop.index is odd %}#f7f7f5{% else %}#ffffff{% endif %};">
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;font-size:10px;">{{ item.get("name", item.get("sku", "")) }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;text-decoration:line-through;">${{ item.get("old", "—") }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if _up %}#b91c1c{% else %}#047857{% endif %};">${{ item.get("new", "—") }} {% if _up %}▲{% else %}▼{% endif %}</td>
         </tr>
         {% endfor %}
-        {% if _price_changes | length > 5 %}
-        <tr><td colspan="3" style="padding:6px 10px;font-size:11px;color:#766d62;text-align:center;background:#f5f0e8;">还有 {{ (_price_changes | length) - 5 }} 个变动...</td></tr>
-        {% endif %}
+        {% if _price | length > 5 %}<tr><td colspan="3" style="padding:4px 10px;font-size:10px;color:#8e8ea0;text-align:center;background:#f7f7f5;">还有 {{ (_price | length) - 5 }} 个变动...</td></tr>{% endif %}
       </table>
       {% endif %}
 
-      <!-- Stock Changes -->
-      {% if _stock_changes %}
-      <div style="font-size:11px;color:#766d62;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">&#128230; 库存变动（{{ _stock_changes | length }}个）</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:16px;">
+      {% if _stock %}
+      <div style="font-size:10px;color:#555770;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">📦 库存变动（{{ _stock | length }}个）</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:11px;margin-bottom:14px;">
         <tr>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;border-radius:4px 0 0 0;">产品</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;">旧状态</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;border-radius:0 4px 0 0;">新状态</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;border-radius:4px 0 0 0;">产品</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;">旧状态</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;border-radius:0 4px 0 0;">新状态</td>
         </tr>
-        {% for item in _stock_changes[:5] %}
-        {% set _back_in = item.get("new") == "in_stock" and item.get("old") != "in_stock" %}
-        {% set _out_now = item.get("new") != "in_stock" and item.get("old") == "in_stock" %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;font-size:11px;">{{ item.get("name", item.get("sku", "")) }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ "有货" if item.get("old") == "in_stock" else "缺货" }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;color:{% if _back_in %}#345f57{% elif _out_now %}#93543f{% else %}#201b16{% endif %};">
-            {{ "有货" if item.get("new") == "in_stock" else "缺货" }}
-            {% if _back_in %} &#9650;{% elif _out_now %} &#9660;{% endif %}
-          </td>
+        {% for item in _stock[:5] %}
+        <tr style="background:{% if loop.index is odd %}#f7f7f5{% else %}#ffffff{% endif %};">
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;font-size:10px;">{{ item.get("name", item.get("sku", "")) }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;">{{ "有货" if item.get("old") == "in_stock" else "缺货" }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if item.get('new') == 'in_stock' %}#047857{% else %}#b91c1c{% endif %};">{{ "有货" if item.get("new") == "in_stock" else "缺货" }}</td>
         </tr>
         {% endfor %}
-        {% if _stock_changes | length > 5 %}
-        <tr><td colspan="3" style="padding:6px 10px;font-size:11px;color:#766d62;text-align:center;background:#f5f0e8;">还有 {{ (_stock_changes | length) - 5 }} 个变动...</td></tr>
-        {% endif %}
       </table>
       {% endif %}
 
-      <!-- Rating Changes -->
-      {% if _rating_changes %}
-      <div style="font-size:11px;color:#b0823a;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">&#11088; 评分变动（{{ _rating_changes | length }}个）</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-bottom:8px;">
+      {% if _rating %}
+      <div style="font-size:10px;color:#a16207;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">⭐ 评分变动（{{ _rating | length }}个）</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:11px;margin-bottom:8px;">
         <tr>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;border-radius:4px 0 0 0;">产品</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;">旧评分</td>
-          <td style="padding:7px 10px;font-weight:700;background:#f1e6d7;color:#766d62;text-align:center;border-radius:0 4px 0 0;">新评分</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;border-radius:4px 0 0 0;">产品</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;">旧评分</td>
+          <td style="padding:6px 10px;font-weight:700;background:#f0efed;color:#555770;text-align:center;border-radius:0 4px 0 0;">新评分</td>
         </tr>
-        {% for item in _rating_changes[:5] %}
-        {% set _improved = (item.get("new") or 0) > (item.get("old") or 0) %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;font-size:11px;">{{ item.get("name", item.get("sku", "")) }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ item.get("old", "—") }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;color:{% if _improved %}#345f57{% else %}#93543f{% endif %};">
-            {{ item.get("new", "—") }}
-            {% if _improved %} &#9650;{% else %} &#9660;{% endif %}
-          </td>
+        {% for item in _rating[:5] %}
+        <tr style="background:{% if loop.index is odd %}#f7f7f5{% else %}#ffffff{% endif %};">
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;font-size:10px;">{{ item.get("name", item.get("sku", "")) }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;">{{ item.get("old", "—") }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if (item.get('new') or 0) > (item.get('old') or 0) %}#047857{% else %}#b91c1c{% endif %};">{{ item.get("new", "—") }}</td>
         </tr>
         {% endfor %}
-        {% if _rating_changes | length > 5 %}
-        <tr><td colspan="3" style="padding:6px 10px;font-size:11px;color:#766d62;text-align:center;background:#f5f0e8;">还有 {{ (_rating_changes | length) - 5 }} 个变动...</td></tr>
-        {% endif %}
       </table>
       {% endif %}
-
-    </td>
-  </tr>
-  {% else %}
-  <tr>
-    <td style="padding:16px 24px;text-align:center;">
-      <p style="font-size:13px;color:#766d62;margin:0;">未检测到具体字段变动详情，请查看完整报告。</p>
     </td>
   </tr>
   {% endif %}
 
   <!-- ===== 5. FOOTER ===== -->
   <tr>
-    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e8dfd4;">
-      <p style="margin:0;font-size:10px;color:#a89e94;line-height:1.6;">
-        产品评论智能监控系统 &nbsp;·&nbsp; 差评定义：≤{{ threshold or 2 }}星 &nbsp;·&nbsp; 内部资料<br>
-        此邮件由自动化系统生成，请勿直接回复。
+    <td style="padding:12px 24px;text-align:center;border-top:1px solid #e5e4e0;">
+      <p style="margin:0;font-size:10px;color:#8e8ea0;line-height:1.6;">
+        QBU 网评监控智能分析系统 · 差评定义：≤{{ threshold or 2 }}星 · 内部资料<br>
+        本报告由 AI 自动生成，数据及分析结论仅供参考 · 请勿直接回复此邮件
       </p>
     </td>
   </tr>
 
 </table>
-
 </td></tr>
 </table>
-
 </body>
 </html>

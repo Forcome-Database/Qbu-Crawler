@@ -3,210 +3,362 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>产品监控简报 {{ logical_date }}</title>
+  <title>QBU 产品监控简报 {{ logical_date }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&family=DM+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
   <style>{{ css_text | safe }}</style>
+  <style>
+    /* ── Briefing-specific overrides ── */
+    .briefing-shell { max-width: 780px; margin: 0 auto; padding: var(--sp-xl); }
+    .briefing-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-xl);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
+    .briefing-header {
+      background: var(--accent);
+      padding: var(--sp-lg) var(--sp-xl);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .briefing-header-brand {
+      color: var(--text-inverse);
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: var(--font-body);
+    }
+    .briefing-header-date {
+      color: rgba(255,255,255,0.55);
+      font-size: var(--fs-xs);
+      font-family: var(--font-mono);
+    }
+    .briefing-body { padding: var(--sp-2xl); }
+
+    .briefing-section {
+      margin-bottom: var(--sp-2xl);
+    }
+    .briefing-section:last-child { margin-bottom: 0; }
+
+    .briefing-section-label {
+      font-size: var(--fs-2xs);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: var(--sp-md);
+    }
+    .briefing-section-title {
+      font-family: var(--font-display);
+      font-size: var(--fs-lg);
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: var(--sp-lg);
+    }
+
+    .briefing-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: var(--sp-md);
+    }
+
+    /* Change table overrides — tighter for briefing */
+    .briefing-table { margin-bottom: var(--sp-lg); }
+    .briefing-table .data-table th { font-size: var(--fs-2xs); padding: var(--sp-sm) var(--sp-md); }
+    .briefing-table .data-table td { font-size: var(--fs-sm); padding: var(--sp-sm) var(--sp-md); }
+    .briefing-table-label {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: var(--sp-lg) 0 var(--sp-sm);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+    }
+    .briefing-table-label.price { color: var(--medium); }
+    .briefing-table-label.stock { color: var(--text-secondary); }
+    .briefing-table-label.rating { color: var(--medium); }
+
+    /* Progress bar */
+    .progress-track {
+      background: var(--border-subtle);
+      border-radius: 999px;
+      height: 6px;
+      overflow: hidden;
+      margin: var(--sp-md) 0 var(--sp-sm);
+    }
+    .progress-fill {
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent);
+      transition: width 0.4s;
+    }
+
+    /* Report link card */
+    .report-link {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+      padding: var(--sp-lg);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-muted);
+      border-radius: var(--r-md);
+      transition: box-shadow var(--dur-fast);
+    }
+    .report-link:hover { box-shadow: var(--shadow-sm); }
+    .report-link-icon { font-size: var(--fs-lg); flex-shrink: 0; }
+    .report-link a { color: var(--accent); font-weight: 600; font-size: var(--fs-sm); text-decoration: none; }
+    .report-link a:hover { text-decoration: underline; }
+    .report-link-hint { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 2px; }
+
+    /* Issue row for briefing */
+    .briefing-issue {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+      padding: var(--sp-md) var(--sp-lg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      margin-bottom: var(--sp-sm);
+    }
+    .briefing-issue-bar {
+      width: 3px;
+      align-self: stretch;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .briefing-issue-bar.critical { background: var(--critical); }
+    .briefing-issue-bar.high { background: var(--high); }
+    .briefing-issue-bar.medium { background: var(--medium); }
+    .briefing-issue-name { flex: 1; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+    .briefing-issue-count { font-size: var(--fs-xs); color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
+
+    .briefing-footer {
+      max-width: 780px;
+      margin: var(--sp-xl) auto;
+      padding: var(--sp-lg) 0 0;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--sp-sm);
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+    }
+    .briefing-footer-ai { opacity: 0.6; }
+
+    @media (max-width: 480px) {
+      .briefing-body { padding: var(--sp-lg); }
+      .briefing-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
 </head>
 <body>
-  <div class="report-main">
+  <div class="briefing-shell">
 
-    <!-- ===== HEADER ===== -->
-    <div style="background:#93543f;padding:16px 24px;border-radius:12px 12px 0 0;margin-bottom:0;">
-      <table style="width:100%;border-collapse:collapse;">
-        <tr>
-          <td style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Daily Product Intelligence</td>
-          <td style="color:rgba(255,255,255,0.7);font-size:12px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
-        </tr>
-      </table>
-    </div>
+    <!-- ── Card Container ── -->
+    <div class="briefing-card">
 
-    <!-- ===== QUIET STATUS BANNER ===== -->
-    <div class="alert-signal alert-green" style="border-radius:0;margin-bottom:0;">
-      &#10003;&nbsp;&nbsp;今日无新评论 — 简报模式 &nbsp;·&nbsp; 上次采集：{{ (snapshot.snapshot_at or "")[:16] }}
-    </div>
-
-    <div style="background:#fffaf3;border:1px solid #d9ccb9;border-top:none;border-radius:0 0 12px 12px;padding:24px;margin-bottom:24px;">
-
-      <!-- ===== KPI SNAPSHOT (from previous analytics) ===== -->
-      {% set kpis = (previous_analytics or {}).get("kpis", {}) %}
-      <div class="section-kicker" style="margin-top:0;">当前健康快照（上期数据）</div>
-      <h2 style="font-size:20px;letter-spacing:-0.02em;margin-bottom:14px;">产品整体状况</h2>
-
-      <div class="kpi-grid" style="padding:0 0 16px;">
-        <!-- Health Index -->
-        <div class="metric-card">
-          <div class="metric-label">健康指数</div>
-          <strong class="metric-value" style="color:#93543f;">{{ kpis.get("health_index", "N/A") }}</strong>
-          <span class="metric-delta delta-flat">/ 100</span>
-        </div>
-        <!-- Negative Rate -->
-        <div class="metric-card">
-          <div class="metric-label">差评率</div>
-          <strong class="metric-value">{{ kpis.get("own_negative_review_rate_display", "N/A") }}</strong>
-        </div>
-        <!-- Sample Size -->
-        <div class="metric-card">
-          <div class="metric-label">评论样本量</div>
-          <strong class="metric-value">{{ kpis.get("own_review_rows", 0) }}</strong>
-        </div>
-        <!-- High Risk Count -->
-        <div class="metric-card">
-          <div class="metric-label">高风险产品</div>
-          <strong class="metric-value" style="{% if kpis.get('high_risk_count', 0) > 0 %}color:#93543f;{% endif %}">
-            {{ kpis.get("high_risk_count", 0) }}
-          </strong>
-        </div>
+      <!-- Header -->
+      <div class="briefing-header">
+        <span class="briefing-header-brand">QBU 网评监控</span>
+        <span class="briefing-header-date">{{ logical_date }}</span>
       </div>
 
-      <!-- ===== DATA CHANGES ===== -->
+      <!-- Status Banner -->
       {% if changes and changes.has_changes %}
-      <div class="section-kicker" style="margin-top:8px;">数据变化</div>
-      <h2 style="font-size:20px;letter-spacing:-0.02em;margin-bottom:14px;">本期变动明细</h2>
-
-      {% if changes.price_changes %}
-      <div class="section-kicker" style="margin-top:4px;">价格变化</div>
-      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
-        <thead><tr>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原价</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现价</th>
-        </tr></thead>
-        <tbody>
-        {% for c in changes.price_changes %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">${{ c.old }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">${{ c.new }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+      <div class="alert-banner alert-yellow" style="border-radius:0;margin:0;border-left:none;border-right:none;">
+        检测到产品数据变动 — 采集快照于 {{ (snapshot.snapshot_at or "")[:16] }}
+      </div>
+      {% else %}
+      <div class="alert-banner alert-green" style="border-radius:0;margin:0;border-left:none;border-right:none;">
+        ✓ 今日无新评论 · 上次采集 {{ (snapshot.snapshot_at or "")[:16] }}
+      </div>
       {% endif %}
 
-      {% if changes.stock_changes %}
-      <div class="section-kicker" style="margin-top:4px;">库存变化</div>
-      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
-        <thead><tr>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原状态</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现状态</th>
-        </tr></thead>
-        <tbody>
-        {% for c in changes.stock_changes %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ c.old }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">{{ c.new }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
+      <!-- Body -->
+      <div class="briefing-body">
 
-      {% if changes.rating_changes %}
-      <div class="section-kicker" style="margin-top:4px;">评分变化</div>
-      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
-        <thead><tr>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:left;font-weight:700;">产品</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">原评分</th>
-          <th style="padding:8px 10px;background:#f1e6d7;color:#766d62;text-align:center;font-weight:700;">现评分</th>
-        </tr></thead>
-        <tbody>
-        {% for c in changes.rating_changes %}
-        <tr style="background:{% if loop.index is odd %}#faf5ef{% else %}#ffffff{% endif %};">
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;color:#201b16;">{{ c.name }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;color:#766d62;">{{ c.old }}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #e8dfd4;text-align:center;font-weight:700;">{{ c.new }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
-
-      {% if changes.new_products %}
-      <div class="section-kicker" style="margin-top:4px;">新增监控产品</div>
-      <ul style="font-size:13px;color:#201b16;margin:0 0 16px;padding-left:20px;">
-        {% for p in changes.new_products %}<li>{{ p.name }} ({{ p.sku }})</li>{% endfor %}
-      </ul>
-      {% endif %}
-
-      {% if changes.removed_products %}
-      <div class="section-kicker" style="margin-top:4px;">产品不可用</div>
-      <ul style="font-size:13px;color:#93543f;margin:0 0 16px;padding-left:20px;">
-        {% for p in changes.removed_products %}<li>{{ p.name }} ({{ p.sku }})</li>{% endfor %}
-      </ul>
-      {% endif %}
-
-      {% endif %}
-
-      <!-- ===== OUTSTANDING ISSUES ===== -->
-      {% set clusters = ((previous_analytics or {}).get("self", {}) or {}).get("top_negative_clusters", []) %}
-      {% set active_clusters = clusters | selectattr("severity", "in", ["critical", "high", "medium"]) | list %}
-      {% if active_clusters %}
-      <div class="section-kicker" style="margin-top:8px;">未解决问题（上期遗留）</div>
-      <h2 style="font-size:20px;letter-spacing:-0.02em;margin-bottom:14px;">需持续关注</h2>
-
-      {% for c in active_clusters %}
-      {% set sev = c.get("severity", "low") %}
-      <div class="issue-card severity-{{ sev }}" style="margin-bottom:10px;">
-        <div class="card-header" style="cursor:default;padding:12px 16px;">
-          <div style="flex:1;">
-            <span class="badge badge-{{ sev }}" style="margin-right:8px;">
-              {{ c.get("severity_display", sev) }}
-            </span>
-            <strong>{{ c.get("label_display", c.get("label_code", "")) }}</strong>
-          </div>
-          <div style="font-size:13px;color:#766d62;white-space:nowrap;">
-            {{ c.get("review_count", 0) }} 条差评
+        <!-- ── KPI Snapshot ── -->
+        {% set kpis = (previous_analytics or {}).get("kpis", {}) %}
+        <div class="briefing-section">
+          <div class="briefing-section-label">当前健康快照 · 上期数据</div>
+          <div class="briefing-kpi-grid">
+            <div class="kpi-card">
+              <span class="kpi-label">健康指数</span>
+              <strong class="kpi-value" style="color:var(--accent);">{{ kpis.get("health_index", "N/A") }}</strong>
+              <span class="kpi-delta delta-flat">/ 100</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-label">差评率</span>
+              <strong class="kpi-value">{{ kpis.get("own_negative_review_rate_display", "N/A") }}</strong>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-label">评论样本量</span>
+              <strong class="kpi-value">{{ kpis.get("own_review_rows", 0) }}</strong>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-label">高风险产品</span>
+              <strong class="kpi-value" style="{% if kpis.get('high_risk_count', 0) > 0 %}color:var(--critical);{% endif %}">{{ kpis.get("high_risk_count", 0) }}</strong>
+            </div>
           </div>
         </div>
-      </div>
-      {% endfor %}
-      {% else %}
-      <div class="empty-state" style="padding:24px 0 8px;">暂无未解决的中高风险问题</div>
-      {% endif %}
 
-      <!-- ===== TRANSLATION PROGRESS ===== -->
-      {% if translate_stats %}
-      {% set total = translate_stats.get("total", 0) %}
-      {% set done = translate_stats.get("done", 0) %}
-      {% set pending = translate_stats.get("pending", 0) %}
-      {% set failed = translate_stats.get("failed", 0) %}
-      {% set pct = ((done / (total or 1)) * 100) | round(0) | int %}
-      <div class="section-kicker" style="margin-top:16px;">翻译进度</div>
-      <h2 style="font-size:20px;letter-spacing:-0.02em;margin-bottom:10px;">评论中文化状态</h2>
+        <!-- ── Data Changes ── -->
+        {% if changes and changes.has_changes %}
+        <div class="briefing-section">
+          <div class="briefing-section-label">数据变化</div>
+          <div class="briefing-section-title">本期变动明细</div>
 
-      <!-- Progress bar -->
-      <div style="background:#e8dfd4;border-radius:999px;height:8px;margin-bottom:10px;overflow:hidden;">
-        <div style="background:#93543f;height:8px;width:{{ [pct, 100] | min }}%;border-radius:999px;transition:width 0.4s;"></div>
-      </div>
-      <p style="font-size:13px;color:#766d62;margin:0 0 4px;">
-        已翻译 <strong style="color:#201b16;">{{ done }}</strong> /
-        <strong style="color:#201b16;">{{ total }}</strong> 条
-        （{{ pct }}%）
-        {% if pending > 0 %}&nbsp;·&nbsp; 待处理 <strong>{{ pending }}</strong> 条{% endif %}
-        {% if failed > 0 %}&nbsp;·&nbsp; <span style="color:#93543f;">失败 {{ failed }} 条</span>{% endif %}
-      </p>
-      {% endif %}
+          {% if changes.price_changes %}
+          <div class="briefing-table-label price">💰 价格变化（{{ changes.price_changes | length }}个）</div>
+          <div class="briefing-table">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>产品</th><th style="text-align:center;">原价</th><th style="text-align:center;">现价</th></tr></thead>
+                <tbody>
+                {% for c in changes.price_changes %}
+                <tr>
+                  <td>{{ c.name }}</td>
+                  <td style="text-align:center;color:var(--text-muted);text-decoration:line-through;font-family:var(--font-mono);font-size:var(--fs-xs);">${{ c.old }}</td>
+                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);font-size:var(--fs-xs);color:{% if c.new > c.old %}var(--critical){% else %}var(--positive){% endif %};">${{ c.new }} {% if c.new > c.old %}▲{% else %}▼{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% endif %}
 
-      <!-- ===== LINK TO LAST FULL REPORT ===== -->
-      {% if last_full_report_path %}
-      <div style="margin-top:20px;padding:14px 16px;background:#f5f0e8;border:1px solid #e8dfd4;border-radius:8px;">
-        &#128196;&nbsp;
-        <a href="{{ last_full_report_path }}" style="color:#93543f;font-weight:600;text-decoration:none;">
-          查看上期完整分析报告
-        </a>
-        <span style="color:#766d62;font-size:12px;">&nbsp;— 包含详细问题分析与建议</span>
-      </div>
-      {% endif %}
+          {% if changes.stock_changes %}
+          <div class="briefing-table-label stock">📦 库存变化（{{ changes.stock_changes | length }}个）</div>
+          <div class="briefing-table">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>产品</th><th style="text-align:center;">原状态</th><th style="text-align:center;">现状态</th></tr></thead>
+                <tbody>
+                {% for c in changes.stock_changes %}
+                <tr>
+                  <td>{{ c.name }}</td>
+                  <td style="text-align:center;color:var(--text-muted);">{{ "有货" if c.old == "in_stock" else "缺货" }}</td>
+                  <td style="text-align:center;font-weight:700;color:{% if c.new == 'in_stock' %}var(--positive){% else %}var(--critical){% endif %};">{{ "有货" if c.new == "in_stock" else "缺货" }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% endif %}
 
-    </div><!-- end white panel -->
+          {% if changes.rating_changes %}
+          <div class="briefing-table-label rating">⭐ 评分变化（{{ changes.rating_changes | length }}个）</div>
+          <div class="briefing-table">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead><tr><th>产品</th><th style="text-align:center;">原评分</th><th style="text-align:center;">现评分</th></tr></thead>
+                <tbody>
+                {% for c in changes.rating_changes %}
+                <tr>
+                  <td>{{ c.name }}</td>
+                  <td style="text-align:center;color:var(--text-muted);font-family:var(--font-mono);">{{ c.old }}</td>
+                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% endif %}
 
-    <!-- ===== FOOTER ===== -->
-    <footer class="report-footer">
-      <p>产品评论智能监控系统 &nbsp;·&nbsp; 差评定义：≤{{ threshold or 2 }}星 &nbsp;·&nbsp; 内部资料<br>
-      此报告由自动化系统生成，仅在数据静默日触发。</p>
-    </footer>
+          {% if changes.new_products %}
+          <div class="briefing-table-label" style="color:var(--positive);">➕ 新增监控产品</div>
+          <ul style="font-size:var(--fs-sm);color:var(--text);padding-left:20px;list-style:disc;margin-bottom:var(--sp-md);">
+            {% for p in changes.new_products %}<li>{{ p.name }} <span style="color:var(--text-muted);font-family:var(--font-mono);font-size:var(--fs-xs);">({{ p.sku }})</span></li>{% endfor %}
+          </ul>
+          {% endif %}
 
-  </div><!-- end report-main -->
+          {% if changes.removed_products %}
+          <div class="briefing-table-label" style="color:var(--critical);">➖ 产品不可用</div>
+          <ul style="font-size:var(--fs-sm);color:var(--critical);padding-left:20px;list-style:disc;margin-bottom:var(--sp-md);">
+            {% for p in changes.removed_products %}<li>{{ p.name }} <span style="font-family:var(--font-mono);font-size:var(--fs-xs);">({{ p.sku }})</span></li>{% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- ── Outstanding Issues ── -->
+        {% set clusters = ((previous_analytics or {}).get("self", {}) or {}).get("top_negative_clusters", []) %}
+        {% set active_clusters = clusters | selectattr("severity", "in", ["critical", "high", "medium"]) | list %}
+        {% if active_clusters %}
+        <div class="briefing-section">
+          <div class="briefing-section-label">未解决问题 · 上期遗留</div>
+          <div class="briefing-section-title">需持续关注</div>
+
+          {% for c in active_clusters %}
+          {% set sev = c.get("severity", "low") %}
+          <div class="briefing-issue">
+            <div class="briefing-issue-bar {{ sev }}"></div>
+            <span class="badge badge-{{ sev }}">{{ c.get("severity_display", sev) }}</span>
+            <span class="briefing-issue-name">{{ c.get("label_display", c.get("label_code", "")) }}</span>
+            <span class="briefing-issue-count">{{ c.get("review_count", 0) }} 条</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="briefing-section">
+          <div class="empty-state">暂无未解决的中高风险问题</div>
+        </div>
+        {% endif %}
+
+        <!-- ── Translation Progress ── -->
+        {% if translate_stats %}
+        {% set total = translate_stats.get("total", 0) %}
+        {% set done = translate_stats.get("done", 0) %}
+        {% set pending = translate_stats.get("pending", 0) %}
+        {% set failed = translate_stats.get("failed", 0) %}
+        {% set pct = ((done / (total or 1)) * 100) | round(0) | int %}
+        <div class="briefing-section">
+          <div class="briefing-section-label">翻译进度</div>
+          <div class="progress-track">
+            <div class="progress-fill" style="width:{{ [pct, 100] | min }}%;"></div>
+          </div>
+          <p style="font-size:var(--fs-xs);color:var(--text-muted);margin:0;">
+            已翻译 <strong style="color:var(--text);">{{ done }}</strong> / <strong style="color:var(--text);">{{ total }}</strong> 条（{{ pct }}%）
+            {% if pending > 0 %} · 待处理 <strong>{{ pending }}</strong>{% endif %}
+            {% if failed > 0 %} · <span style="color:var(--critical);">失败 {{ failed }}</span>{% endif %}
+          </p>
+        </div>
+        {% endif %}
+
+        <!-- ── Link to Full Report ── -->
+        {% if last_full_report_path %}
+        <div class="briefing-section">
+          <div class="report-link">
+            <span class="report-link-icon">📄</span>
+            <div>
+              <a href="{{ last_full_report_path }}">查看上期完整分析报告</a>
+              <div class="report-link-hint">包含详细问题分析、竞品对标与改进建议</div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+      </div><!-- briefing-body -->
+    </div><!-- briefing-card -->
+
+    <!-- Footer -->
+    <div class="briefing-footer">
+      <span>QBU 网评监控智能分析系统 · 差评定义：≤{{ threshold or 2 }}星 · 内部资料</span>
+      <span class="briefing-footer-ai">本报告由 AI 自动生成，数据及分析结论仅供参考</span>
+    </div>
+
+  </div><!-- briefing-shell -->
 </body>
 </html>
