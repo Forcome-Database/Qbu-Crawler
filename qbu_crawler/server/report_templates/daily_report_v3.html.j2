@@ -331,14 +331,14 @@
       </div>
       {% endif %}
 
-      <div class="chart-grid">
-        {% if charts.radar %}
-        <div class="chart-container">
-          <h3>竞品对标雷达图</h3>
+      {% if charts.radar %}
+      <div class="chart-container">
+        <h3>竞品对标雷达图</h3>
+        <div style="max-width:420px;margin:0 auto;">
           <canvas data-chart-config='{{ charts.radar | tojson }}'></canvas>
         </div>
-        {% endif %}
       </div>
+      {% endif %}
 
       {% set benchmarks = analytics.competitor.benchmark_examples if analytics.competitor is defined else [] %}
       {% if benchmarks %}
