@@ -1,10 +1,7 @@
 import json
 import time
-from DrissionPage import ChromiumOptions
 from qbu_crawler.scrapers.base import BaseScraper
 from qbu_crawler.config import (
-    HEADLESS, PAGE_LOAD_TIMEOUT, NO_IMAGES,
-    RETRY_TIMES, RETRY_INTERVAL,
     BV_WAIT_TIMEOUT, BV_POLL_INTERVAL,
 )
 
@@ -12,20 +9,6 @@ from qbu_crawler.config import (
 class MeatYourMakerScraper(BaseScraper):
 
     SITE_LOAD_MODE = "normal"  # BV 脚本需要 normal 模式
-
-    @staticmethod
-    def _build_options() -> ChromiumOptions:
-        """覆盖基类：使用 normal 模式，meatyourmaker 的 BV 在 eager 模式下无法初始化"""
-        options = ChromiumOptions()
-        options.auto_port()  # 每个实例使用独立端口，防止并行任务共享浏览器
-        if HEADLESS:
-            options.headless()
-        if NO_IMAGES:
-            options.no_imgs(True)
-        options.set_load_mode("normal")
-        options.set_retry(times=RETRY_TIMES, interval=RETRY_INTERVAL)
-        options.set_timeouts(base=10, page_load=PAGE_LOAD_TIMEOUT)
-        return options
 
     def scrape(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_restart_browser()
