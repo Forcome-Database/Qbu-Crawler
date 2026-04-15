@@ -587,6 +587,24 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
+        (
+            "workflow_report_skipped",
+            {
+                "logical_date": "2026-04-14",
+                "run_id": 9,
+                "products_count": 41,
+                "reviews_count": 0,
+                "reason": "no_new_reviews",
+            },
+            (
+                "## ✅ 每日任务已完成\n\n"
+                "- **日期**：2026-04-14\n"
+                "- **workflow**：9\n"
+                "- **产品数**：41\n"
+                "- **新增评论数**：0\n"
+                "- **说明**：新增评论为 0，已跳过 Excel 生成和邮件发送"
+            ),
+        ),
     ],
 )
 def test_bridge_workflow_templates_use_icon_markdown_style(

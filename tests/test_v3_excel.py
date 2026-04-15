@@ -85,9 +85,9 @@ class TestExcel4Sheet:
         result = generate_excel([], reviews, analytics=analytics, output_path=path)
         wb = openpyxl.load_workbook(result)
         ws = wb["评论明细"]
-        # Find the image URL column (last column = 图片链接)
+        # Find the image URL column (last column = 照片)
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-        img_col = headers.index("图片链接") + 1
+        img_col = headers.index("照片") + 1
         cell_val = ws.cell(row=2, column=img_col).value or ""
         assert "https://a.com/1.jpg" in cell_val
         assert "https://b.com/2.jpg" in cell_val

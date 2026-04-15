@@ -45,6 +45,7 @@
   - `fast_sent`
   - `full_pending`
   - `full_sent`
+  - `skipped_no_reviews`
 - notification `status`
   - `pending`
   - `claimed`

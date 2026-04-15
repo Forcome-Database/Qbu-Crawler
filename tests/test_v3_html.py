@@ -113,7 +113,7 @@ class TestV3TemplateRender:
             js_text="console.log('test');",
             threshold=2,
         )
-        assert "产品评论" in html
+        assert "QBU网评监控智能分析报告" in html
         assert "57.4" in html
         assert "_uncategorized" not in html
         assert "tab-overview" in html

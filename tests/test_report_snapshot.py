@@ -150,7 +150,7 @@ def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
         load_report_snapshot,
     )
 
-    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+    monkeypatch.setattr(report, "_download_image_data", lambda url: None)
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
@@ -763,3 +763,40 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     assert result["excel_path"] == str(excel_path)
     assert result["pdf_path"] is None
     assert result["html_path"] == str(html_report_path)
+
+
+def test_change_and_quiet_report_return_none_email_when_send_email_false(
+    snapshot_db, monkeypatch, tmp_path,
+):
+    """When send_email=False, change/quiet reports should return email=None,
+    not {success: False} which would be misinterpreted as a send failure."""
+    from qbu_crawler.server.report_snapshot import (
+        _generate_change_report,
+        _generate_quiet_report,
+    )
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+
+    snapshot = {
+        "run_id": 99,
+        "logical_date": "2026-04-14",
+        "products_count": 41,
+        "reviews_count": 0,
+        "products": [],
+        "reviews": [],
+    }
+
+    # _generate_change_report with send_email=False
+    change_result = _generate_change_report(
+        snapshot, send_email=False, prev_analytics=None,
+        context={"changes": {"has_changes": True, "price_changes": []}},
+    )
+    assert change_result["email"] is None, (
+        "change report with send_email=False should return email=None, not {success: False}"
+    )
+
+    # _generate_quiet_report with send_email=False
+    quiet_result = _generate_quiet_report(snapshot, send_email=False, prev_analytics=None)
+    assert quiet_result["email"] is None, (
+        "quiet report with send_email=False should return email=None, not {success: False}"
+    )

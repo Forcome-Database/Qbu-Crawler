@@ -1007,12 +1007,14 @@ class TestWorkflowReconcile:
         assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
         assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
 
-    def test_reconcile_skips_email_when_workflow_tasks_have_no_new_reviews(
+    def test_reconcile_skips_report_when_zero_reviews_in_snapshot(
         self,
         workflow_db,
         monkeypatch,
         tmp_path,
     ):
+        """When snapshot reviews_count == 0, workflow should short-circuit:
+        no fast report, no full report, no email, single 'skipped' notification."""
         from qbu_crawler.server import workflows as workflows_module
         from qbu_crawler.server.workflows import WorkflowWorker
 
@@ -1023,7 +1025,7 @@ class TestWorkflowReconcile:
             finished_at="2026-03-29T08:05:00+08:00",
         )
         task = models.get_task("task-no-new-reviews")
-        task["result"] = {"products_saved": 1, "reviews_saved": 0}
+        task["result"] = {"products_saved": 41, "reviews_saved": 0}
         models.save_task(task)
 
         run = models.create_workflow_run(
@@ -1048,7 +1050,7 @@ class TestWorkflowReconcile:
 
         snapshot_path = str(tmp_path / "snapshot.json")
         Path(snapshot_path).write_text(
-            '{"run_id": 1, "logical_date": "2026-03-29", "snapshot_hash": "hash-zero", "products_count": 1, "reviews_count": 3, "translated_count": 3, "untranslated_count": 0}',
+            '{"run_id": 1, "logical_date": "2026-03-29", "snapshot_hash": "hash-zero", "products_count": 41, "reviews_count": 0, "translated_count": 0, "untranslated_count": 0}',
             encoding="utf-8",
         )
         monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
@@ -1069,9 +1071,117 @@ class TestWorkflowReconcile:
                 "run_id": run["id"],
                 "logical_date": "2026-03-29",
                 "snapshot_hash": "hash-zero",
-                "products_count": 1,
-                "reviews_count": 3,
-                "translated_count": 3,
+                "products_count": 41,
+                "reviews_count": 0,
+                "translated_count": 0,
+                "untranslated_count": 0,
+            },
+        )
+
+        # These should NOT be called — if they are, the test will fail
+        def fail_fast_report(snapshot):
+            raise AssertionError("build_fast_report should not be called for 0-review run")
+
+        def fail_generate_report(snapshot, send_email=True):
+            raise AssertionError("generate_report_from_snapshot should not be called for 0-review run")
+
+        monkeypatch.setattr(workflows_module, "build_fast_report", fail_fast_report)
+        monkeypatch.setattr(workflows_module, "generate_report_from_snapshot", fail_generate_report)
+
+        worker = WorkflowWorker(task_stale_seconds=60)
+        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+
+        refreshed = models.get_workflow_run(run["id"])
+        notifications = models.list_notifications(statuses=["pending"])
+
+        # Should NOT have fast_report or full_report notifications
+        fast_notifs = [n for n in notifications if n["kind"] == "workflow_fast_report"]
+        full_notifs = [n for n in notifications if n["kind"] == "workflow_full_report"]
+        skip_notifs = [n for n in notifications if n["kind"] == "workflow_report_skipped"]
+
+        assert len(fast_notifs) == 0, "Should not send fast report for 0-review run"
+        assert len(full_notifs) == 0, "Should not send full report for 0-review run"
+        assert len(skip_notifs) == 1, "Should send exactly one skipped notification"
+
+        assert refreshed["status"] == "completed"
+        assert refreshed["report_phase"] == "skipped_no_reviews"
+        assert refreshed["report_mode"] == "skipped"
+        assert refreshed["error"] is None
+        assert refreshed["excel_path"] is None
+
+        skipped = skip_notifs[0]
+        assert skipped["payload"]["run_id"] == run["id"]
+        assert skipped["payload"]["products_count"] == 41
+        assert skipped["payload"]["reviews_count"] == 0
+        assert skipped["payload"]["reason"] == "no_new_reviews"
+
+    def test_reconcile_continues_full_path_when_reviews_exist(
+        self,
+        workflow_db,
+        monkeypatch,
+        tmp_path,
+    ):
+        """When snapshot reviews_count > 0, workflow should continue to
+        fast report and full report as before (regression test)."""
+        from qbu_crawler.server import workflows as workflows_module
+        from qbu_crawler.server.workflows import WorkflowWorker
+
+        _save_task(
+            "task-has-reviews",
+            status="completed",
+            last_progress_at="2026-03-29T08:05:00+08:00",
+            finished_at="2026-03-29T08:05:00+08:00",
+        )
+        task = models.get_task("task-has-reviews")
+        task["result"] = {"products_saved": 5, "reviews_saved": 10}
+        models.save_task(task)
+
+        run = models.create_workflow_run(
+            {
+                "workflow_type": "daily",
+                "status": "submitted",
+                "logical_date": "2026-03-29",
+                "trigger_key": "daily:2026-03-29:has-reviews",
+                "data_since": "2026-03-29T00:00:00+08:00",
+                "data_until": "2026-03-30T00:00:00+08:00",
+                "requested_by": "systemd",
+                "service_version": "test",
+            }
+        )
+        models.attach_task_to_workflow(
+            run_id=run["id"],
+            task_id="task-has-reviews",
+            task_type="scrape",
+            site="basspro",
+            ownership="own",
+        )
+
+        snapshot_path = str(tmp_path / "snapshot.json")
+        Path(snapshot_path).write_text(
+            '{"run_id": 1, "logical_date": "2026-03-29", "snapshot_hash": "hash-has", "products_count": 5, "reviews_count": 10, "translated_count": 10, "untranslated_count": 0}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
+        monkeypatch.setattr(
+            workflows_module,
+            "freeze_report_snapshot",
+            lambda run_id, now=None: models.update_workflow_run(
+                run_id,
+                snapshot_path=snapshot_path,
+                snapshot_hash="hash-has",
+                snapshot_at=now,
+            ),
+        )
+        monkeypatch.setattr(
+            workflows_module,
+            "load_report_snapshot",
+            lambda path: {
+                "run_id": run["id"],
+                "logical_date": "2026-03-29",
+                "snapshot_hash": "hash-has",
+                "products_count": 5,
+                "reviews_count": 10,
+                "translated_count": 10,
                 "untranslated_count": 0,
             },
         )
@@ -1079,34 +1189,40 @@ class TestWorkflowReconcile:
 
         captured = {}
 
-        def fake_generate_full_report(snapshot, send_email=True):
+        def fake_generate_report(snapshot, send_email=True):
             captured["send_email"] = send_email
             return {
                 "snapshot_hash": snapshot["snapshot_hash"],
                 "excel_path": str(tmp_path / "full.xlsx"),
                 "analytics_path": str(tmp_path / "analytics.json"),
                 "pdf_path": str(tmp_path / "full.pdf"),
-                "email": None,
+                "email": {"success": True},
             }
 
         monkeypatch.setattr(
             workflows_module,
             "generate_report_from_snapshot",
-            fake_generate_full_report,
+            fake_generate_report,
         )
 
         worker = WorkflowWorker(task_stale_seconds=60)
-        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+        # Run multiple times to advance through all phases
+        while worker.process_once(now="2026-03-29T08:10:00+08:00"):
+            pass
 
         refreshed = models.get_workflow_run(run["id"])
         notifications = models.list_notifications(statuses=["pending"])
-        full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
+        fast_notifs = [n for n in notifications if n["kind"] == "workflow_fast_report"]
+        full_notifs = [n for n in notifications if n["kind"] == "workflow_full_report"]
+        skip_notifs = [n for n in notifications if n["kind"] == "workflow_report_skipped"]
 
-        assert captured["send_email"] is False
+        assert len(fast_notifs) == 1, "Should send fast report when reviews exist"
+        assert len(full_notifs) == 1, "Should send full report when reviews exist"
+        assert len(skip_notifs) == 0, "Should not send skipped notification when reviews exist"
+
         assert refreshed["status"] == "completed"
         assert refreshed["report_phase"] == "full_sent"
-        assert refreshed["error"] is None
-        assert full_report["payload"]["email_status"] == "skipped"
+        assert captured["send_email"] is True
 
     def test_reconcile_waits_for_translation_before_freezing_snapshot(self, workflow_db, monkeypatch):
         from qbu_crawler.server import workflows as workflows_module
@@ -1283,8 +1399,15 @@ class TestWorkflowReconcile:
         )
 
         worker = WorkflowWorker(task_stale_seconds=60)
-        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
 
+        # First two attempts should retry (stay in full_pending, return False to sleep)
+        for i in range(2):
+            assert worker.process_once(now="2026-03-29T08:10:00+08:00") is False
+            mid = models.get_workflow_run(run["id"])
+            assert mid["status"] == "reporting", f"attempt {i+1} should retry"
+
+        # Third attempt exhausts retries → needs_attention (state changed → True)
+        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
         refreshed = models.get_workflow_run(run["id"])
 
         assert refreshed["status"] == "needs_attention"
@@ -1345,6 +1468,7 @@ class TestWorkflowReconcile:
                 "excel_path": str(tmp_path / "full.xlsx"),
                 "pdf_path": str(tmp_path / "full.pdf"),
                 "email": {"success": False, "error": "smtp exploded", "recipients": 0},
+                "untranslated_count": 0,
             },
         )
 
@@ -1354,15 +1478,16 @@ class TestWorkflowReconcile:
         refreshed = models.get_workflow_run(run["id"])
         notifications = models.list_notifications(statuses=["pending"])
 
-        assert refreshed["status"] == "needs_attention"
+        # Email failure no longer blocks run completion — report files exist.
+        assert refreshed["status"] == "completed"
         assert refreshed["report_phase"] == "full_sent"
         assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
         assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
         assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
-        assert refreshed["error"] == "smtp exploded"
-        assert [item["kind"] for item in notifications if item["kind"].startswith("workflow_")] == [
-            "workflow_attention",
-        ]
+        assert refreshed["error"] is None
+        full_notifs = [item for item in notifications if item["kind"] == "workflow_full_report"]
+        assert len(full_notifs) == 1
+        assert full_notifs[0]["payload"]["email_status"] == "failed"
 
 
 def test_cli_daily_submit_defaults_logical_date_to_shanghai_now(monkeypatch, capsys):

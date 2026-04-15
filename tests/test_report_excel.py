@@ -188,7 +188,7 @@ def _make_test_analytics():
 @pytest.fixture(autouse=True)
 def _patch_image_download(monkeypatch):
     """Prevent actual HTTP calls for image downloads in all tests."""
-    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+    monkeypatch.setattr(report, "_download_image_data", lambda url: None)
 
 
 def test_generate_analytical_excel_has_four_sheets(tmp_path, monkeypatch):
@@ -237,7 +237,7 @@ def test_generate_excel_with_analytics_uses_analytical(tmp_path, monkeypatch):
 
 
 def test_review_detail_sheet_has_expected_columns(tmp_path, monkeypatch):
-    """评论明细 sheet should have all required columns including 图片链接."""
+    """评论明细 sheet should have all required columns including 照片."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report._generate_analytical_excel(
@@ -251,7 +251,7 @@ def test_review_detail_sheet_has_expected_columns(tmp_path, monkeypatch):
     assert "情感" in headers
     assert "特征短语" in headers
     assert "洞察" in headers
-    assert "图片链接" in headers
+    assert "照片" in headers
     # No embedded images — images appear as text URLs only
     assert len(ws._images) == 0
 
@@ -271,7 +271,7 @@ def test_review_detail_sheet_data_row(tmp_path, monkeypatch):
     sentiment_col = headers.index("情感") + 1
     product_name_col = headers.index("产品名称") + 1
     assert ws.cell(row=2, column=product_name_col).value == "Test Grinder"
-    assert ws.cell(row=2, column=sentiment_col).value == "negative"
+    assert ws.cell(row=2, column=sentiment_col).value == "负面"
 
 
 def test_product_overview_sheet_has_risk_data(tmp_path, monkeypatch):
@@ -344,8 +344,8 @@ def test_label_sheet_pivot_rows(tmp_path, monkeypatch):
     ws = wb["问题标签"]
     # Header row + 2 label rows
     assert ws.max_row == 3
-    assert ws.cell(row=2, column=3).value == "quality_stability"
-    assert ws.cell(row=3, column=3).value == "material"
+    assert ws.cell(row=2, column=3).value == "质量稳定性"
+    assert ws.cell(row=3, column=3).value == "material"  # no mapping for "material" → passthrough
 
 
 def test_trend_data_sheet_with_data(tmp_path, monkeypatch):
@@ -452,7 +452,7 @@ def test_download_images_parallel_respects_timeout(monkeypatch):
         time.sleep(0.3)
         return None  # Simulate failed download
 
-    monkeypatch.setattr("qbu_crawler.server.report._download_and_resize", slow_download)
+    monkeypatch.setattr("qbu_crawler.server.report._download_image_data", slow_download)
     urls = [f"https://img.example.com/{i}.jpg" for i in range(10)]
     start = time.time()
     results = _download_images_parallel(urls, global_timeout=3)
@@ -486,7 +486,7 @@ def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
         return {url: None for url in urls}
 
     monkeypatch.setattr(report, "_download_images_parallel", mock_parallel)
-    monkeypatch.setattr(report, "_download_and_resize", lambda url: None)
+    monkeypatch.setattr(report, "_download_image_data", lambda url: None)
 
     reviews_with_images = [
         {

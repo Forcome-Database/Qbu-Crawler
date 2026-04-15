@@ -260,10 +260,10 @@ def test_sentiment_chart_uses_rating_title():
     own_html = fragments.get("sentiment_distribution_own", "")
     comp_html = fragments.get("sentiment_distribution_competitor", "")
     # Title should contain "评分分布" not "情感分布"
-    assert "评分分布" in own_html
-    assert "情感分布" not in own_html
-    assert "评分分布" in comp_html
-    assert "情感分布" not in comp_html
+    assert "\\u8bc4\\u5206\\u5206\\u5e03" in own_html
+    assert "\\u60c5\\u611f\\u5206\\u5e03" not in own_html
+    assert "\\u8bc4\\u5206\\u5206\\u5e03" in comp_html
+    assert "\\u60c5\\u611f\\u5206\\u5e03" not in comp_html
 
 
 def test_stacked_bar_legend_uses_rating_labels():

@@ -513,7 +513,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         _logger.exception("Change report HTML generation failed")
 
     # Send email
-    email_result = {"success": False, "error": None, "recipients": []}
+    email_result = None
     if send_email:
         try:
             email_result = _send_mode_email("change", snapshot, prev_analytics, changes=changes)
@@ -546,7 +546,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     except Exception:
         _logger.exception("Quiet report HTML generation failed")
 
-    email_result = {"success": False, "error": None, "recipients": []}
+    email_result = None
     if send_email and should_send:
         try:
             email_result = _send_mode_email(

@@ -119,17 +119,41 @@ def _cell_value(v):
     return v
 
 
+# ── Excel display-name mappings (DB values → Chinese for human readers) ──────
+# These are terminal display-only; original English values remain in DB/analytics.
+_OWNERSHIP_DISPLAY = {"own": "自有", "competitor": "竞品"}
+_SENTIMENT_DISPLAY = {"positive": "正面", "negative": "负面", "mixed": "复杂", "neutral": "中性"}
+_POLARITY_DISPLAY = {"positive": "正面", "negative": "负面"}
+_SEVERITY_DISPLAY = {"critical": "危急", "high": "高", "medium": "中", "low": "低"}
+_STOCK_DISPLAY = {"in_stock": "有货", "out_of_stock": "缺货", "unknown": "未知"}
+
+from qbu_crawler.server.report_common import _LABEL_DISPLAY  # label_code → 中文
+
+
+def _xl_display(value, mapping: dict) -> str:
+    """Map a raw value to its Chinese display string for Excel output."""
+    if value is None:
+        return ""
+    return mapping.get(value, value)
+
+
 _IMG_THUMB_HEIGHT = 80   # 缩略图高度（像素）
 _IMG_THUMB_SPACING = 5   # 多张图片间距（像素）
 _IMG_COL_WIDTH = 17      # 照片列宽度（字符数，约 120px）
 _IMG_DOWNLOAD_TIMEOUT = 10  # 单张图片下载超时（秒）
+_IMG_MAX_BYTES = 5 * 1024 * 1024  # 单张图片最大 5 MB，超过跳过
+
+# Sentinel to distinguish "download failed" from "not in cache" so that
+# failed URLs are not retried on every row that references them.
+_IMG_FAILED = "FAILED"
 
 
-def _download_and_resize(url: str) -> XlImage | None:
-    """Download an image and return an openpyxl Image with thumbnail display size.
+def _download_image_data(url: str) -> tuple[bytes, int, int] | None:
+    """Download an image and return (raw_bytes, display_width, display_height).
 
-    Keeps original resolution for clarity when zoomed in;
-    only sets the display dimensions to thumbnail size in Excel.
+    Returns None on failure. The raw bytes are kept so each call site can create
+    its own openpyxl Image — a single XlImage instance must not be added to
+    multiple anchors.
     """
     try:
         for _attempt in range(2):
@@ -140,25 +164,43 @@ def _download_and_resize(url: str) -> XlImage | None:
             except requests.RequestException:
                 if _attempt == 1:
                     raise
-        buf = BytesIO(resp.content)
+        raw = resp.content
+        if not raw:
+            return None
+        if len(raw) > _IMG_MAX_BYTES:
+            logger.warning("_download_image_data: skipping oversized image (%d bytes): %s",
+                           len(raw), url[:80])
+            return None
         # Read original dimensions for aspect ratio calculation
-        img = PILImage.open(buf)
-        ratio = _IMG_THUMB_HEIGHT / img.height
-        display_width = int(img.width * ratio)
-        # Create openpyxl Image from original bytes (no pixel resize)
-        buf.seek(0)
-        xl_img = XlImage(buf)
-        # Set display size only — original resolution preserved
-        xl_img.width = display_width
-        xl_img.height = _IMG_THUMB_HEIGHT
-        return xl_img
+        img = PILImage.open(BytesIO(raw))
+        orig_w, orig_h = img.size
+        img.close()
+        if orig_h <= 0 or orig_w <= 0:
+            return None
+        ratio = _IMG_THUMB_HEIGHT / orig_h
+        display_width = int(orig_w * ratio)
+        return raw, display_width, _IMG_THUMB_HEIGHT
     except Exception as exc:
-        logger.warning("_download_and_resize: failed for %s — %s", url[:80], exc)
+        logger.warning("_download_image_data: failed for %s — %s", url[:80], exc)
         return None
 
 
+def _make_xl_image(data: tuple[bytes, int, int]) -> XlImage:
+    """Create a fresh XlImage from cached (raw_bytes, width, height)."""
+    raw, w, h = data
+    xl_img = XlImage(BytesIO(raw))
+    xl_img.width = w
+    xl_img.height = h
+    return xl_img
+
+
 def _download_images_parallel(urls: list[str], global_timeout: float = 60) -> dict:
-    """Download multiple images in parallel. Returns {url: Image_or_None}."""
+    """Download multiple images in parallel.
+
+    Returns {url: (bytes,w,h) | _IMG_FAILED}.  Every input URL is guaranteed
+    to have an entry so callers can distinguish "download failed" from "URL
+    not in cache" via the _IMG_FAILED sentinel.
+    """
     if not urls:
         return {}
 
@@ -166,19 +208,19 @@ def _download_images_parallel(urls: list[str], global_timeout: float = 60) -> di
 
     results = {}
     with ThreadPoolExecutor(max_workers=5) as pool:
-        future_to_url = {pool.submit(_download_and_resize, url): url for url in urls}
+        future_to_url = {pool.submit(_download_image_data, url): url for url in urls}
         try:
             for future in as_completed(future_to_url, timeout=global_timeout):
                 url = future_to_url[future]
                 try:
-                    results[url] = future.result()
+                    results[url] = future.result() or _IMG_FAILED
                 except Exception:
-                    results[url] = None
+                    results[url] = _IMG_FAILED
         except TimeoutError:
-            # Global timeout reached — fill remaining with None
+            # Global timeout reached — mark remaining as failed
             for future, url in future_to_url.items():
                 if url not in results:
-                    results[url] = None
+                    results[url] = _IMG_FAILED
                     future.cancel()
 
     return results
@@ -268,9 +310,16 @@ def generate_excel(
     # Pre-fetch all review images in parallel
     _all_image_urls = set()
     for _r in reviews:
-        for _url in (_r.get("images") or []):
-            if isinstance(_url, str) and _url.startswith("http"):
-                _all_image_urls.add(_url)
+        _imgs = _r.get("images") or []
+        if isinstance(_imgs, str):
+            try:
+                _imgs = json.loads(_imgs)
+            except Exception:
+                _imgs = []
+        if isinstance(_imgs, list):
+            for _url in _imgs:
+                if isinstance(_url, str) and _url.startswith("http"):
+                    _all_image_urls.add(_url)
     _prefetched = _download_images_parallel(list(_all_image_urls)) if _all_image_urls else {}
 
     # Write review rows with embedded images
@@ -294,28 +343,32 @@ def generate_excel(
                 image_urls = []
 
         embedded_count = 0
-        for img_idx, url in enumerate(image_urls):
-            xl_img = _prefetched.get(url) if isinstance(url, str) else None
-            if xl_img is None and isinstance(url, str) and url.startswith("http"):
-                xl_img = _download_and_resize(url)
-            if xl_img:
-                y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
-                from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
-                from openpyxl.drawing.xdr import XDRPositiveSize2D
-                from openpyxl.utils.units import pixels_to_EMU
-                marker = AnchorMarker(
-                    col=images_col - 1,  # 0-indexed
-                    row=row_idx - 1,     # 0-indexed
-                    colOff=0,
-                    rowOff=pixels_to_EMU(y_offset),
-                )
-                size = XDRPositiveSize2D(
-                    pixels_to_EMU(xl_img.width),
-                    pixels_to_EMU(xl_img.height),
-                )
-                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
-                ws_reviews.add_image(xl_img)
-                embedded_count += 1
+        for url in image_urls:
+            if not isinstance(url, str) or not url.startswith("http"):
+                continue
+            cached = _prefetched.get(url, _IMG_FAILED)
+            if cached is _IMG_FAILED:
+                cached = _download_image_data(url)
+            if not cached or cached is _IMG_FAILED:
+                continue
+            xl_img = _make_xl_image(cached)
+            y_offset = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+            from openpyxl.drawing.xdr import XDRPositiveSize2D
+            from openpyxl.utils.units import pixels_to_EMU
+            marker = AnchorMarker(
+                col=images_col - 1,  # 0-indexed
+                row=row_idx - 1,     # 0-indexed
+                colOff=0,
+                rowOff=pixels_to_EMU(y_offset),
+            )
+            size = XDRPositiveSize2D(
+                pixels_to_EMU(xl_img.width),
+                pixels_to_EMU(xl_img.height),
+            )
+            xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+            ws_reviews.add_image(xl_img)
+            embedded_count += 1
 
         if embedded_count > 0:
             # Adjust row height to fit stacked images
@@ -741,7 +794,10 @@ def _generate_analytical_excel(
                 labels_list = []
         else:
             labels_list = labels_raw if isinstance(labels_raw, list) else []
-        labels_text = ", ".join(lbl.get("code", "") for lbl in labels_list if isinstance(lbl, dict))
+        labels_text = ", ".join(
+            _xl_display(lbl.get("code"), _LABEL_DISPLAY)
+            for lbl in labels_list if isinstance(lbl, dict)
+        )
 
         # Parse features
         features_raw = r.get("analysis_features") or r.get("features") or "[]"
@@ -760,9 +816,9 @@ def _generate_analytical_excel(
             r.get("id"),
             r.get("product_name"),
             r.get("product_sku"),
-            r.get("ownership"),
+            _xl_display(r.get("ownership"), _OWNERSHIP_DISPLAY),
             r.get("rating"),
-            r.get("sentiment"),
+            _xl_display(r.get("sentiment"), _SENTIMENT_DISPLAY),
             labels_text,
             r.get("impact_category"),
             r.get("failure_mode"),
@@ -779,28 +835,32 @@ def _generate_analytical_excel(
         # Embed images as thumbnails (same approach as legacy Excel)
         row_idx = ws1.max_row
         embedded_count = 0
-        for img_idx, url in enumerate(images_list):
-            xl_img = _prefetched.get(url) if isinstance(url, str) else None
-            if xl_img is None and isinstance(url, str) and url.startswith("http"):
-                xl_img = _download_and_resize(url)
-            if xl_img:
-                y_offset = img_idx * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
-                from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
-                from openpyxl.drawing.xdr import XDRPositiveSize2D
-                from openpyxl.utils.units import pixels_to_EMU
-                marker = AnchorMarker(
-                    col=images_col - 1,
-                    row=row_idx - 1,
-                    colOff=0,
-                    rowOff=pixels_to_EMU(y_offset),
-                )
-                size = XDRPositiveSize2D(
-                    pixels_to_EMU(xl_img.width),
-                    pixels_to_EMU(xl_img.height),
-                )
-                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
-                ws1.add_image(xl_img)
-                embedded_count += 1
+        for url in images_list:
+            if not isinstance(url, str) or not url.startswith("http"):
+                continue
+            cached = _prefetched.get(url, _IMG_FAILED)
+            if cached is _IMG_FAILED:
+                cached = _download_image_data(url)
+            if not cached or cached is _IMG_FAILED:
+                continue
+            xl_img = _make_xl_image(cached)
+            y_offset = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+            from openpyxl.drawing.xdr import XDRPositiveSize2D
+            from openpyxl.utils.units import pixels_to_EMU
+            marker = AnchorMarker(
+                col=images_col - 1,
+                row=row_idx - 1,
+                colOff=0,
+                rowOff=pixels_to_EMU(y_offset),
+            )
+            size = XDRPositiveSize2D(
+                pixels_to_EMU(xl_img.width),
+                pixels_to_EMU(xl_img.height),
+            )
+            xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+            ws1.add_image(xl_img)
+            embedded_count += 1
 
         if embedded_count > 0:
             row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
@@ -834,9 +894,9 @@ def _generate_analytical_excel(
             p.get("name"),
             p.get("sku"),
             p.get("site"),
-            p.get("ownership"),
+            _xl_display(p.get("ownership"), _OWNERSHIP_DISPLAY),
             p.get("price"),
-            p.get("stock_status"),
+            _xl_display(p.get("stock_status"), _STOCK_DISPLAY),
             p.get("rating"),
             p.get("review_count"),
             risk.get("ingested_reviews", 0),
@@ -849,7 +909,7 @@ def _generate_analytical_excel(
 
     # ── Sheet 3: 问题标签 ──────────────────────────────────────────────────
     ws3 = wb.create_sheet("问题标签")
-    label_headers = ["review_id", "product_sku", "label_code", "label_polarity", "severity", "confidence"]
+    label_headers = ["评论ID", "产品SKU", "问题标签", "极性", "严重度", "置信度"]
     _write_headers(ws3, label_headers)
 
     for r in reviews:
@@ -868,9 +928,9 @@ def _generate_analytical_excel(
                 ws3.append([
                     r.get("id"),
                     r.get("product_sku"),
-                    label.get("code"),
-                    label.get("polarity"),
-                    label.get("severity"),
+                    _xl_display(label.get("code"), _LABEL_DISPLAY),
+                    _xl_display(label.get("polarity"), _POLARITY_DISPLAY),
+                    _xl_display(label.get("severity"), _SEVERITY_DISPLAY),
                     label.get("confidence"),
                 ])
 
@@ -890,7 +950,7 @@ def _generate_analytical_excel(
                 point.get("price"),
                 point.get("rating"),
                 point.get("review_count"),
-                point.get("stock_status"),
+                _xl_display(point.get("stock_status"), _STOCK_DISPLAY),
             ])
 
     _auto_widths(ws4)

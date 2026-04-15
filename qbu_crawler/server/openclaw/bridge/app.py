@@ -57,6 +57,14 @@ DEFAULT_TEMPLATES = {
         "- **邮件发送**：{email_status}\n\n"
         "如需，我可以继续补充差评、价格波动和竞品对比解读。"
     ),
+    "workflow_report_skipped": (
+        "## ✅ 每日任务已完成\n\n"
+        "- **日期**：{logical_date}\n"
+        "- **workflow**：{run_id}\n"
+        "- **产品数**：{products_count}\n"
+        "- **新增评论数**：{reviews_count}\n"
+        "- **说明**：新增评论为 0，已跳过 Excel 生成和邮件发送"
+    ),
     "workflow_attention": (
         "## ⚠️ 任务需要人工关注\n\n"
         "- **日期**：{logical_date}\n"

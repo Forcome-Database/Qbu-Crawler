@@ -270,11 +270,68 @@ def _report_db_ts(value: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _translation_wait_expired(run: dict, now: str) -> bool:
-    updated_at = run.get("updated_at") or run.get("started_at") or now
-    started = datetime.fromisoformat(updated_at)
+# Track translation progress per run to detect stalls.
+# {run_id: (last_pending_count, stall_since_iso)}
+_translation_progress: dict[int, tuple[int, str]] = {}
+
+
+def _translation_wait_expired(run: dict, now: str, pending: int = 0) -> bool:
+    """Return True when the translation wait should be abandoned.
+
+    Strategy: keep waiting as long as pending count is decreasing (translations
+    are making progress).  Only start the stall timer when pending stops
+    decreasing for consecutive checks.  If stalled for longer than
+    WORKFLOW_TRANSLATION_WAIT_SECONDS, give up.
+
+    This replaces the old fixed-timeout approach which couldn't handle large
+    review volumes — 1000+ reviews easily exceed 15 minutes of translation time.
+    """
+    run_id = run["id"]
+    prev = _translation_progress.get(run_id)
+
+    if prev is None:
+        # First observation — record baseline, not stalled yet.
+        _translation_progress[run_id] = (pending, now)
+        return False
+
+    last_pending, stall_since = prev
+
+    if pending < last_pending:
+        # Progress! Reset stall timer.
+        _translation_progress[run_id] = (pending, now)
+        return False
+
+    # No progress (pending unchanged or increased) — check stall duration.
+    stall_start = datetime.fromisoformat(stall_since)
     current = datetime.fromisoformat(now)
-    return (current - started).total_seconds() >= config.WORKFLOW_TRANSLATION_WAIT_SECONDS
+    stall_seconds = (current - stall_start).total_seconds()
+
+    # Update count (in case it increased) but keep the stall_since.
+    _translation_progress[run_id] = (pending, stall_since)
+
+    return stall_seconds >= config.WORKFLOW_TRANSLATION_WAIT_SECONDS
+
+
+def _clear_translation_progress(run_id: int) -> None:
+    """Clean up tracking state when a run exits the reporting phase."""
+    _translation_progress.pop(run_id, None)
+
+
+# Track report generation retry attempts per run.
+# {run_id: consecutive_failure_count}
+_report_attempts: dict[int, int] = {}
+_REPORT_MAX_RETRIES = 3
+
+
+def _report_retry_or_fail(run_id: int) -> bool:
+    """Return True if we should retry, False if max retries exhausted."""
+    count = _report_attempts.get(run_id, 0) + 1
+    _report_attempts[run_id] = count
+    return count < _REPORT_MAX_RETRIES
+
+
+def _clear_report_attempts(run_id: int) -> None:
+    _report_attempts.pop(run_id, None)
 
 
 class DailySchedulerWorker:
@@ -527,9 +584,17 @@ class WorkflowWorker:
                 return True
             return False
 
+        # Partial failure: if some tasks succeeded, continue to reporting with
+        # available data.  Only block when ALL tasks failed — no data to report.
         if statuses & {"failed", "cancelled"}:
-            self._move_run_to_attention(run, now, "One or more workflow tasks failed")
-            return True
+            if "completed" not in statuses:
+                self._move_run_to_attention(run, now, "All workflow tasks failed")
+                return True
+            failed_count = sum(1 for t in task_rows if t["status"] in ("failed", "cancelled"))
+            logger.warning(
+                "WorkflowWorker: %d/%d tasks failed for run %s, continuing with partial data",
+                failed_count, len(task_rows), run_id,
+            )
 
         changed = False
         if run["status"] != "reporting":
@@ -546,7 +611,7 @@ class WorkflowWorker:
                 run["data_since"],
                 run["data_until"],
             )
-            if pending_translations > 0 and not _translation_wait_expired(run, now):
+            if pending_translations > 0 and not _translation_wait_expired(run, now, pending=pending_translations):
                 if changed:
                     logger.info(
                         "WorkflowWorker: waiting for %d translations before reporting run %s",
@@ -556,14 +621,42 @@ class WorkflowWorker:
                 return changed
             if pending_translations > 0:
                 logger.warning(
-                    "WorkflowWorker: translation wait expired for run %s; continuing with %d untranslated reviews",
+                    "WorkflowWorker: translation stalled for run %s; continuing with %d untranslated reviews",
                     run_id,
                     pending_translations,
                 )
+            _clear_translation_progress(run_id)
             run = freeze_report_snapshot(run_id, now=now)
             changed = True
 
         if run.get("report_phase") == "none":
+            snapshot = load_report_snapshot(run["snapshot_path"])
+            if snapshot.get("reviews_count", 0) == 0:
+                # No new reviews — skip fast/full report entirely.
+                # Only send a single "report skipped" notification.
+                _clear_translation_progress(run_id)
+                _enqueue_workflow_notification(
+                    kind="workflow_report_skipped",
+                    target=config.WORKFLOW_NOTIFICATION_TARGET,
+                    payload={
+                        "run_id": run_id,
+                        "logical_date": run["logical_date"],
+                        "snapshot_hash": run.get("snapshot_hash", ""),
+                        "products_count": snapshot.get("products_count", 0),
+                        "reviews_count": 0,
+                        "reason": "no_new_reviews",
+                    },
+                    dedupe_key=f"workflow:{run_id}:report-skipped",
+                )
+                models.update_workflow_run(
+                    run_id,
+                    status="completed",
+                    report_phase="skipped_no_reviews",
+                    report_mode="skipped",
+                    finished_at=now,
+                    error=None,
+                )
+                return True
             run = models.update_workflow_run(run_id, report_phase="fast_pending")
             changed = True
 
@@ -598,11 +691,24 @@ class WorkflowWorker:
                     excel_path=exc.excel_path,
                     pdf_path=exc.pdf_path,
                 )
+                if _report_retry_or_fail(run_id):
+                    logger.warning(
+                        "WorkflowWorker: report generation failed for run %s (attempt %d/%d), will retry — %s",
+                        run_id, _report_attempts[run_id], _REPORT_MAX_RETRIES, exc,
+                    )
+                    return False  # break inner loop, retry after next interval sleep
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
             except Exception as exc:
+                if _report_retry_or_fail(run_id):
+                    logger.warning(
+                        "WorkflowWorker: report generation failed for run %s (attempt %d/%d), will retry — %s",
+                        run_id, _report_attempts[run_id], _REPORT_MAX_RETRIES, exc,
+                    )
+                    return False  # break inner loop, retry after next interval sleep
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
+            _clear_report_attempts(run_id)
 
             excel_path = full_report.get("excel_path")
             analytics_path = full_report.get("analytics_path")
@@ -616,14 +722,13 @@ class WorkflowWorker:
                 analytics_path=analytics_path,
                 pdf_path=pdf_path,
             )
+            # Email failure should not block run completion — report files
+            # already exist on disk.  Log the problem and mark in notification.
             if should_send_email and not email_ok:
-                self._move_run_to_attention(
-                    run,
-                    now,
-                    (email or {}).get("error") or "send_email failed",
-                    report_phase="full_sent",
+                logger.warning(
+                    "WorkflowWorker: email failed for run %s — %s",
+                    run_id, (email or {}).get("error"),
                 )
-                return True
 
             _enqueue_workflow_notification(
                 kind="workflow_full_report",
@@ -655,6 +760,8 @@ class WorkflowWorker:
                 error=None,
             )
             _maybe_trigger_ai_digest(run_id, run, snapshot, full_report)
+            _clear_translation_progress(run_id)
+            _clear_report_attempts(run_id)
             return True
 
         return changed
@@ -666,6 +773,8 @@ class WorkflowWorker:
         error_message: str,
         report_phase: str | None = None,
     ):
+        _clear_translation_progress(run["id"])
+        _clear_report_attempts(run["id"])
         updated = models.update_workflow_run(
             run["id"],
             status="needs_attention",
@@ -740,10 +849,10 @@ def _maybe_trigger_ai_digest(run_id: int, run: dict, snapshot: dict, full_report
         "请基于以下固定日报快照做简短业务摘要，不要触发任何工具。\n"
         f"run_id={run_id}\n"
         f"logical_date={run['logical_date']}\n"
-        f"snapshot_hash={snapshot['snapshot_hash']}\n"
-        f"products_count={snapshot['products_count']}\n"
-        f"reviews_count={snapshot['reviews_count']}\n"
-        f"translated_count={snapshot['translated_count']}\n"
+        f"snapshot_hash={snapshot.get('snapshot_hash', '')}\n"
+        f"products_count={snapshot.get('products_count', 0)}\n"
+        f"reviews_count={snapshot.get('reviews_count', 0)}\n"
+        f"translated_count={snapshot.get('translated_count', 0)}\n"
         f"excel_path={full_report.get('excel_path', '')}"
     )
     base = config.OPENCLAW_HOOK_URL.rstrip("/").removesuffix("/hooks/wake").removesuffix("/hooks/agent")
