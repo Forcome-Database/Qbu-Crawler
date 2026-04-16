@@ -800,3 +800,42 @@ def test_change_and_quiet_report_return_none_email_when_send_email_false(
     assert quiet_result["email"] is None, (
         "quiet report with send_email=False should return email=None, not {success: False}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for _get_email_recipients (Fix-7: unified recipient source)
+# ---------------------------------------------------------------------------
+
+
+def test_get_email_recipients_prefers_env_var(monkeypatch):
+    """When config.EMAIL_RECIPIENTS is set, it should be returned directly."""
+    from qbu_crawler.server import report_snapshot
+    monkeypatch.setattr("qbu_crawler.config.EMAIL_RECIPIENTS", ["a@test.com", "b@test.com"])
+    result = report_snapshot._get_email_recipients()
+    assert result == ["a@test.com", "b@test.com"]
+
+
+def test_get_email_recipients_falls_back_to_file(monkeypatch, tmp_path):
+    """When config.EMAIL_RECIPIENTS is empty, read from file."""
+    from qbu_crawler.server import report_snapshot
+    monkeypatch.setattr("qbu_crawler.config.EMAIL_RECIPIENTS", [])
+    recipients_file = tmp_path / "email_recipients.txt"
+    recipients_file.write_text("c@test.com\n# comment\nd@test.com\n", encoding="utf-8")
+    monkeypatch.setattr(
+        report_snapshot, "_RECIPIENTS_FILE_PATH",
+        str(recipients_file),
+    )
+    result = report_snapshot._get_email_recipients()
+    assert result == ["c@test.com", "d@test.com"]
+
+
+def test_get_email_recipients_returns_empty_when_no_source(monkeypatch, tmp_path):
+    """When both sources are empty, return empty list."""
+    from qbu_crawler.server import report_snapshot
+    monkeypatch.setattr("qbu_crawler.config.EMAIL_RECIPIENTS", [])
+    monkeypatch.setattr(
+        report_snapshot, "_RECIPIENTS_FILE_PATH",
+        str(tmp_path / "nonexistent.txt"),
+    )
+    result = report_snapshot._get_email_recipients()
+    assert result == []
