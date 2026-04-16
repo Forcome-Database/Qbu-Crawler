@@ -62,3 +62,14 @@ Default order:
 4. 是否有值得关注的异常
 
 不要把 daily digest 写成大而全的长报告。
+
+## 报告模式解读
+
+通过 `get_workflow_status` 查看 `report_mode` 字段：
+- `full`：关注 `analytics_path`（分析 JSON）和 `excel_path`（Excel 附件）
+- `change`：关注价格/库存变动，无需分析评论内容
+- `quiet`：无需汇报，可简要说明"今日无变化"
+
+双视角模式下（`REPORT_PERSPECTIVE=dual`）：
+- 邮件和报告中的 KPI 基于全量累积数据，稳定可靠
+- "今日变化"区块展示当天新增的具体评论和价格变动
