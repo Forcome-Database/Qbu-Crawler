@@ -97,13 +97,14 @@ def should_send_daily_email(new_review_count: int, changes: dict) -> bool:
     return False
 
 
-def load_previous_report_context(run_id):
+def load_previous_report_context(run_id, report_tier=None):
     """Load most recent completed run's analytics and snapshot.
 
     Skips runs without analytics (quiet/change mode runs).
+    When *report_tier* is provided, only matches runs with that tier.
     Returns (analytics_dict, snapshot_dict) or (None, None).
     """
-    prev_run = models.get_previous_completed_run(run_id)
+    prev_run = models.get_previous_completed_run(run_id, report_tier=report_tier)
     if not prev_run or not prev_run.get("analytics_path"):
         return None, None
 
