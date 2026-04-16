@@ -234,3 +234,65 @@ def test_quiet_template_no_na_with_cumulative_kpis():
     )
     assert "N/A" not in html, "Template should not contain N/A when cumulative_kpis provided"
     assert "72.5" in html, "Health index from cumulative_kpis must appear"
+
+
+# ── V3 HTML Tab 2 + Panorama (Task 5) ───────────────────────────
+
+
+def test_v3_html_tab2_not_placeholder():
+    """Tab 2 must not contain placeholder text."""
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("daily_report_v3.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    js_path = template_dir / "daily_report_v3.js"
+
+    snapshot = {
+        "logical_date": "2026-04-15",
+        "reviews": [{"id": 1, "rating": 5.0, "ownership": "own", "product_sku": "SKU1",
+                      "product_name": "Test", "headline": "Good", "body": "Works",
+                      "author": "Tester", "date_published": "2026-04-15"}],
+        "cumulative": {
+            "products": [{"name": "Test", "sku": "SKU1", "ownership": "own", "rating": 4.5,
+                          "review_count": 10, "site": "test", "price": 100}],
+            "reviews": [{"id": 1, "rating": 5.0, "ownership": "own", "product_sku": "SKU1",
+                          "product_name": "Test", "headline": "Good", "body": "Works",
+                          "author": "Tester", "date_published": "2026-04-15"}],
+        },
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"own_review_rows": 1, "ingested_review_rows": 1, "product_count": 1,
+                 "own_product_count": 1, "competitor_product_count": 0,
+                 "competitor_review_rows": 0, "own_negative_review_rows": 0,
+                 "own_positive_review_rows": 1},
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": [],
+                 "top_positive_clusters": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                       "negative_opportunities": []},
+        "appendix": {"image_reviews": []},
+    }
+
+    html = template.render(
+        logical_date="2026-04-15",
+        mode="incremental",
+        snapshot=snapshot,
+        analytics=analytics,
+        charts={"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        alert_level="green",
+        alert_text="",
+        report_copy={},
+        css_text=css_path.read_text(encoding="utf-8") if css_path.exists() else "",
+        js_text=js_path.read_text(encoding="utf-8") if js_path.exists() else "",
+        threshold=2,
+        cumulative_kpis={},
+        window={},
+    )
+    assert "变化追踪将在后续版本中启用" not in html, "Placeholder text must be gone"

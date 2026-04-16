@@ -36,7 +36,7 @@
     {% if (analytics.kpis.competitor_review_rows or 0) > 0 and (analytics.kpis.product_count or 0) > 1 %}
     <button data-tab="competitive" class="tab-btn" role="tab">竞品对标</button>
     {% endif %}
-    <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ (snapshot.reviews or []) | length }}</span></button>
+    <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ ((snapshot.cumulative.reviews if snapshot.cumulative is defined and snapshot.cumulative and snapshot.cumulative.reviews is defined else snapshot.reviews) or []) | length }}</span></button>
   </nav>
 
   <main class="report-main">
@@ -140,7 +140,28 @@
     {% if mode != "baseline" %}
     <section id="tab-changes" class="tab-panel" role="tabpanel">
       <h2 class="section-title">今日变化</h2>
-      <div class="empty-state">变化追踪将在后续版本中启用。</div>
+      <p class="section-sub">采集窗口内的新增评论和产品数据变动。</p>
+
+      {% set win_reviews = snapshot.reviews if snapshot.reviews is defined else [] %}
+      {% if win_reviews %}
+      <h3 style="margin-top:var(--sp-lg);">新增评论（{{ win_reviews|length }} 条）</h3>
+      {% for r in win_reviews[:20] %}
+      <div class="quote-block {% if r.rating is defined and r.rating is not none and r.rating <= 2 %}quote-negative{% elif r.rating is defined and r.rating is not none and r.rating >= 4 %}quote-positive{% else %}quote-neutral{% endif %}" style="margin-bottom:var(--sp-md);">
+        <div class="quote-cn">{{ r.headline_cn if r.headline_cn is defined and r.headline_cn else (r.headline if r.headline is defined else "") }}</div>
+        <div class="quote-en" style="font-size:var(--fs-xs); color:var(--text-secondary);">{{ (r.body if r.body is defined and r.body else "")[:200] }}{% if r.body is defined and r.body and r.body|length > 200 %}...{% endif %}</div>
+        <div class="quote-meta">
+          <span class="quote-stars">{{ "★" * ((r.rating|int) if r.rating is defined and r.rating is not none else 0) }}{{ "☆" * (5 - ((r.rating|int) if r.rating is defined and r.rating is not none else 0)) }}</span>
+          <span>{{ r.author if r.author is defined and r.author else "Anonymous" }}</span>
+          <span>{{ r.product_name if r.product_name is defined and r.product_name else (r.product_sku if r.product_sku is defined else "") }}</span>
+        </div>
+      </div>
+      {% endfor %}
+      {% if win_reviews|length > 20 %}
+      <div class="empty-state">还有 {{ win_reviews|length - 20 }} 条评论未显示，查看全景数据 Tab 查看完整列表。</div>
+      {% endif %}
+      {% else %}
+      <div class="empty-state">本期无新增评论。</div>
+      {% endif %}
     </section>
     {% endif %}
 
@@ -407,8 +428,10 @@
       </div>
 
       <!-- Review Detail Table with Pagination -->
-      {% if snapshot.reviews %}
-      <h3 class="mt-xl">评论明细</h3>
+      {# P008: panorama uses cumulative data (all reviews), not just window #}
+      {% set _panorama_reviews = snapshot.cumulative.reviews if snapshot.cumulative is defined and snapshot.cumulative and snapshot.cumulative.reviews is defined else snapshot.reviews %}
+      {% if _panorama_reviews %}
+      <h3 class="mt-xl">评论明细（累积 {{ _panorama_reviews|length }} 条）</h3>
       <div class="filter-bar">
         <input type="text" class="filter-input" data-target="review-table" placeholder="搜索产品、标题、评论内容...">
         <div class="filter-pills">
@@ -431,7 +454,7 @@
             </tr>
           </thead>
           <tbody>
-            {% for r in snapshot.reviews %}
+            {% for r in _panorama_reviews %}
             <tr id="review-{{ r.id }}">
               <td>{{ r.product_name }}</td>
               <td>{{ '自有' if r.ownership == 'own' else '竞品' }}</td>
