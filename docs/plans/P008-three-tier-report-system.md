@@ -276,7 +276,85 @@ def should_send_daily_email(window_data) -> bool:
 
 现有 `detect_report_mode()` 和三分支渲染逻辑暂保留（不删除），通过 `report_tier == 'daily'` 走新路径，旧 run 走旧路径。渐进迁移，非一刀切。
 
-### 4.3 安全三级分级闭环
+### 4.3 日报内容结构——三区块设计
+
+日报简报包含三个区块，前两个始终存在，第三个条件触发：
+
+```
+┌─ 日报简报 ────────────────────────────────────────────────┐
+│                                                            │
+│  ① 累积快照（始终存在）                                      │
+│  健康指数: 72.3   差评率: 4.2%   高风险: 2   评论总量: 2581  │
+│                                                            │
+│  ② 今日变化（有内容时展示）                                  │
+│  新评论:                                                    │
+│  ★☆☆☆☆ 1HP Grinder #22 — "black oily substance..."        │
+│    📸 3张图 · 587字详评 · ⚠安全关键词                        │
+│    → 高关注度评论                                           │
+│                                                            │
+│  ★★★★★ Walton's #32 — "Best grinder I've owned"            │
+│    47字 · 无图                                              │
+│    → 常规好评                                               │
+│                                                            │
+│  库存变化: .5 HP Grinder 缺货 → 有货                        │
+│                                                            │
+│  ③ 需注意（条件触发，无事不显示）                             │
+│  • ⚠ 安全: #22 Grinder 评论提及"black substance"            │
+│  • 📉 竞品: Cabela's 3/4HP Grinder 评分 4.6→4.3 (-0.3)     │
+│  • ✓ 静默观察: 质量稳定性问题已 14 天无新投诉                │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+#### "需注意"信号触发规则
+
+所有信号均从现有数据推导，不需要新的数据采集：
+
+| 信号 | 触发条件 | 数据来源 | 说明 |
+|------|----------|----------|------|
+| **安全关键词命中** | 新评论匹配 SAFETY_TIERS 任何级别 | review body + safety_tiers.json | 最高优先级 |
+| **图片证据** | 新评论包含图片 | reviews.images | 有图差评可信度远高于无图 |
+| **竞品评分异动** | 竞品产品评分单日变化 ≥ 0.3 | product_snapshots delta | 竞品出问题 = 机会窗口 |
+| **连续差评** | 同一 SKU 7 天内 ≥ 2 条差评（≤2星） | reviews 近 7 天窗口 | 单条是噪声，连续是信号 |
+| **自有产品缺货** | 自有产品从 in_stock → out_of_stock | product_snapshots delta | 直接影响销售 |
+| **静默好消息** | 已知活跃问题 14+ 天无新投诉 | cumulative clusters last_seen | "没有坏消息"本身是好消息 |
+
+无事发生的日子，"需注意"区块不渲染——日报就是 ① 累积快照一行，3 秒扫完。
+
+#### 新评论"重量"标签
+
+日报中每条新评论附带人话化的重量标签，帮管理层 5 秒判断是否值得点进去看：
+
+```python
+def review_attention_label(review, safety_level):
+    """生成人话化重量标签，不暴露 RCW 分数"""
+    signals = []
+    if safety_level:
+        signals.append(f"⚠安全关键词({safety_level})")
+    images = review.get("images") or []
+    if images:
+        signals.append(f"📸 {len(images)}张图")
+    body_len = len(review.get("body", ""))
+    if body_len > 300:
+        signals.append(f"{body_len}字详评")
+    elif body_len < 50:
+        signals.append("短评")
+
+    if safety_level == "critical" or (review["rating"] <= 2 and len(images) > 0):
+        label = "高关注度评论"
+    elif review["rating"] <= 2:
+        label = "差评"
+    elif review["rating"] >= 4:
+        label = "常规好评"
+    else:
+        label = "中评"
+
+    return {"signals": signals, "label": label}
+```
+
+注意：这使用了 RCW 的**信号因子**（图片、长度、安全关键词），但**不展示 RCW 数值本身**（遵守 D4 决策）。
+
+### 4.4 安全三级分级闭环
 
 将 `impact_category` 接入下游管线（基于 Phase 1 的端到端修复）：
 - `compute_cluster_severity()` 中 `impact_category == "safety"` 给额外加分
@@ -297,7 +375,8 @@ TIER_CONFIGS = {
     "daily": {
         "window":      "24h",
         "cumulative":  True,
-        "dimensions":  ["kpi", "clusters", "competitive_gap"],
+        "dimensions":  ["kpi", "clusters", "competitive_gap",
+                        "attention_signals"],  # 需注意信号（条件触发）
         "template":    "daily_briefing.html.j2",
         "excel":       False,
         "delivery":    {"email": "smart", "archive": True},
@@ -732,6 +811,10 @@ CATEGORY_MAP_PATH=data/category_map.csv
 - [ ] report_tier 列正确填充
 - [ ] 安全评论在报告中有分级红色标记
 - [ ] 不同收件人列表可独立配置
+- [ ] 日报三区块结构：累积快照 + 今日变化 + 需注意（条件触发）
+- [ ] 新评论附带人话化重量标签（高关注度 / 差评 / 常规好评）
+- [ ] "需注意"区块在安全命中/竞品异动/连续差评/缺货/静默好消息时出现
+- [ ] 无事日不渲染"需注意"区块
 
 ### Phase 3
 
