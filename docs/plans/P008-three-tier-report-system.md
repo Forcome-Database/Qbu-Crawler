@@ -165,7 +165,9 @@ generate_report_from_snapshot(snapshot, tier="daily", ...)
 
 **问题**：Change/Quiet 模式不执行 `build_report_analytics()`，`cumulative_kpis` 为空，模板渲染 N/A。
 
-**修复**：在 `generate_report_from_snapshot()` 中，无论 report_mode 是什么，都调用 `compute_kpis()` 基于累积数据计算 KPI。Change/Quiet 模板接收 `cumulative_kpis` 变量并渲染。
+**修复**：在 `generate_report_from_snapshot()` 中，无论 report_mode 是什么，都通过 `build_dual_report_analytics()` 的累积数据路径计算 KPI。Change/Quiet 模板接收 `cumulative_kpis` 变量并渲染。
+
+**与 P006 的边界**：P006 Fix-3/Fix-4 已修复计算公式本身（贝叶斯修正 + delta 激活）。本修复解决的是 Change/Quiet 路径根本不调用计算函数的管线断裂问题——公式正确但没被执行。
 
 ### 3.3 V3 HTML 双视角收口
 
@@ -278,32 +280,40 @@ def should_send_daily_email(window_data) -> bool:
 
 ### 4.3 日报内容结构——三区块设计
 
-日报简报包含三个区块，前两个始终存在，第三个条件触发：
+日报简报与周报/月报共享 V3 的 **sticky KPI bar**（品牌标识 + 核心 KPI 数字），但内容区域为简报卡片而非多 Tab。用户在三层报告间始终看到同一个 header，建立"同一产品不同详略"的心智模型。
+
+日报内容包含三个区块，前两个始终存在，第三个条件触发：
 
 ```
-┌─ 日报简报 ────────────────────────────────────────────────┐
-│                                                            │
-│  ① 累积快照（始终存在）                                      │
-│  健康指数: 72.3   差评率: 4.2%   高风险: 2   评论总量: 2581  │
-│                                                            │
-│  ② 今日变化（有内容时展示）                                  │
-│  新评论:                                                    │
-│  ★☆☆☆☆ 1HP Grinder #22 — "black oily substance..."        │
-│    📸 3张图 · 587字详评 · ⚠安全关键词                        │
-│    → 高关注度评论                                           │
-│                                                            │
-│  ★★★★★ Walton's #32 — "Best grinder I've owned"            │
-│    47字 · 无图                                              │
-│    → 常规好评                                               │
-│                                                            │
-│  库存变化: .5 HP Grinder 缺货 → 有货                        │
-│                                                            │
-│  ③ 需注意（条件触发，无事不显示）                             │
-│  • ⚠ 安全: #22 Grinder 评论提及"black substance"            │
-│  • 📉 竞品: Cabela's 3/4HP Grinder 评分 4.6→4.3 (-0.3)     │
-│  • ✓ 静默观察: 质量稳定性问题已 14 天无新投诉                │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
+┌─ [sticky KPI bar: QBU 网评监控 · 健康 72.3 · 差评 4.2% · 高风险 2] ──┐
+│                                                                        │
+│  ① 累积快照（始终存在）                                                  │
+│  健康指数: 72.3   差评率: 4.2%   高风险: 2   评论总量: 2581              │
+│  无事日补充: 距上次有内容已 3 天 · 当前 2 个活跃问题追踪中               │
+│                                                                        │
+│  ② 今日变化（有内容时展示）                                              │
+│  新评论:                                                                │
+│  ★☆☆☆☆ 1HP Grinder #22 — "black oily substance..."                    │
+│    📸 3张图 · 587字详评 · ⚠安全关键词                                    │
+│    → 高关注度评论                                                       │
+│                                                                        │
+│  ★★★★★ Walton's #32 — "Best grinder I've owned"                        │
+│    47字 · 无图                                                          │
+│    → 常规好评                                                           │
+│                                                                        │
+│  库存变化: .5 HP Grinder 缺货 → 有货                                    │
+│                                                                        │
+│  ③ 需注意（条件触发，按紧急度分组，无事不显示）                           │
+│  ┌─ 需行动 (红/橙色条) ──────────────────────────────────┐             │
+│  │ ⚠ 安全: #22 Grinder 评论提及"black substance"          │             │
+│  │ ▼ 连续差评: #12 Grinder 7天内第2条差评                  │             │
+│  └─────────────────────────────────────────────────────┘             │
+│  ┌─ 供参考 (灰/蓝色条) ──────────────────────────────────┐             │
+│  │ 📉 竞品: Cabela's 3/4HP Grinder 评分 4.6→4.3 (-0.3)   │             │
+│  │ ✓ 静默观察: 质量稳定性问题已 14 天无新投诉              │             │
+│  └─────────────────────────────────────────────────────┘             │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### "需注意"信号触发规则
@@ -317,9 +327,13 @@ def should_send_daily_email(window_data) -> bool:
 | **竞品评分异动** | 竞品产品评分单日变化 ≥ 0.3 | product_snapshots delta | 竞品出问题 = 机会窗口 |
 | **连续差评** | 同一 SKU 7 天内 ≥ 2 条差评（≤2星） | reviews 近 7 天窗口 | 单条是噪声，连续是信号 |
 | **自有产品缺货** | 自有产品从 in_stock → out_of_stock | product_snapshots delta | 直接影响销售 |
-| **静默好消息** | 已知活跃问题 14+ 天无新投诉 | cumulative clusters last_seen | "没有坏消息"本身是好消息 |
+| **静默好消息** | 负面聚类 last_seen > 14 天 | cumulative clusters last_seen | Phase 2 简化版：不依赖状态机，仅看 last_seen；Phase 4 升级为完整生命周期状态驱动 |
 
-无事发生的日子，"需注意"区块不渲染——日报就是 ① 累积快照一行，3 秒扫完。
+"需注意"区块分为**"需行动"**（红/橙色条：安全/缺货/连续差评）和**"供参考"**（灰/蓝色条：竞品异动/静默好消息），用颜色条（复用现有 `briefing-issue-bar` 组件）区分紧急度，让用户不看文字就能判断优先级。
+
+无事发生的日子，"需注意"区块不渲染——日报仅显示 ① 累积快照 + 一行上下文基线（"距上次有内容已 N 天"），3 秒扫完。
+
+竞品评分异动信号的数据来源：从 `snapshot["window"]["rating_changes"]` 中过滤 `abs(delta) >= 0.3 AND ownership == 'competitor'`，复用现有变动检测逻辑（已在 Change 模式中实现），仅加阈值过滤。
 
 #### 新评论"重量"标签
 
@@ -361,14 +375,16 @@ def review_attention_label(review, safety_level):
 - `_risk_products()` 的风险评分增加安全因子
 - V3 HTML 和邮件模板中 safety 评论加红色安全标记
 
-### 4.4 收件人分通道
+### 4.5 收件人分通道
 
 ```env
 EMAIL_RECIPIENTS_EXEC=           # 高管（周报/月报摘要）
 EMAIL_RECIPIENTS_SAFETY=         # 安全告警（P009 使用）
 ```
 
-### 4.5 Tier 配置数据结构
+### 4.6 Tier 配置数据结构
+
+注：`dimensions` 列表为声明性配置。`attention_signals` 由 `report_common.py` 中的 `compute_attention_signals()` 函数实现（Section 4.3 触发规则表），不对应独立分析模块。其余维度的计算由 `build_dual_report_analytics()` 内部路由。
 
 ```python
 TIER_CONFIGS = {
@@ -732,7 +748,8 @@ Phase 2 中将 `"report_tier"` 加入 `models.py:update_workflow_run()` 的 `all
 | 修改 | `report.py` | query_cumulative_data() 增加 impact_category/failure_mode |
 | 修改 | `models.py` | get_reviews_with_analysis() 增加同上 + safety_incidents 建表 + busy_timeout + label_anomaly_flags 列 |
 | 修改 | `report_snapshot.py` | freeze enrichment 增加字段 + _meta 版本戳 |
-| 修改 | `report_common.py` | SAFETY_TIERS 替换 _SAFETY_KEYWORDS + severity 加分调整 |
+| 修改 | `report_analytics.py` | SAFETY_TIERS 替换 `_SAFETY_KEYWORDS`（定义在 ~L265）+ `compute_cluster_severity()` 加分调整 |
+| 修改 | `report_common.py` | 新增 `detect_safety_level(text)` 供 translator.py 和报告模板共用 |
 | 修改 | `report_html.py` | V3 HTML Tab 2 填充 + 全景 tab 改读累积 |
 | 修改 | `daily_report_v3.html.j2` | 同上模板修改 |
 | 修改 | `email_change.html.j2` | None 人话化 + 累积 KPI 显示 |
@@ -746,30 +763,34 @@ Phase 2 中将 `"report_tier"` 加入 `models.py:update_workflow_run()` 的 `all
 | 操作 | 文件 | 说明 |
 |------|------|------|
 | 修改 | `models.py` | report_tier 列 + update_workflow_run 白名单 |
-| 修改 | `report_snapshot.py` | generate_report_from_snapshot(tier=) 参数 + 日报智能发送 |
-| 修改 | `workflows.py` | report_tier 支持 + _advance_run 新旧路径分流 |
-| 修改 | `config.py` | 收件人分组 + tier 调度时间 |
-| 修改 | `report_common.py` | impact_category 闭环到风险评分 |
+| 修改 | `report_snapshot.py` | generate_report_from_snapshot(tier=) 参数 + 日报智能发送 + `_tier_date_window()` |
+| 修改 | `workflows.py` | report_tier 列填充 + 新 daily run 走 standard 路径 |
+| 修改 | `config.py` | 收件人分组 + EMAIL_RECIPIENTS_EXEC/SAFETY |
+| 修改 | `report_common.py` | impact_category 闭环到风险评分 + `compute_attention_signals()` + `review_attention_label()` |
+| 修改 | `report_html.py` | 日报渲染逻辑适配三区块 + sticky KPI bar 共享 |
+| 新增 | `report_templates/daily_briefing.html.j2` | 日报三区块 HTML 模板（共享 V3 KPI bar） |
+| 新增 | `report_templates/email_daily.html.j2` | 日报邮件模板（body = 简报全文） |
 
 ### Phase 3（周报）
 
 | 操作 | 文件 | 说明 |
 |------|------|------|
-| 修改 | `workflows.py` | WeeklySchedulerWorker + _advance_periodic_run |
+| 修改 | `workflows.py` | WeeklySchedulerWorker + `_advance_periodic_run()` + `_advance_run()` 分流（daily vs periodic） |
 | 修改 | `models.py` | get_previous_completed_run(report_tier=) |
 | 修改 | `report_snapshot.py` | 退役 quiet weekly_digest |
-| 新增 | `report_templates/weekly_report.html.j2` | 周报 V3 模板 |
-| 新增 | `report_templates/email_weekly.html.j2` | 周报邮件模板 |
+| 修改 | `report_common.py` | compute_dispersion() + credibility_weight() |
+| 新增 | `report_templates/weekly_report.html.j2` | 周报 V3 模板（问题卡片含简化版 active/dormant 状态标签） |
+| 新增 | `report_templates/email_weekly.html.j2` | 周报邮件模板（body = 摘要卡片 + "查看完整报告"链接） |
 
 ### Phase 4（月报）
 
 | 操作 | 文件 | 说明 |
 |------|------|------|
 | 修改 | `workflows.py` | MonthlySchedulerWorker |
-| 新增 | `analytics_lifecycle.py` | 问题生命周期派生 |
-| 新增 | `analytics_category.py` | 品类对标 |
-| 新增 | `analytics_scorecard.py` | SKU 计分卡 |
-| 新增 | `analytics_executive.py` | LLM 高管摘要 |
+| 新增 | `qbu_crawler/server/analytics_lifecycle.py` | 问题生命周期派生（独立新模块，非 report_analytics.py 拆分产物） |
+| 新增 | `qbu_crawler/server/analytics_category.py` | 品类对标 |
+| 新增 | `qbu_crawler/server/analytics_scorecard.py` | SKU 计分卡 |
+| 新增 | `qbu_crawler/server/analytics_executive.py` | LLM 高管摘要 |
 | 新增 | `report_templates/monthly_report.html.j2` | 月报模板 |
 | 新增 | `report_templates/email_monthly.html.j2` | 月报邮件模板 |
 | 新增 | `data/category_map.csv` | 品类映射配置 |
@@ -783,10 +804,14 @@ Phase 2 中将 `"report_tier"` 加入 `models.py:update_workflow_run()` 的 `all
 SAFETY_TIERS_PATH=data/safety_tiers.json
 
 # Phase 2
-WEEKLY_SCHEDULER_TIME=09:30
-MONTHLY_SCHEDULER_TIME=09:30
 EMAIL_RECIPIENTS_EXEC=
 EMAIL_RECIPIENTS_SAFETY=
+
+# Phase 3
+WEEKLY_SCHEDULER_TIME=09:30
+
+# Phase 4 (同时加入 monthly)
+MONTHLY_SCHEDULER_TIME=09:30
 
 # Phase 4
 CATEGORY_MAP_PATH=data/category_map.csv
@@ -820,9 +845,14 @@ CATEGORY_MAP_PATH=data/category_map.csv
 
 - [ ] 每周一自动生成周报 HTML + Excel + 邮件
 - [ ] 周报生成前确认窗口内 daily run 已完成
-- [ ] 不完整周期在报告中有提示
+- [ ] 不完整周期在报告中有提示（"本周报覆盖 N/7 天"）
 - [ ] issue 卡片标注"系统性"/"个体"扩散度
+- [ ] issue 卡片展示简化版状态标签（active / dormant 两种）
+- [ ] 冷门周的 Tab 3-5 顶部显示"本周无新数据变动，以下为累积分析"
 - [ ] KPI delta 正确基于上次同 tier 的 run 计算
+- [ ] 周报 issue 卡片关键评论按 RCW 排序
+- [ ] 周报展示标签质量统计（可疑标注数量 + 涉及标签）
+- [ ] 周报 Excel 含 4 个 Sheet（评论明细 + 产品概览 + 问题标签 + 趋势数据）
 
 ### Phase 4
 
@@ -833,10 +863,41 @@ CATEGORY_MAP_PATH=data/category_map.csv
 - [ ] 问题生命周期展示 active/receding/dormant/recurrent
 - [ ] 问题卡片展示时间线 + 评论原文片段 + 竞品参照
 - [ ] SKU 计分卡展示红黄绿灯 + 趋势方向
+- [ ] 月报 Tab 1 总览从扩展指标开始（不重复第 1 屏的 3 个 KPI 卡片）
+- [ ] 月报含逐周摘要（一句话 x 4 周）
+- [ ] 月报 Excel 含 6 个 Sheet（周报 4-sheet + 品类对标 + SKU 计分卡）
+- [ ] 品类对标样本不足时降级为直接竞品配对模式
 
 ---
 
-## 11. 测试策略
+## 11. 邮件 vs HTML 附件策略
+
+三层邮件遵循"邮件 body = 目标受众的最少决策信息"原则：
+
+| Tier | 邮件 body | 附件 | 受众动机 |
+|------|-----------|------|----------|
+| **日报** | 简报全文（三区块卡片内嵌邮件） | 无 | 日报信息量小，不值得打开附件 |
+| **周报** | 摘要卡片（KPI + 本周核心变化 3 条 + "查看完整报告"链接） | HTML + Excel | 邮件告诉你"有没有新东西"，HTML 展示详情 |
+| **月报** | 第 1 屏高管摘要（态势 + 3 KPI + 3 bullet + 安全事件） | HTML + Excel | 高管只看邮件即可决策，深入者打开附件 |
+
+附件"诱饵"文案（邮件底部）：
+- HTML："完整报告含评论原文（含图片证据）和竞品动态 > 查看报告"
+- Excel："结构化数据可导入 BI 系统 > 打开数据表"
+
+## 12. 报告产物命名规范
+
+替代现有 `workflow-run-N-{mode}-report.html` 命名，改为人类可读格式：
+
+```
+{tier}-{date}.html          # daily-2026-04-16.html
+{tier}-{date}.xlsx          # weekly-2026-04-14.xlsx
+{tier}-{date}-snapshot.json # monthly-2026-04-snapshot.json
+{tier}-{date}-analytics.json
+```
+
+---
+
+## 13. 测试策略
 
 ### 时间注入
 
