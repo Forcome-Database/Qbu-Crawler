@@ -1050,3 +1050,146 @@ def test_build_report_analytics_baseline_has_no_deltas(analytics_db, monkeypatch
 
     kpis = analytics["kpis"]
     assert "negative_review_rows_delta" not in kpis
+
+
+# ---------------------------------------------------------------------------
+# Tests for build_dual_report_analytics (P007 Task 3)
+# ---------------------------------------------------------------------------
+
+
+def _build_dual_snapshot(run_id: int, logical_date: str):
+    """Extend _build_snapshot with a 'cumulative' field containing window reviews + 3 older reviews."""
+    window = _build_snapshot(run_id, logical_date)
+    # Additional older reviews for cumulative perspective
+    older_reviews = [
+        {
+            "product_name": "Own Grinder",
+            "product_sku": "OWN-1",
+            "author": "Frank",
+            "headline": "Works well overall",
+            "body": "Good performance for the price.",
+            "rating": 4,
+            "date_published": "2026-03-01",
+            "images": [],
+            "ownership": "own",
+            "headline_cn": "",
+            "body_cn": "",
+            "translate_status": "done",
+        },
+        {
+            "product_name": "Own Grinder",
+            "product_sku": "OWN-1",
+            "author": "Grace",
+            "headline": "Great grinder",
+            "body": "Solid build, easy to use.",
+            "rating": 5,
+            "date_published": "2026-02-15",
+            "images": [],
+            "ownership": "own",
+            "headline_cn": "",
+            "body_cn": "",
+            "translate_status": "done",
+        },
+        {
+            "product_name": "Competitor Grinder",
+            "product_sku": "COMP-1",
+            "author": "Hank",
+            "headline": "Decent product",
+            "body": "Does the job.",
+            "rating": 3,
+            "date_published": "2026-02-01",
+            "images": [],
+            "ownership": "competitor",
+            "headline_cn": "",
+            "body_cn": "",
+            "translate_status": "done",
+        },
+    ]
+    cumulative_reviews = window["reviews"] + older_reviews
+    dual = {
+        **window,
+        "cumulative": {
+            "products": window["products"],
+            "reviews": cumulative_reviews,
+            "products_count": window["products_count"],
+            "reviews_count": len(cumulative_reviews),
+            "translated_count": len(cumulative_reviews),
+            "untranslated_count": 0,
+        },
+    }
+    return dual
+
+
+def test_build_dual_report_analytics_perspective(analytics_db):
+    """Result should have perspective == 'dual' when cumulative field is present."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    result = build_dual_report_analytics(snapshot)
+
+    assert result["perspective"] == "dual"
+
+
+def test_build_dual_report_analytics_has_cumulative_kpis(analytics_db):
+    """cumulative_kpis should be present with correct review count from cumulative data."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    result = build_dual_report_analytics(snapshot)
+
+    assert "cumulative_kpis" in result
+    kpis = result["cumulative_kpis"]
+    # cumulative has 5 (window) + 3 (older) = 8 reviews total
+    cumulative_review_count = len(snapshot["cumulative"]["reviews"])
+    assert kpis["ingested_review_rows"] == cumulative_review_count
+
+
+def test_build_dual_report_analytics_has_window(analytics_db):
+    """window key should be present with reviews_count, own_reviews_count, etc."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    result = build_dual_report_analytics(snapshot)
+
+    assert "window" in result
+    window = result["window"]
+    assert "reviews_count" in window
+    assert "own_reviews_count" in window
+    assert "competitor_reviews_count" in window
+    assert "new_negative_count" in window
+    assert "new_reviews" in window
+    # window reviews_count matches the top-level snapshot reviews (not cumulative)
+    assert window["reviews_count"] == len(snapshot["reviews"])
+    # own_reviews_count + competitor_reviews_count == reviews_count
+    assert window["own_reviews_count"] + window["competitor_reviews_count"] == window["reviews_count"]
+
+
+def test_build_dual_degrades_without_cumulative(analytics_db):
+    """When snapshot has no 'cumulative' field, result should NOT have 'dual' perspective."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_snapshot(run["id"], "2026-03-29")  # old format, no cumulative
+    result = build_dual_report_analytics(snapshot)
+
+    assert result.get("perspective") != "dual"
+    assert "cumulative_kpis" not in result
+    assert "window" not in result
+
+
+def test_build_dual_risk_products_from_cumulative(analytics_db):
+    """risk products should be present (derived from cumulative data)."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    result = build_dual_report_analytics(snapshot)
+
+    # self.risk_products should exist (populated from cumulative reviews)
+    assert "self" in result
+    assert "risk_products" in result["self"]
+    # The list may be empty or non-empty, but the key must be present
+    assert isinstance(result["self"]["risk_products"], list)

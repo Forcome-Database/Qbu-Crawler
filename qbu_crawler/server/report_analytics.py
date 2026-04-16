@@ -1338,7 +1338,7 @@ def _build_trend_data(products, days=30):
     return result
 
 
-def build_report_analytics(snapshot, synced_labels=None):
+def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
 
@@ -1521,7 +1521,7 @@ def build_report_analytics(snapshot, synced_labels=None):
     }
 
     # ── KPI delta computation (Fix-4) ────────────────────────────────────
-    if mode_info["mode"] != "baseline":
+    if not skip_delta and mode_info["mode"] != "baseline":
         from .report_snapshot import load_previous_report_context  # lazy import
         from .report_common import _compute_kpi_deltas
 
@@ -1532,3 +1532,73 @@ def build_report_analytics(snapshot, synced_labels=None):
             analytics["kpis"].update(deltas)
 
     return analytics
+
+
+def build_dual_report_analytics(snapshot, synced_labels=None):
+    """Dual-perspective analytics: cumulative (main) + window (delta).
+
+    If snapshot has no 'cumulative' field (old format), degrades to single
+    perspective by calling build_report_analytics() directly.
+    """
+    if not snapshot.get("cumulative"):
+        return build_report_analytics(snapshot, synced_labels=synced_labels)
+
+    cum = snapshot["cumulative"]
+    cumulative_snapshot = {
+        "run_id": snapshot["run_id"],
+        "logical_date": snapshot["logical_date"],
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
+        "products": cum["products"],
+        "reviews": cum["reviews"],
+        "products_count": cum["products_count"],
+        "reviews_count": cum["reviews_count"],
+        "translated_count": cum.get("translated_count", 0),
+        "untranslated_count": cum.get("untranslated_count", 0),
+    }
+
+    # Cumulative analytics (main body) — WITH delta
+    cum_analytics = build_report_analytics(cumulative_snapshot, synced_labels=synced_labels)
+
+    # Window analytics — skip delta (F3: avoids meaningless window-vs-cumulative comparison)
+    window_analytics = None
+    if snapshot.get("reviews"):
+        window_analytics = build_report_analytics(
+            snapshot, synced_labels=synced_labels, skip_delta=True)
+
+    # Window summary
+    window_reviews = snapshot.get("reviews", [])
+    own_window = [r for r in window_reviews if r.get("ownership") == "own"]
+    neg_threshold = config.NEGATIVE_THRESHOLD
+
+    merged = {
+        **cum_analytics,
+        "perspective": "dual",
+        "cumulative_kpis": cum_analytics["kpis"],
+        "window": {
+            "reviews_count": len(window_reviews),
+            "own_reviews_count": len(own_window),
+            "competitor_reviews_count": len(window_reviews) - len(own_window),
+            "new_negative_count": sum(
+                1 for r in own_window
+                if (r.get("rating") or 5) <= neg_threshold),
+            "new_reviews": window_reviews,
+            "analytics": window_analytics,
+        },
+    }
+
+    # KPI delta: cumulative vs previous cumulative
+    if cum_analytics.get("mode") != "baseline":
+        from .report_snapshot import load_previous_report_context
+        from .report_common import _compute_kpi_deltas
+
+        _run_id = snapshot.get("run_id", 0)
+        prev_analytics, _ = load_previous_report_context(_run_id)
+        if prev_analytics:
+            prev_kpis_source = prev_analytics
+            if prev_analytics.get("cumulative_kpis"):
+                prev_kpis_source = {"kpis": prev_analytics["cumulative_kpis"]}
+            deltas = _compute_kpi_deltas(merged["cumulative_kpis"], prev_kpis_source)
+            merged["cumulative_kpis"].update(deltas)
+            merged["kpis"].update(deltas)
+
+    return merged
