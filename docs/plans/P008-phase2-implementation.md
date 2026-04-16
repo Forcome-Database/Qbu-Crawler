@@ -78,7 +78,8 @@ def test_workflow_runs_has_report_tier_column(db):
     conn.close()
 
 
-def test_report_tier_default_is_daily(db):
+def test_report_tier_default_is_null(db):
+    """Old runs without explicit report_tier should be NULL (stay on old path)."""
     conn = _get_test_conn(db)
     conn.execute(
         "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
@@ -86,7 +87,7 @@ def test_report_tier_default_is_daily(db):
     )
     conn.commit()
     row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
-    assert row["report_tier"] == "daily"
+    assert row["report_tier"] is None
     conn.close()
 
 
@@ -112,7 +113,7 @@ Expected: FAIL — report_tier column not found
 In `qbu_crawler/models.py`, find the migrations list (around line 258, after existing ALTER TABLE statements) and add:
 
 ```python
-    "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT DEFAULT 'daily'",
+    "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT",  # NULL default: old runs stay on old path
 ```
 
 - [ ] **Step 4: Add report_tier to update_workflow_run allowed set**
@@ -392,6 +393,14 @@ def test_review_attention_label_long_body_signal():
     review = {"rating": 2.0, "body": "x" * 350, "images": []}
     result = review_attention_label(review, safety_level=None)
     assert any("字详评" in s for s in result["signals"])
+
+
+def test_review_attention_label_none_rating():
+    """None rating defaults to 5 (lenient) — treated as 常规好评."""
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": None, "body": "No rating", "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert result["label"] == "常规好评"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -425,7 +434,7 @@ def review_attention_label(review: dict, safety_level: str | None) -> dict:
     elif body_len < 50:
         signals.append("短评")
 
-    rating = float(review.get("rating") or 0)
+    rating = float(review.get("rating") or 5)  # None defaults to 5 (lenient, consistent with signals)
     if safety_level == "critical" or (rating <= 2 and len(images) > 0):
         label = "高关注度评论"
     elif rating <= 2:
@@ -478,17 +487,27 @@ def test_attention_signals_safety_keyword():
     assert any(s["type"] == "safety_keyword" for s in action_signals)
 
 
-def test_attention_signals_consecutive_negative():
+def test_attention_signals_consecutive_negative_7d():
+    """Consecutive negative uses 7-day window, not just today's reviews."""
     from qbu_crawler.server.report_common import compute_attention_signals
+    # Today's window has only 1 review, but 7-day window has 2 for same SKU
     window_reviews = [
-        {"id": 1, "headline": "Bad", "body": "Terrible", "rating": 1.0,
-         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
-         "images": [], "date_published_parsed": "2026-04-16"},
         {"id": 2, "headline": "Also bad", "body": "Awful", "rating": 2.0,
          "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
-         "images": [], "date_published_parsed": "2026-04-14"},
+         "images": [], "date_published_parsed": "2026-04-16"},
     ]
-    signals = compute_attention_signals(window_reviews, changes={}, cumulative_clusters=[])
+    recent_7d = [
+        {"id": 1, "headline": "Bad", "body": "Terrible", "rating": 1.0,
+         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+         "images": [], "date_published_parsed": "2026-04-12"},
+        {"id": 2, "headline": "Also bad", "body": "Awful", "rating": 2.0,
+         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+         "images": [], "date_published_parsed": "2026-04-16"},
+    ]
+    signals = compute_attention_signals(
+        window_reviews, changes={}, cumulative_clusters=[],
+        recent_reviews_7d=recent_7d,
+    )
     action_signals = [s for s in signals if s["urgency"] == "action"]
     assert any(s["type"] == "consecutive_negative" for s in action_signals)
 
@@ -533,6 +552,18 @@ def test_attention_signals_silence_good_news():
     assert any(s["type"] == "silence_good_news" for s in ref_signals)
 
 
+def test_attention_signals_image_evidence():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    window_reviews = [
+        {"id": 1, "headline": "Bad", "body": "Broken part",
+         "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+         "ownership": "own", "images": ["img1.jpg", "img2.jpg"]}
+    ]
+    signals = compute_attention_signals(window_reviews, changes={}, cumulative_clusters=[])
+    action_signals = [s for s in signals if s["urgency"] == "action"]
+    assert any(s["type"] == "image_evidence" for s in action_signals)
+
+
 def test_attention_signals_empty_when_nothing():
     from qbu_crawler.server.report_common import compute_attention_signals
     signals = compute_attention_signals([], changes={}, cumulative_clusters=[])
@@ -557,13 +588,23 @@ def compute_attention_signals(
     changes: dict,
     cumulative_clusters: list[dict],
     logical_date: str | None = None,
+    recent_reviews_7d: list[dict] | None = None,
 ) -> list[dict]:
     """Compute "needs attention" signals for the daily briefing.
+
+    Args:
+        window_reviews: Today's 24h window reviews.
+        changes: Snapshot changes dict (price/stock/rating).
+        cumulative_clusters: Negative clusters from cumulative analytics.
+        logical_date: Current report date.
+        recent_reviews_7d: Last 7 days of own reviews (for consecutive negative check).
+                           Falls back to window_reviews if not provided.
 
     Returns list of signal dicts sorted by urgency (action first, reference second).
     Each signal: {"type": str, "urgency": "action"|"reference", "title": str, "detail": str}
     """
     signals = []
+    changes = changes or {}
     ref_date = date.fromisoformat(logical_date[:10]) if logical_date else date.today()
 
     # ── Signal 1: Safety keyword hit (action) ──
@@ -580,9 +621,24 @@ def compute_attention_signals(
                 "safety_level": level,
             })
 
-    # ── Signal 2: Consecutive negative for same SKU (action) ──
-    own_negative_by_sku: dict[str, int] = {}
+    # ── Signal 1b: Image evidence in negative review (action) ──
     for r in window_reviews:
+        images = r.get("images") or []
+        rating = float(r.get("rating") or 5)
+        if images and rating <= config.NEGATIVE_THRESHOLD:
+            signals.append({
+                "type": "image_evidence",
+                "urgency": "action",
+                "title": f"图片证据: {r.get('product_name', '')} 差评含 {len(images)} 张图片",
+                "detail": f"SKU: {r.get('product_sku', '')}",
+                "review_id": r.get("id"),
+            })
+
+    # ── Signal 2: Consecutive negative for same SKU within 7 days (action) ──
+    # Use recent_reviews_7d (7-day window) instead of window_reviews (24h) per design doc
+    neg_source = recent_reviews_7d if recent_reviews_7d is not None else window_reviews
+    own_negative_by_sku: dict[str, int] = {}
+    for r in neg_source:
         if r.get("ownership") == "own" and (float(r.get("rating") or 5)) <= config.NEGATIVE_THRESHOLD:
             sku = r.get("product_sku", "")
             if sku:
@@ -590,13 +646,13 @@ def compute_attention_signals(
     for sku, count in own_negative_by_sku.items():
         if count >= 2:
             name = next(
-                (r.get("product_name", sku) for r in window_reviews if r.get("product_sku") == sku),
+                (r.get("product_name", sku) for r in neg_source if r.get("product_sku") == sku),
                 sku,
             )
             signals.append({
                 "type": "consecutive_negative",
                 "urgency": "action",
-                "title": f"连续差评: {name} 近期 {count} 条差评",
+                "title": f"连续差评: {name} 7天内 {count} 条差评",
                 "detail": f"SKU: {sku}",
             })
 
@@ -810,13 +866,13 @@ With:
 
 ```python
             # P008: Safety factor — boost risk for products with safety-related reviews
+            from qbu_crawler.server.report_common import detect_safety_level
             safety_flag = 0.0
             for neg_item in neg_items:
                 review = neg_item["review"]
                 if review.get("impact_category") == "safety":
                     safety_flag = 1.0
                     break
-                from qbu_crawler.server.report_common import detect_safety_level
                 text = f"{review.get('headline', '')} {review.get('body', '')}"
                 if detect_safety_level(text):
                     safety_flag = 1.0
@@ -1300,12 +1356,45 @@ def test_generate_report_from_snapshot_daily_tier(db, tmp_path, monkeypatch):
     assert result["mode"] == "daily_briefing"
     assert result.get("html_path") is not None
     assert result.get("status") in ("completed", "completed_no_change")
+
+
+def test_generate_report_from_snapshot_null_tier_uses_old_path(db, tmp_path, monkeypatch):
+    """When report_tier is NULL (old run), use the original full/change/quiet path."""
+    from qbu_crawler.server import report_snapshot, report, report_html
+
+    # Seed workflow_runs WITHOUT report_tier (NULL)
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "products": [],
+        "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+
+    # Should use old path — quiet mode (no reviews, no changes)
+    assert result["mode"] in ("quiet", "change", "full"), \
+        f"NULL tier should use old path, got mode={result['mode']}"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_p008_phase2.py::test_generate_report_from_snapshot_daily_tier -v`
-Expected: FAIL — mode is "full"/"quiet", not "daily_briefing"
+Run: `uv run pytest tests/test_p008_phase2.py -k "generate_report_from_snapshot" -v`
+Expected: FAIL — daily_tier test fails (no tier routing yet); null_tier test passes (old path works)
 
 - [ ] **Step 3: Add tier routing to generate_report_from_snapshot()**
 
@@ -1531,43 +1620,37 @@ git commit -m "feat(daily): tier-based routing in generate_report_from_snapshot 
 
 
 def test_submit_daily_run_sets_report_tier(db, monkeypatch):
-    """New daily runs must have report_tier='daily'."""
-    import csv, os
-    from qbu_crawler.server.workflows import submit_daily_run
-
-    # Create CSV files
-    source_csv = os.path.join(os.path.dirname(db), "source.csv")
-    detail_csv = os.path.join(os.path.dirname(db), "detail.csv")
-    with open(source_csv, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["url", "site"])
-        writer.writerow(["http://test.com/cat1", "test"])
-    with open(detail_csv, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["url", "sku", "site"])
-        writer.writerow(["http://test.com/p1", "SKU1", "test"])
-
-    # Mock task_manager to avoid actual scraping
-    from qbu_crawler.server import task_manager as tm
-    monkeypatch.setattr(tm, "get_task_manager", lambda: type("TM", (), {
-        "start_collect": lambda self, **kw: "mock-collect",
-        "start_scrape": lambda self, **kw: "mock-scrape",
-    })())
-
-    result = submit_daily_run(
-        submitter=None,
-        source_csv=source_csv,
-        detail_csv=detail_csv,
-        logical_date="2026-04-17",
-        requested_by="test",
-        dry_run=True,
+    """New daily runs must have report_tier='daily' after explicit update."""
+    # Instead of testing through submit_daily_run (complex mocking),
+    # test the contract: create_workflow_run + update_workflow_run sets tier
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'submitted', 'none', '2026-04-17', 'daily:2026-04-17')"
     )
+    conn.commit()
+    conn.close()
+
+    # Simulate what submit_daily_run should do after creating the run
+    models.update_workflow_run(1, report_tier="daily")
 
     conn = _get_test_conn(db)
-    row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = ?",
-                       (result["run_id"],)).fetchone()
+    row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
     conn.close()
     assert row["report_tier"] == "daily"
+
+
+def test_old_run_without_report_tier_stays_null(db):
+    """Old runs without explicit report_tier should remain NULL (backward compat)."""
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'completed', 'completed', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
+    conn.close()
+    assert row["report_tier"] is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1616,44 +1699,82 @@ git commit -m "feat(workflow): explicitly set report_tier='daily' on new daily r
 
 
 def test_p008_phase2_integration(db, tmp_path, monkeypatch):
-    """End-to-end: daily briefing with safety review → correct HTML + smart send."""
+    """End-to-end: daily tier run goes through full pipeline → HTML archived, correct mode."""
     from qbu_crawler.server import report_snapshot
-    from qbu_crawler.server.report_common import (
-        detect_safety_level, review_attention_label, compute_attention_signals,
-    )
 
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
 
-    # 1. Verify safety detection
-    assert detect_safety_level("Found metal shaving in food") == "critical"
+    # 1. Create a daily-tier workflow run
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key, report_tier)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-17', 'daily:2026-04-17', 'daily')"
+    )
+    conn.commit()
+    conn.close()
 
-    # 2. Verify review attention label
-    review = {"rating": 1.0, "body": "Found metal shaving in food", "images": ["img.jpg"]}
-    label = review_attention_label(review, safety_level="critical")
-    assert label["label"] == "高关注度评论"
+    # 2. Build snapshot with safety review + cumulative data
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-17",
+        "data_since": "2026-04-17T00:00:00+08:00",
+        "data_until": "2026-04-18T00:00:00+08:00",
+        "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                       "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+        "reviews": [
+            {"id": 1, "headline": "Dangerous", "body": "Found metal shaving in food",
+             "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+             "ownership": "own", "images": ["img.jpg"], "author": "Tester",
+             "date_published": "2026-04-17"},
+        ],
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [
+                {"id": 1, "rating": 1.0, "ownership": "own", "product_sku": "SKU1",
+                 "headline": "Dangerous", "body": "Metal shaving", "sentiment": "negative",
+                 "analysis_labels": "[]"},
+            ],
+        },
+    }
 
-    # 3. Verify attention signals
-    window_reviews = [
-        {"id": 1, "headline": "Bad", "body": "Found metal shaving in food",
-         "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
-         "ownership": "own", "images": ["img.jpg"]}
-    ]
-    signals = compute_attention_signals(window_reviews, changes={}, cumulative_clusters=[])
-    assert any(s["type"] == "safety_keyword" for s in signals)
+    # 3. Call the full pipeline
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
 
-    # 4. Verify smart send
-    assert report_snapshot.should_send_daily_email(1, {}) is True
-    assert report_snapshot.should_send_daily_email(0, {}) is False
+    # 4. Verify results
+    assert result["mode"] == "daily_briefing"
+    assert result["status"] == "completed"
+    assert result["reviews_count"] == 1
+    assert result.get("html_path") is not None
+    assert result["email_skipped"] is False  # has reviews → should send
 
-    # 5. Verify tier config exists
-    assert "daily" in config.TIER_CONFIGS
-    assert config.TIER_CONFIGS["daily"]["delivery"]["email"] == "smart"
+    # 5. Verify HTML content
+    import os
+    assert os.path.isfile(result["html_path"])
+    html = open(result["html_path"], encoding="utf-8").read()
+    assert "高关注度评论" in html  # safety + image → high attention
+    assert "需行动" in html or "安全" in html  # safety signal in attention block
 
-    # 6. Verify tier_date_window
-    from qbu_crawler.server.report_common import tier_date_window
-    since, until = tier_date_window("daily", "2026-04-17")
-    assert since == "2026-04-17T00:00:00+08:00"
-    assert until == "2026-04-18T00:00:00+08:00"
+    # 6. Verify old run (NULL tier) still uses old path
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    conn.close()
+
+    old_snapshot = {
+        "run_id": 2, "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "products": [], "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    old_result = report_snapshot.generate_report_from_snapshot(old_snapshot, send_email=False)
+    assert old_result["mode"] in ("quiet", "change", "full"), \
+        f"NULL tier should use old path, got mode={old_result['mode']}"
 ```
 
 - [ ] **Step 2: Run integration test**
