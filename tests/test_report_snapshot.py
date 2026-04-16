@@ -839,3 +839,168 @@ def test_get_email_recipients_returns_empty_when_no_source(monkeypatch, tmp_path
     )
     result = report_snapshot._get_email_recipients()
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for dual-perspective snapshot (P007 Task 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def dual_snapshot_db(tmp_path, monkeypatch):
+    """DB with 1 product and 2 reviews across 2 days; workflow window = day 2 only."""
+    db_file = str(tmp_path / "dual.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "dual")
+
+    models.init_db()
+
+    conn = _get_test_conn(db_file)
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "https://example.com/product/dual-1",
+            "basspro",
+            "Dual Product",
+            "SKU-DUAL-1",
+            49.99,
+            "in_stock",
+            2,
+            4.5,
+            "own",
+            "2026-04-15 10:00:00",
+        ),
+    )
+    product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-DUAL-1'").fetchone()["id"]
+
+    # Day 1 review — outside the window (before data_since)
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at,
+                             headline_cn, body_cn, translate_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            product_id,
+            "Bob",
+            "Old review",
+            "Day 1 body",
+            "hash-d1",
+            4.0,
+            "2026-04-14",
+            json.dumps([]),
+            "2026-04-14 09:00:00",
+            "",
+            "",
+            "pending",
+        ),
+    )
+
+    # Day 2 review — inside the window (on/after data_since)
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at,
+                             headline_cn, body_cn, translate_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            product_id,
+            "Alice",
+            "New review",
+            "Day 2 body",
+            "hash-d2",
+            5.0,
+            "2026-04-15",
+            json.dumps([]),
+            "2026-04-15 10:00:00",
+            "",
+            "",
+            "done",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    run = models.create_workflow_run(
+        {
+            "workflow_type": "daily",
+            "status": "reporting",
+            "logical_date": "2026-04-15",
+            "trigger_key": "daily:2026-04-15:dual",
+            "data_since": "2026-04-15T00:00:00+08:00",
+            "data_until": "2026-04-16T00:00:00+08:00",
+            "requested_by": "systemd",
+            "service_version": "test",
+        }
+    )
+    return {"db_file": db_file, "run": run, "tmp_path": tmp_path}
+
+
+def test_dual_snapshot_has_cumulative_field(dual_snapshot_db):
+    """When REPORT_PERSPECTIVE='dual', snapshot includes cumulative with all products+reviews."""
+    import hashlib
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert "cumulative" in snapshot, "cumulative field should be present for dual perspective"
+    cum = snapshot["cumulative"]
+    assert cum["products_count"] == 1
+    assert cum["reviews_count"] == 2
+
+
+def test_dual_snapshot_window_only_has_new_reviews(dual_snapshot_db):
+    """Window-only data in snapshot['reviews'] should contain only day-2 review."""
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert snapshot["reviews_count"] == 1, "Window should only contain 1 review (day 2)"
+    assert snapshot["reviews"][0]["headline"] == "New review"
+
+
+def test_dual_snapshot_hash_excludes_cumulative(dual_snapshot_db):
+    """snapshot_hash must be computed without the cumulative field."""
+    import hashlib
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    # Recompute hash without cumulative
+    hash_payload = {k: v for k, v in snapshot.items() if k != "cumulative"}
+    # Remove snapshot_hash itself for recomputation (it was added after hashing)
+    hash_payload.pop("snapshot_hash", None)
+    expected_hash = hashlib.sha1(
+        json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    assert snapshot["snapshot_hash"] == expected_hash, (
+        "snapshot_hash should be computed without the cumulative field"
+    )
+
+
+def test_window_perspective_skips_cumulative(dual_snapshot_db, monkeypatch):
+    """When REPORT_PERSPECTIVE='window', snapshot should NOT have cumulative field."""
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "window")
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert "cumulative" not in snapshot, "cumulative should be absent for window perspective"

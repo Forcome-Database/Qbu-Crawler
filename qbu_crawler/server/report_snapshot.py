@@ -325,8 +325,24 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         "translated_count": translated_count,
         "untranslated_count": len(reviews) - translated_count,
     }
+
+    # ── Dual-perspective: embed cumulative (all-time) data ──
+    if config.REPORT_PERSPECTIVE == "dual":
+        cum_products, cum_reviews = report.query_cumulative_data()
+        cum_translated = sum(1 for r in cum_reviews if r.get("translate_status") == "done")
+        snapshot["cumulative"] = {
+            "products": cum_products,
+            "reviews": cum_reviews,
+            "products_count": len(cum_products),
+            "reviews_count": len(cum_reviews),
+            "translated_count": cum_translated,
+            "untranslated_count": len(cum_reviews) - cum_translated,
+        }
+
+    # ── Hash excludes cumulative (Correction C) ──
+    hash_payload = {k: v for k, v in snapshot.items() if k != "cumulative"}
     snapshot_hash = hashlib.sha1(
-        json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
