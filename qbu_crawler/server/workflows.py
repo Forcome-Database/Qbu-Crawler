@@ -170,6 +170,9 @@ def submit_daily_run(
     if not run.get("created", True):
         return {"created": False, "run": run, "trigger_key": trigger_key}
 
+    # P008 Phase 2: Tag new daily runs for three-block pipeline
+    models.update_workflow_run(run["id"], report_tier="daily")
+
     collect_task_ids: list[str] = []
     scrape_task_ids: list[str] = []
 

@@ -425,3 +425,108 @@ def test_email_daily_template_renders():
     )
     assert "72.3" in html
     assert "QBU" in html
+
+# ── Task 10: Tier routing integration ────────────────────────────
+
+
+def test_generate_report_from_snapshot_daily_tier(db, tmp_path, monkeypatch):
+    """When report_tier == 'daily', use new three-block pipeline."""
+    from qbu_crawler.server import report_snapshot
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key, report_tier)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-17', 'daily:2026-04-17', 'daily')"
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-17",
+        "data_since": "2026-04-17T00:00:00+08:00",
+        "data_until": "2026-04-18T00:00:00+08:00",
+        "products": [],
+        "reviews": [],
+        "cumulative": {
+            "products": [{"name": "Test", "sku": "SKU1", "ownership": "own", "rating": 4.5,
+                          "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [{"id": 1, "rating": 5.0, "ownership": "own", "product_sku": "SKU1",
+                         "headline": "Good", "body": "Works", "sentiment": "positive",
+                         "analysis_labels": "[]"}],
+        },
+    }
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+
+    assert result["mode"] == "daily_briefing"
+    assert result.get("html_path") is not None
+    assert result.get("status") in ("completed", "completed_no_change")
+
+
+def test_generate_report_from_snapshot_null_tier_uses_old_path(db, tmp_path, monkeypatch):
+    """When report_tier is NULL (old run), use the original full/change/quiet path."""
+    from qbu_crawler.server import report_snapshot
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "products": [],
+        "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+
+    assert result["mode"] in ("quiet", "change", "full"), \
+        f"NULL tier should use old path, got mode={result['mode']}"
+
+
+# ── Task 11: Workflow integration ────────────────────────────────
+
+
+def test_submit_daily_run_sets_report_tier(db):
+    """New daily runs must have report_tier='daily' after explicit update."""
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'submitted', 'none', '2026-04-17', 'daily:2026-04-17')"
+    )
+    conn.commit()
+    conn.close()
+
+    models.update_workflow_run(1, report_tier="daily")
+
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
+    conn.close()
+    assert row["report_tier"] == "daily"
+
+
+def test_old_run_without_report_tier_stays_null(db):
+    """Old runs without explicit report_tier should remain NULL (backward compat)."""
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'completed', 'completed', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
+    conn.close()
+    assert row["report_tier"] is None
