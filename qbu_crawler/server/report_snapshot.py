@@ -817,7 +817,11 @@ def _generate_daily_briefing(snapshot, send_email=True):
         email_result = {"success": True, "error": "Smart send: no content", "recipients": []}
 
     try:
-        models.update_workflow_run(run_id, report_mode="standard")
+        models.update_workflow_run(
+            run_id,
+            report_mode="standard",
+            analytics_path=analytics_path,
+        )
     except Exception:
         pass
 
