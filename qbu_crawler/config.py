@@ -152,6 +152,7 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 # ── Report ────────────────────────────────────────
 REPORT_LABEL_MODE = _enum_env("REPORT_LABEL_MODE", "rule", ("rule", "hybrid"))
+REPORT_PERSPECTIVE = _enum_env("REPORT_PERSPECTIVE", "dual", ("dual", "window"))
 # PDF config removed in V3 — Playwright pipeline eliminated
 # ── Report Thresholds ─────────────────────────────
 NEGATIVE_THRESHOLD = int(os.getenv("REPORT_NEGATIVE_THRESHOLD", "2"))

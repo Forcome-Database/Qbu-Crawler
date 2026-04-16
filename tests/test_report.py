@@ -1028,3 +1028,185 @@ def test_generate_report_email_no_recipients(patch_db, tmp_path, monkeypatch):
     # No recipients → send_email returns error, but generate_report doesn't raise
     assert result["email"] is not None
     assert result["email"]["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# query_cumulative_data + REPORT_PERSPECTIVE config
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def cumulative_db(tmp_path, monkeypatch):
+    """Temp DB with 2 products (own + competitor) and 5 reviews (1 with analysis)."""
+    import sqlite3
+
+    db_file = str(tmp_path / "cumulative.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+
+    models.init_db()
+
+    conn = _get_test_conn(db_file)
+
+    # Product 1 — own
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            "https://example.com/product/own-1",
+            "basspro",
+            "Own Grinder",
+            "OWN-001",
+            99.99,
+            "in_stock",
+            3,
+            4.5,
+            "own",
+        ),
+    )
+    # Product 2 — competitor
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            "https://example.com/product/comp-1",
+            "waltons",
+            "Competitor Grinder",
+            "COMP-001",
+            89.99,
+            "in_stock",
+            2,
+            4.0,
+            "competitor",
+        ),
+    )
+    conn.commit()
+
+    own_id = conn.execute("SELECT id FROM products WHERE sku = 'OWN-001'").fetchone()["id"]
+    comp_id = conn.execute("SELECT id FROM products WHERE sku = 'COMP-001'").fetchone()["id"]
+
+    images_json = json.dumps(["https://img.example.com/1.jpg"])
+
+    # 3 reviews for own product
+    for i in range(3):
+        conn.execute(
+            """
+            INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                                 rating, date_published, images, scraped_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            (
+                own_id,
+                f"Author {i}",
+                f"Own review {i}",
+                f"Body for own review {i}",
+                f"hash_own_{i}",
+                5.0,
+                "2026-03-01",
+                images_json if i == 0 else None,
+            ),
+        )
+    # 2 reviews for competitor product
+    for i in range(2):
+        conn.execute(
+            """
+            INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                                 rating, date_published, images, scraped_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            (
+                comp_id,
+                f"Comp Author {i}",
+                f"Comp review {i}",
+                f"Body for comp review {i}",
+                f"hash_comp_{i}",
+                4.0,
+                "2026-03-02",
+                None,
+            ),
+        )
+    conn.commit()
+
+    # Insert review_analysis for the first review (F2: include prompt_version)
+    first_review_id = conn.execute(
+        "SELECT id FROM reviews ORDER BY id ASC LIMIT 1"
+    ).fetchone()["id"]
+    conn.execute(
+        """
+        INSERT INTO review_analysis (review_id, sentiment, sentiment_score,
+                                     labels, features, insight_cn, insight_en,
+                                     prompt_version, analyzed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            first_review_id,
+            "positive",
+            0.9,
+            '["quality_stability"]',
+            '[]',
+            "做工扎实",
+            "Well built",
+            "v1",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    yield db_file
+
+
+def test_query_cumulative_data_returns_all_products(cumulative_db):
+    """query_cumulative_data returns all 2 products regardless of scraped_at."""
+    from qbu_crawler.server.report import query_cumulative_data
+
+    products, _ = query_cumulative_data()
+
+    assert len(products) == 2
+    skus = {p["sku"] for p in products}
+    assert "OWN-001" in skus
+    assert "COMP-001" in skus
+
+
+def test_query_cumulative_data_returns_all_reviews(cumulative_db):
+    """query_cumulative_data returns all 5 reviews across both products."""
+    from qbu_crawler.server.report import query_cumulative_data
+
+    _, reviews = query_cumulative_data()
+
+    assert len(reviews) == 5
+
+
+def test_query_cumulative_data_includes_analysis_fields(cumulative_db):
+    """The review with analysis has sentiment and analysis_labels populated."""
+    from qbu_crawler.server.report import query_cumulative_data
+
+    _, reviews = query_cumulative_data()
+
+    analyzed = [r for r in reviews if r.get("sentiment") is not None]
+    assert len(analyzed) == 1
+    r = analyzed[0]
+    assert r["sentiment"] == "positive"
+    assert r["analysis_labels"] is not None
+
+
+def test_query_cumulative_data_analysis_null_when_missing(cumulative_db):
+    """Reviews without analysis have None for sentiment and analysis_labels."""
+    from qbu_crawler.server.report import query_cumulative_data
+
+    _, reviews = query_cumulative_data()
+
+    no_analysis = [r for r in reviews if r.get("sentiment") is None]
+    assert len(no_analysis) == 4
+    for r in no_analysis:
+        assert r["sentiment"] is None
+        assert r["analysis_labels"] is None
+
+
+def test_report_perspective_config_default():
+    """REPORT_PERSPECTIVE defaults to 'dual'."""
+    assert config.REPORT_PERSPECTIVE == "dual"

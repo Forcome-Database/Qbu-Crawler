@@ -1032,6 +1032,70 @@ def query_report_data(
     return products, reviews
 
 
+def query_cumulative_data() -> tuple[list[dict], list[dict]]:
+    """Query all products and all reviews (no time-window filter).
+
+    Returns (products, reviews) — both as lists of dicts.
+    Reviews include the latest analysis fields (sentiment, analysis_labels, etc.)
+    via a LEFT JOIN with MAX(analyzed_at) subquery to prevent duplicate rows.
+    """
+    conn = models.get_conn()
+    try:
+        product_rows = conn.execute(
+            """
+            SELECT url, name, sku, price, stock_status, rating, review_count,
+                   scraped_at, site, ownership
+            FROM products
+            ORDER BY scraped_at DESC
+            """
+        ).fetchall()
+        products = [dict(r) for r in product_rows]
+
+        review_rows = conn.execute(
+            """
+            SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+                   r.author, r.headline, r.body, r.rating,
+                   r.date_published, r.date_published_parsed, r.images,
+                   p.ownership,
+                   r.headline_cn, r.body_cn, r.translate_status,
+                   ra.sentiment,
+                   ra.sentiment_score,
+                   ra.labels   AS analysis_labels,
+                   ra.features AS analysis_features,
+                   ra.insight_cn AS analysis_insight_cn,
+                   ra.insight_en AS analysis_insight_en
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            LEFT JOIN review_analysis ra
+                ON ra.review_id = r.id
+                AND ra.analyzed_at = (
+                    SELECT MAX(ra2.analyzed_at)
+                    FROM review_analysis ra2
+                    WHERE ra2.review_id = r.id
+                )
+            ORDER BY r.scraped_at DESC
+            """
+        ).fetchall()
+        reviews = []
+        for row in review_rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = json.loads(data["images"])
+                except Exception:
+                    pass
+            reviews.append(data)
+    finally:
+        conn.close()
+
+    logger.info(
+        "query_cumulative_data: %d products, %d reviews",
+        len(products),
+        len(reviews),
+    )
+    return products, reviews
+
+
 def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
     """Query products and reviews for a normalized scope."""
     conn = models.get_conn()
