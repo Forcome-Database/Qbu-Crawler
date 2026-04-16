@@ -1004,3 +1004,77 @@ def test_window_perspective_skips_cumulative(dual_snapshot_db, monkeypatch):
     snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
 
     assert "cumulative" not in snapshot, "cumulative should be absent for window perspective"
+
+
+# ---------------------------------------------------------------------------
+# Tests for dual-perspective report generation routing (P007 Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_full_report_continues_with_cumulative_no_window_reviews(dual_snapshot_db, monkeypatch):
+    """When window has no reviews but cumulative exists, should NOT early-return."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Remove window reviews to simulate no-new-reviews day
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # Mock out expensive operations
+    monkeypatch.setattr(config, "LLM_API_BASE", "")  # disable LLM
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+
+    result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+
+    # Should NOT get "completed_no_change" because cumulative data exists
+    assert result.get("status") != "completed_no_change"
+    # Should have analytics path (dual analytics was computed)
+    assert result.get("analytics_path") is not None
+
+
+def test_full_report_early_returns_without_cumulative_or_reviews(snapshot_db, monkeypatch):
+    """Without cumulative and without reviews, should still early-return."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "window")
+    run = snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-03-29T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Remove reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+    assert result.get("status") == "completed_no_change"
+
+
+def test_full_report_analytics_has_dual_perspective(dual_snapshot_db, monkeypatch):
+    """Full report analytics should contain perspective='dual' when cumulative exists."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    gen_result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+
+    # Load saved analytics and verify dual perspective
+    analytics = json.loads(Path(gen_result["analytics_path"]).read_text(encoding="utf-8"))
+    assert analytics.get("perspective") == "dual"
+    assert "cumulative_kpis" in analytics
+    assert "window" in analytics

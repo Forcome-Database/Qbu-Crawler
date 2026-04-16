@@ -681,6 +681,49 @@ def _render_full_email_html(snapshot, analytics):
     alert_level = alert[0] if isinstance(alert, (list, tuple)) else "green"
     alert_text = alert[1] if isinstance(alert, (list, tuple)) else ""
 
+    # Dual-perspective template variables (Correction E)
+    cumulative_kpis = normalized.get("cumulative_kpis") or normalized.get("kpis", {})
+    window = normalized.get("window", {})
+    health_confidence = cumulative_kpis.get("health_confidence", "high")
+
+    # F4 fix: load previous context ONCE, reuse for detect_snapshot_changes,
+    # cluster_changes, and prev_analytics
+    prev_analytics_ctx = None
+    prev_snapshot = None
+    run_id = snapshot.get("run_id", 0)
+    if run_id:
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
+    changes = detect_snapshot_changes(snapshot, prev_snapshot)
+
+    # New review summary for email template
+    window_reviews = window.get("new_reviews") or snapshot.get("reviews", [])
+    own_new = [r for r in window_reviews if r.get("ownership") == "own"]
+    comp_new = [r for r in window_reviews if r.get("ownership") == "competitor"]
+    new_review_summary = {
+        "own_count": len(own_new),
+        "comp_count": len(comp_new),
+        "own_negative": sum(
+            1 for r in own_new if (r.get("rating") or 5) <= config.NEGATIVE_THRESHOLD
+        ),
+    }
+
+    # Compute cluster changes for "today's changes" section
+    prev_clusters = None
+    if prev_analytics_ctx:
+        prev_clusters = (prev_analytics_ctx.get("self") or {}).get("top_negative_clusters")
+    cluster_changes = compute_cluster_changes(
+        (normalized.get("self") or {}).get("top_negative_clusters", []),
+        prev_clusters,
+        snapshot.get("logical_date", ""),
+    )
+
+    # Build report URL
+    report_url = ""
+    report_html_public_url = getattr(config, "REPORT_HTML_PUBLIC_URL", "")
+    if report_html_public_url:
+        html_name = f"workflow-run-{run_id}-full-report.html"
+        report_url = f"{report_html_public_url}/{html_name}"
+
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         logical_date=snapshot.get("logical_date", ""),
@@ -691,6 +734,13 @@ def _render_full_email_html(snapshot, analytics):
         report_copy=normalized.get("report_copy") or analytics.get("report_copy") or {},
         risk_products=(normalized.get("self") or {}).get("risk_products", [])[:3],
         threshold=config.NEGATIVE_THRESHOLD,
+        # New dual-perspective variables
+        cumulative_kpis=cumulative_kpis,
+        window=window,
+        health_confidence=health_confidence,
+        changes=cluster_changes,
+        new_review_summary=new_review_summary,
+        report_url=report_url,
     )
 
 
@@ -699,7 +749,7 @@ def generate_full_report_from_snapshot(
     send_email: bool = True,
     output_path: str | None = None,
 ) -> dict:
-    if not snapshot.get("reviews"):
+    if not snapshot.get("reviews") and not snapshot.get("cumulative"):
         return {"status": "completed_no_change", "reason": "No new reviews"}
 
     report_date = datetime.fromisoformat(
@@ -725,8 +775,24 @@ def generate_full_report_from_snapshot(
     html_path = None
 
     try:
-        synced_labels = report_analytics.sync_review_labels(snapshot)
-        analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced_labels)
+        # Correction F: sync labels on cumulative reviews (superset), call once
+        if snapshot.get("cumulative"):
+            _label_snapshot = {
+                "reviews": snapshot["cumulative"]["reviews"],
+            }
+        else:
+            _label_snapshot = snapshot
+        synced_labels = report_analytics.sync_review_labels(_label_snapshot)
+
+        # Use dual analytics when cumulative data exists
+        if snapshot.get("cumulative"):
+            analytics = report_analytics.build_dual_report_analytics(
+                snapshot, synced_labels=synced_labels,
+            )
+        else:
+            analytics = report_analytics.build_report_analytics(
+                snapshot, synced_labels=synced_labels,
+            )
 
         # Pre-normalize so LLM gets gap_analysis, enriched clusters, and top_symptoms
         from qbu_crawler.server.report_common import normalize_deep_report_analytics
@@ -756,9 +822,16 @@ def generate_full_report_from_snapshot(
             encoding="utf-8",
         )
 
+        # Excel uses cumulative reviews when available, with window ID marking
+        if snapshot.get("cumulative"):
+            _excel_products = snapshot["cumulative"]["products"]
+            _excel_reviews = snapshot["cumulative"]["reviews"]
+        else:
+            _excel_products = snapshot["products"]
+            _excel_reviews = snapshot["reviews"]
         excel_path = report.generate_excel(
-            snapshot["products"],
-            snapshot["reviews"],
+            _excel_products,
+            _excel_reviews,
             report_date=report_date,
             output_path=output_path,
             analytics=analytics,
