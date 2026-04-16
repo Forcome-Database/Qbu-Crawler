@@ -716,19 +716,189 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     }
 
 
+def _generate_daily_briefing(snapshot, send_email=True):
+    """P008 Phase 2: Generate three-block daily briefing.
+
+    Always archives HTML. Only sends email when should_send_daily_email() is True.
+    """
+    run_id = snapshot.get("run_id", 0)
+    logical_date = snapshot.get("logical_date", "")
+
+    # Load previous context for change detection
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+    changes = detect_snapshot_changes(snapshot, prev_snapshot) if prev_snapshot else {}
+
+    # Compute cumulative analytics
+    cum_analytics = None
+    analytics_path = None
+    if snapshot.get("cumulative"):
+        try:
+            cum_snapshot = {
+                "run_id": run_id,
+                "logical_date": logical_date,
+                "data_since": snapshot.get("data_since", ""),
+                "data_until": snapshot.get("data_until", ""),
+                "snapshot_hash": snapshot.get("snapshot_hash", ""),
+                **snapshot["cumulative"],
+            }
+            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            from qbu_crawler.server.report_common import normalize_deep_report_analytics
+            cum_analytics = normalize_deep_report_analytics(cum_analytics)
+            os.makedirs(config.REPORT_DIR, exist_ok=True)
+            analytics_path = os.path.join(
+                config.REPORT_DIR,
+                f"daily-{logical_date}-analytics.json",
+            )
+            Path(analytics_path).write_text(
+                json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            _logger.exception("Daily briefing: cumulative analytics failed")
+
+    cumulative_kpis = (cum_analytics or {}).get("kpis", {})
+
+    # Compute attention signals
+    from qbu_crawler.server.report_common import (
+        compute_attention_signals, review_attention_label, detect_safety_level,
+    )
+    window_reviews = snapshot.get("reviews", [])
+
+    # Enrich changes with ownership from products
+    product_ownership = {
+        p.get("sku"): p.get("ownership")
+        for p in (snapshot.get("cumulative", {}).get("products", []) or snapshot.get("products", []))
+    }
+    for change_type in ("rating_changes", "stock_changes", "price_changes"):
+        for ch in changes.get(change_type, []):
+            ch.setdefault("ownership", product_ownership.get(ch.get("sku"), ""))
+
+    cumulative_clusters = (cum_analytics or {}).get("self", {}).get("top_negative_clusters", [])
+    attention_signals = compute_attention_signals(
+        window_reviews, changes, cumulative_clusters, logical_date=logical_date,
+    )
+
+    # Enrich reviews with attention labels
+    enriched_reviews = []
+    for r in window_reviews:
+        r_copy = dict(r)
+        text = f"{r.get('headline', '')} {r.get('body', '')}"
+        level = detect_safety_level(text)
+        r_copy["attention"] = review_attention_label(r, safety_level=level)
+        enriched_reviews.append(r_copy)
+
+    # Render HTML (always archive)
+    html_path = None
+    try:
+        html_output = os.path.join(config.REPORT_DIR, f"daily-{logical_date}.html")
+        html_path = report_html.render_daily_briefing(
+            snapshot=snapshot,
+            cumulative_kpis=cumulative_kpis,
+            window_reviews=enriched_reviews,
+            attention_signals=attention_signals,
+            changes=changes,
+            output_path=html_output,
+        )
+    except Exception:
+        _logger.exception("Daily briefing HTML generation failed")
+
+    # Smart send email
+    email_result = None
+    do_send = should_send_daily_email(len(window_reviews), changes)
+    if send_email and do_send:
+        try:
+            email_result = _send_daily_briefing_email(
+                snapshot, cumulative_kpis, enriched_reviews,
+                attention_signals, changes,
+            )
+        except Exception as e:
+            email_result = {"success": False, "error": str(e), "recipients": []}
+    elif not do_send:
+        email_result = {"success": True, "error": "Smart send: no content", "recipients": []}
+
+    try:
+        models.update_workflow_run(run_id, report_mode="standard")
+    except Exception:
+        pass
+
+    return {
+        "mode": "daily_briefing",
+        "status": "completed" if window_reviews or changes.get("has_changes") else "completed_no_change",
+        "run_id": run_id,
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
+        "products_count": len(snapshot.get("products", [])),
+        "reviews_count": len(window_reviews),
+        "html_path": html_path,
+        "excel_path": None,
+        "analytics_path": analytics_path,
+        "cumulative_kpis": cumulative_kpis or None,
+        "email": email_result,
+        "email_skipped": not do_send,
+    }
+
+
+def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
+                               attention_signals, changes):
+    """Send daily briefing email using email_daily.html.j2."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("email_daily.html.j2")
+    logical_date = snapshot.get("logical_date", "")
+
+    body_html = template.render(
+        logical_date=logical_date,
+        cumulative_kpis=cumulative_kpis,
+        window_reviews=window_reviews,
+        attention_signals=attention_signals,
+        changes=changes,
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
+
+    recipients = _get_email_recipients()
+    if not recipients:
+        return {"success": True, "error": "No recipients configured", "recipients": []}
+
+    subject = f"产品评论日报 {logical_date}"
+    has_safety = any(s.get("type") == "safety_keyword" for s in attention_signals)
+    if has_safety:
+        subject = f"[安全] {subject}"
+
+    report.send_email(recipients=recipients, subject=subject, body_html=body_html)
+    return {"success": True, "error": None, "recipients": recipients}
+
+
 def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     """Generate report for any mode (full/change/quiet).
 
     Replaces generate_full_report_from_snapshot with 3-mode routing.
 
     Returns dict with:
-        mode: "full" | "change" | "quiet"
+        mode: "full" | "change" | "quiet" | "daily_briefing"
         status: "completed" | "completed_no_change"
         run_id, products_count, reviews_count
         html_path, excel_path, analytics_path (None for non-full modes)
         email: {success, error, recipients}
     """
     run_id = snapshot.get("run_id", 0)
+
+    # P008 Phase 2: Check report_tier — new daily runs use three-block pipeline
+    run_tier = None
+    if run_id:
+        try:
+            conn = models.get_conn()
+            row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+            conn.close()
+            run_tier = row["report_tier"] if row else None
+        except Exception:
+            pass
+
+    if run_tier == "daily":
+        return _generate_daily_briefing(snapshot, send_email)
 
     # Load previous context
     prev_analytics, prev_snapshot = load_previous_report_context(run_id)
