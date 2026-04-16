@@ -506,3 +506,77 @@ def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
 
     assert len(prefetch_calls) == 1
     assert set(prefetch_calls[0]) == {"https://img.example.com/a.jpg", "https://img.example.com/b.jpg"}
+
+
+def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
+    """'本次新增' column is present when window_review_ids is set; review id=2 is marked '是'."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    import openpyxl
+
+    # Two reviews: id=1 is old (cumulative only), id=2 is new (in window)
+    reviews = [
+        {
+            "id": 1,
+            "product_name": "Test Grinder",
+            "product_sku": "SKU-001",
+            "author": "Alice",
+            "headline": "Old review",
+            "body": "From before the window.",
+            "headline_cn": "旧评论",
+            "body_cn": "来自窗口之前。",
+            "rating": 3.0,
+            "date_published": "2026-03-01",
+            "images": [],
+            "ownership": "own",
+            "sentiment": "neutral",
+            "features": [],
+            "insight_cn": "",
+        },
+        {
+            "id": 2,
+            "product_name": "Test Grinder",
+            "product_sku": "SKU-001",
+            "author": "Bob",
+            "headline": "New review",
+            "body": "Just posted this week.",
+            "headline_cn": "新评论",
+            "body_cn": "本周刚发布。",
+            "rating": 2.0,
+            "date_published": "2026-04-14",
+            "images": [],
+            "ownership": "own",
+            "sentiment": "negative",
+            "features": ["quality_stability"],
+            "insight_cn": "新增差评",
+        },
+    ]
+
+    analytics = _make_test_analytics()
+    analytics["window_review_ids"] = [2]
+
+    path = report._generate_analytical_excel(
+        products=SAMPLE_PRODUCTS,
+        reviews=reviews,
+        analytics=analytics,
+    )
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb["评论明细"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+
+    # Column header must be present
+    assert "本次新增" in headers, f"'本次新增' not found in headers: {headers}"
+
+    new_col = headers.index("本次新增") + 1
+    id_col = headers.index("ID") + 1
+
+    # Collect (id, new_flag) for all data rows
+    rows_data = {}
+    for row in range(2, ws.max_row + 1):
+        rid = ws.cell(row=row, column=id_col).value
+        flag = ws.cell(row=row, column=new_col).value
+        if rid is not None:
+            rows_data[rid] = flag
+
+    assert rows_data.get(2) == "是", f"Review id=2 should be marked '是', got {rows_data.get(2)!r}"
+    assert rows_data.get(1) in ("", None), f"Review id=1 should be empty, got {rows_data.get(1)!r}"

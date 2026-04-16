@@ -745,11 +745,19 @@ def _generate_analytical_excel(
     # ── Sheet 1: 评论明细 ──────────────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "评论明细"
+
+    # Determine whether to add the "本次新增" column (Correction H)
+    _window_review_ids = set(analytics.get("window_review_ids") or [])
+
     review_headers = [
         "ID", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
         "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
         "特征短语", "洞察", "评论时间", "照片",
     ]
+    if _window_review_ids:
+        # Insert "本次新增" as the second column (after "ID")
+        review_headers.insert(1, "本次新增")
+
     _write_headers(ws1, review_headers)
     images_col = len(review_headers)  # "照片" column (1-indexed)
 
@@ -812,7 +820,7 @@ def _generate_analytical_excel(
             features_list = features_raw if isinstance(features_raw, list) else []
         features_text = ", ".join(str(f) for f in features_list)
 
-        ws1.append([
+        _row = [
             r.get("id"),
             r.get("product_name"),
             r.get("product_sku"),
@@ -830,7 +838,12 @@ def _generate_analytical_excel(
             r.get("analysis_insight_cn") or r.get("insight_cn") or "",
             r.get("date_published_parsed") or r.get("date_published") or "",
             "",  # placeholder for images column
-        ])
+        ]
+        if _window_review_ids:
+            # Insert "本次新增" flag after "ID" (index 0)
+            _is_new = "是" if r.get("id") in _window_review_ids else ""
+            _row.insert(1, _is_new)
+        ws1.append(_row)
 
         # Embed images as thumbnails (same approach as legacy Excel)
         row_idx = ws1.max_row

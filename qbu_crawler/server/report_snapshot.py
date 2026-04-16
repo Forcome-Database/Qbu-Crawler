@@ -817,6 +817,12 @@ def generate_full_report_from_snapshot(
                     if deep:
                         cluster["deep_analysis"] = deep
 
+        # Attach window_review_ids so Excel can mark newly-added reviews (Correction H)
+        if snapshot.get("cumulative"):
+            analytics["window_review_ids"] = [
+                r.get("id") for r in snapshot.get("reviews", []) if r.get("id")
+            ]
+
         Path(analytics_path).write_text(
             json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
