@@ -784,22 +784,27 @@ def list_review_issue_labels(review_ids: list[int]) -> dict[int, list[dict]]:
     return result
 
 
-def get_previous_completed_run(current_run_id: int) -> dict | None:
-    """Return the most recent completed daily workflow run before *current_run_id*."""
+def get_previous_completed_run(current_run_id: int, report_tier: str | None = None) -> dict | None:
+    """Return the most recent completed workflow run before *current_run_id*.
+
+    When *report_tier* is provided, only matches runs with that tier (e.g., 'weekly'
+    finds the previous weekly run for KPI delta calculation).
+    """
     conn = get_conn()
     try:
-        row = conn.execute(
-            """
+        sql = """
             SELECT * FROM workflow_runs
-            WHERE workflow_type = 'daily'
-              AND status = 'completed'
+            WHERE status = 'completed'
               AND analytics_path IS NOT NULL
               AND analytics_path != ''
               AND id < ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (current_run_id,),
-        ).fetchone()
+        """
+        params: list = [current_run_id]
+        if report_tier:
+            sql += " AND report_tier = ?"
+            params.append(report_tier)
+        sql += " ORDER BY id DESC LIMIT 1"
+        row = conn.execute(sql, params).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -2043,3 +2048,43 @@ def update_review_analysis_flags(review_id: int, flags_json: str):
         conn.commit()
     finally:
         conn.close()
+
+
+def get_label_anomaly_stats(review_ids: list[int]) -> dict:
+    """Aggregate label_anomaly_flags for quality stats display in weekly report."""
+    if not review_ids:
+        return {"total_flagged": 0, "total_checked": 0, "flagged_labels": {}}
+
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" * len(review_ids))
+        rows = conn.execute(
+            f"SELECT label_anomaly_flags FROM review_analysis WHERE review_id IN ({placeholders})",
+            review_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    import json as _json
+    total_checked = len(rows)
+    total_flagged = 0
+    flagged_labels: dict[str, int] = {}
+    for row in rows:
+        flags_raw = row["label_anomaly_flags"]
+        if not flags_raw:
+            continue
+        try:
+            flags = _json.loads(flags_raw)
+        except (TypeError, _json.JSONDecodeError):
+            continue
+        if flags:
+            total_flagged += 1
+            for flag in flags:
+                lc = flag.get("label_code", "unknown")
+                flagged_labels[lc] = flagged_labels.get(lc, 0) + 1
+
+    return {
+        "total_flagged": total_flagged,
+        "total_checked": total_checked,
+        "flagged_labels": flagged_labels,
+    }
