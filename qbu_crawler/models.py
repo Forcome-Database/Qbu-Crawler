@@ -259,6 +259,7 @@ def init_db():
         "ALTER TABLE review_analysis ADD COLUMN impact_category TEXT",
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
         "ALTER TABLE review_analysis ADD COLUMN label_anomaly_flags TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT",
     ]
     for sql in migrations:
         try:
@@ -685,6 +686,7 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         "finished_at",
         "error",
         "report_mode",
+        "report_tier",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
