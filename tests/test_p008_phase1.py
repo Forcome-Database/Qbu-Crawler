@@ -296,3 +296,17 @@ def test_v3_html_tab2_not_placeholder():
         window={},
     )
     assert "变化追踪将在后续版本中启用" not in html, "Placeholder text must be gone"
+
+
+# ── Snapshot _meta version stamp (Task 7) ────────────────────────
+
+
+def test_inject_meta_adds_version_fields():
+    """_inject_meta must add schema_version, generator_version, taxonomy_version."""
+    from qbu_crawler.server.report_snapshot import _inject_meta
+    snapshot = {"logical_date": "2026-04-16", "products": [], "reviews": []}
+    enriched = _inject_meta(snapshot)
+    assert "_meta" in enriched
+    assert enriched["_meta"]["schema_version"] == "3"
+    assert "generator_version" in enriched["_meta"]
+    assert enriched["_meta"]["taxonomy_version"] == "v1"
