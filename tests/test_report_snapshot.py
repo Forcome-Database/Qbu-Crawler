@@ -980,8 +980,8 @@ def test_dual_snapshot_hash_excludes_cumulative(dual_snapshot_db):
     frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
     snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
 
-    # Recompute hash without cumulative
-    hash_payload = {k: v for k, v in snapshot.items() if k != "cumulative"}
+    # Recompute hash without cumulative and _meta (both added after hashing)
+    hash_payload = {k: v for k, v in snapshot.items() if k not in ("cumulative", "_meta")}
     # Remove snapshot_hash itself for recomputation (it was added after hashing)
     hash_payload.pop("snapshot_hash", None)
     expected_hash = hashlib.sha1(

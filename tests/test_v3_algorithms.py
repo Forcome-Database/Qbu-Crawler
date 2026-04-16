@@ -87,12 +87,13 @@ class TestClusterSeverity:
         assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "critical"
 
     def test_high_moderate_volume_safety(self):
+        # P008: "metal debris" is now critical-tier (bonus=5), so total=2+1+0+5=8 → critical
         cluster = {
             "review_count": 14, "affected_product_count": 2,
             "review_dates": ["2025-01-01"] * 14,
         }
         reviews = [{"headline": "metal debris", "body": ""}]
-        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "high"
+        assert compute_cluster_severity(cluster, reviews, date(2026, 4, 10)) == "critical"
 
     def test_medium_no_safety(self):
         cluster = {

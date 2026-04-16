@@ -391,3 +391,74 @@ def test_update_review_analysis_flags(db):
     ).fetchone()
     conn.close()
     assert row["label_anomaly_flags"] == flags
+
+
+# ── Integration test (Task 9) ────────────────────────────────────
+
+
+def test_p008_phase1_integration(db):
+    """End-to-end: a safety review goes through the full pipeline correctly."""
+    # 1. Insert a product
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO products (url, name, sku, site, ownership)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("http://test.com/p1", "1HP Grinder #22", "1159179", "meatyourmaker", "own"),
+    )
+
+    # 2. Insert a safety-relevant review
+    conn.execute(
+        """INSERT INTO reviews (product_id, author, headline, body, rating)
+           VALUES (1, 'TestUser', 'Dangerous metal debris',
+           'Found metal shaving in my ground beef after using this grinder', 1.0)""",
+    )
+
+    # 3. Insert analysis with impact_category = safety
+    conn.execute(
+        """INSERT INTO review_analysis
+           (review_id, sentiment, sentiment_score, labels, features,
+            insight_cn, insight_en, impact_category, failure_mode, llm_model, prompt_version)
+           VALUES (1, 'negative', 0.05,
+           '[{"code":"quality_stability","polarity":"negative","severity":"critical","confidence":0.95}]',
+           '["metal debris in food"]', '食品中发现金属碎屑', 'Metal debris found in food',
+           'safety', 'metal_contamination', 'test', 'v1')"""
+    )
+    conn.commit()
+    conn.close()
+
+    # 4. Verify impact_category in cumulative query
+    from qbu_crawler.server.report import query_cumulative_data
+    products, reviews = query_cumulative_data()
+    assert reviews[0]["impact_category"] == "safety"
+
+    # 5. Verify safety detection
+    from qbu_crawler.server.report_common import detect_safety_level
+    level = detect_safety_level("Found metal shaving in my ground beef")
+    assert level == "critical"
+
+    # 6. Verify safety_incidents table can be written
+    evidence = json.dumps({"text": "metal shaving"}, sort_keys=True)
+    models.save_safety_incident(
+        review_id=1, product_sku="1159179", safety_level="critical",
+        failure_mode="metal_contamination",
+        evidence_snapshot=evidence,
+        evidence_hash=hashlib.sha256(evidence.encode()).hexdigest(),
+    )
+
+    conn = _get_test_conn(db)
+    incidents = conn.execute("SELECT * FROM safety_incidents").fetchall()
+    conn.close()
+    assert len(incidents) == 1
+    assert incidents[0]["safety_level"] == "critical"
+
+    # 7. Verify label consistency check
+    from qbu_crawler.server.report_common import check_label_consistency
+    labels = [{"code": "quality_stability", "polarity": "negative", "confidence": 0.95}]
+    anomalies = check_label_consistency(sentiment_score=0.05, labels=labels)
+    assert len(anomalies) == 0  # consistent: negative label + low score
+
+    # 8. Verify _inject_meta
+    from qbu_crawler.server.report_snapshot import _inject_meta
+    snapshot = {"logical_date": "2026-04-16"}
+    enriched = _inject_meta(snapshot)
+    assert enriched["_meta"]["schema_version"] == "3"
