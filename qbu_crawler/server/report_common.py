@@ -89,6 +89,43 @@ def check_label_consistency(sentiment_score: float, labels: list[dict]) -> list[
             })
     return anomalies
 
+
+# ── Tier date window computation ─────────────────────────────────────────────
+
+
+def tier_date_window(tier: str, logical_date: str) -> tuple[str, str]:
+    """Compute [since, until) half-open interval for the given tier and logical_date.
+
+    All boundaries align to 00:00:00 Asia/Shanghai (no DST).
+
+    - daily:   [logical_date 00:00, logical_date+1 00:00)
+    - weekly:  [previous Monday 00:00, logical_date(Monday) 00:00)
+    - monthly: [previous month 1st 00:00, logical_date(1st) 00:00)
+    """
+    d = date.fromisoformat(logical_date[:10])
+    tz_suffix = "+08:00"
+
+    if tier == "daily":
+        since = d
+        until = d + timedelta(days=1)
+    elif tier == "weekly":
+        until = d  # logical_date should be a Monday
+        since = until - timedelta(days=7)
+    elif tier == "monthly":
+        until = d  # logical_date should be 1st of month
+        if d.month == 1:
+            since = d.replace(year=d.year - 1, month=12, day=1)
+        else:
+            since = d.replace(month=d.month - 1, day=1)
+    else:
+        raise ValueError(f"Unknown tier: {tier}")
+
+    return (
+        f"{since.isoformat()}T00:00:00{tz_suffix}",
+        f"{until.isoformat()}T00:00:00{tz_suffix}",
+    )
+
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {

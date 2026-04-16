@@ -107,3 +107,51 @@ def test_tier_date_window_monthly():
     since, until = tier_date_window("monthly", "2026-05-01")
     assert since == "2026-04-01T00:00:00+08:00"
     assert until == "2026-05-01T00:00:00+08:00"
+
+# ── Task 4: review_attention_label ──────────────────────────────
+
+
+def test_review_attention_label_critical_safety_with_images():
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": 1.0, "body": "Found metal shavings in food " * 20,
+              "images": ["img1.jpg", "img2.jpg"]}
+    result = review_attention_label(review, safety_level="critical")
+    assert result["label"] == "高关注度评论"
+    assert "⚠安全关键词" in " ".join(result["signals"])
+    assert "📸" in " ".join(result["signals"])
+
+
+def test_review_attention_label_negative_no_images():
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": 1.0, "body": "Bad product", "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert result["label"] == "差评"
+
+
+def test_review_attention_label_positive():
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": 5.0, "body": "Great product!", "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert result["label"] == "常规好评"
+
+
+def test_review_attention_label_mid_rating():
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": 3.0, "body": "It's okay", "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert result["label"] == "中评"
+
+
+def test_review_attention_label_long_body_signal():
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": 2.0, "body": "x" * 350, "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert any("字详评" in s for s in result["signals"])
+
+
+def test_review_attention_label_none_rating():
+    """None rating defaults to 5 (lenient) — treated as 常规好评."""
+    from qbu_crawler.server.report_common import review_attention_label
+    review = {"rating": None, "body": "No rating", "images": []}
+    result = review_attention_label(review, safety_level=None)
+    assert result["label"] == "常规好评"
