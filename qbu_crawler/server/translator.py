@@ -359,6 +359,48 @@ class TranslationWorker:
                         impact_category=impact_category,
                         failure_mode=failure_mode,
                     )
+
+                    # P008: Label consistency check
+                    if labels and sentiment_score is not None:
+                        from qbu_crawler.server.report_common import check_label_consistency
+                        anomalies = check_label_consistency(sentiment_score, labels)
+                        if anomalies:
+                            import json as _json
+                            models.update_review_analysis_flags(
+                                review["id"], _json.dumps(anomalies)
+                            )
+
+                    # P008: Safety evidence freezing (runs on original English text)
+                    review_text = f"{review.get('headline', '')} {review.get('body', '')}"
+                    from qbu_crawler.server.report_common import detect_safety_level
+                    safety_level = detect_safety_level(review_text)
+                    if safety_level or impact_category == "safety":
+                        effective_level = safety_level or "moderate"
+                        import json as _json, hashlib as _hashlib
+                        from qbu_crawler.server.report_common import _get_safety_tiers
+                        evidence = {
+                            "review_id": review["id"],
+                            "headline": review.get("headline", ""),
+                            "body": review.get("body", ""),
+                            "rating": review.get("rating"),
+                            "product_name": review.get("product_name", ""),
+                            "product_sku": review.get("product_sku", ""),
+                            "detected_keywords": [kw for kw in _get_safety_tiers().get(effective_level, []) if kw in review_text.lower()] if safety_level else [],
+                            "llm_impact_category": impact_category,
+                        }
+                        evidence_json = _json.dumps(evidence, sort_keys=True, ensure_ascii=False)
+                        evidence_hash = _hashlib.sha256(evidence_json.encode()).hexdigest()
+                        try:
+                            models.save_safety_incident(
+                                review_id=review["id"],
+                                product_sku=review.get("product_sku", ""),
+                                safety_level=effective_level,
+                                failure_mode=failure_mode,
+                                evidence_snapshot=evidence_json,
+                                evidence_hash=evidence_hash,
+                            )
+                        except Exception:
+                            logger.warning("Failed to save safety incident for review %s", review["id"])
                 except Exception:
                     logger.debug(
                         "TranslationWorker: analysis save failed for review %d, skipping",

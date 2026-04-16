@@ -67,6 +67,29 @@ def detect_safety_level(text: str) -> str | None:
             return level
     return None
 
+
+def check_label_consistency(sentiment_score: float, labels: list[dict]) -> list[dict]:
+    """Detect mismatches between sentiment_score and label polarity."""
+    anomalies = []
+    for label in labels:
+        polarity = label.get("polarity", "")
+        code = label.get("code", "")
+        if polarity == "negative" and sentiment_score > 0.7:
+            anomalies.append({
+                "type": "sentiment_label_mismatch",
+                "label_code": code,
+                "polarity": polarity,
+                "sentiment_score": sentiment_score,
+            })
+        elif polarity == "positive" and sentiment_score < 0.3:
+            anomalies.append({
+                "type": "sentiment_label_mismatch",
+                "label_code": code,
+                "polarity": polarity,
+                "sentiment_score": sentiment_score,
+            })
+    return anomalies
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {

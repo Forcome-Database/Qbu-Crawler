@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 
@@ -310,3 +311,83 @@ def test_inject_meta_adds_version_fields():
     assert enriched["_meta"]["schema_version"] == "3"
     assert "generator_version" in enriched["_meta"]
     assert enriched["_meta"]["taxonomy_version"] == "v1"
+
+
+# ── Label consistency + safety evidence (Task 8) ─────────────────
+
+
+def test_label_consistency_detects_mismatch():
+    """Flag when negative label has high sentiment_score."""
+    from qbu_crawler.server.report_common import check_label_consistency
+    labels = [{"code": "quality_stability", "polarity": "negative", "confidence": 0.9}]
+    anomalies = check_label_consistency(sentiment_score=0.85, labels=labels)
+    assert len(anomalies) == 1
+    assert anomalies[0]["type"] == "sentiment_label_mismatch"
+
+
+def test_label_consistency_no_false_positive():
+    """No flag when negative label has low sentiment_score (consistent)."""
+    from qbu_crawler.server.report_common import check_label_consistency
+    labels = [{"code": "quality_stability", "polarity": "negative", "confidence": 0.9}]
+    anomalies = check_label_consistency(sentiment_score=0.2, labels=labels)
+    assert len(anomalies) == 0
+
+
+def test_save_safety_incident(db):
+    """Safety incidents are stored with frozen evidence and SHA-256 hash."""
+    # Need a review for FK constraint
+    conn = _get_test_conn(db)
+    conn.execute("INSERT INTO products (url, name, sku, site) VALUES (?, ?, ?, ?)",
+                 ("http://test.com/p1", "Grinder", "SKU001", "test"))
+    conn.execute("INSERT INTO reviews (product_id, author, headline, body, rating)"
+                 " VALUES (1, 'A', 'H', 'B', 1.0)")
+    conn.commit()
+    conn.close()
+
+    evidence = {"review_text": "metal shavings in food", "product": "Grinder #22"}
+    evidence_json = json.dumps(evidence, sort_keys=True)
+    evidence_hash = hashlib.sha256(evidence_json.encode()).hexdigest()
+
+    models.save_safety_incident(
+        review_id=1, product_sku="SKU001", safety_level="critical",
+        failure_mode="metal_contamination",
+        evidence_snapshot=evidence_json, evidence_hash=evidence_hash,
+    )
+
+    conn = _get_test_conn(db)
+    rows = conn.execute("SELECT * FROM safety_incidents WHERE review_id = 1").fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0]["safety_level"] == "critical"
+    assert rows[0]["evidence_hash"] == evidence_hash
+
+
+def test_update_review_analysis_flags(db):
+    """update_review_analysis_flags must store anomaly flags."""
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO products (url, name, sku, site) VALUES (?, ?, ?, ?)",
+        ("http://test.com/p1", "Test", "SKU001", "test"),
+    )
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, rating)"
+        " VALUES (1, 'A', 'H', 'B', 3.0)",
+    )
+    conn.execute(
+        """INSERT INTO review_analysis
+           (review_id, sentiment, sentiment_score, labels, features,
+            insight_cn, insight_en, llm_model, prompt_version)
+           VALUES (1, 'negative', 0.2, '[]', '[]', '', '', 'test', 'v1')"""
+    )
+    conn.commit()
+    conn.close()
+
+    flags = json.dumps([{"type": "sentiment_label_mismatch"}])
+    models.update_review_analysis_flags(1, flags)
+
+    conn = _get_test_conn(db)
+    row = conn.execute(
+        "SELECT label_anomaly_flags FROM review_analysis WHERE review_id = 1"
+    ).fetchone()
+    conn.close()
+    assert row["label_anomaly_flags"] == flags

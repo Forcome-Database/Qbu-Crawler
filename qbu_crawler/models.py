@@ -2005,3 +2005,39 @@ def get_product_snapshots(sku, days=30):
         return [dict(row) for row in rows]
     finally:
         conn.close()
+
+
+# ── P008: Safety incident + analysis flags ──────────────────────────
+
+
+def save_safety_incident(review_id: int, product_sku: str, safety_level: str,
+                         failure_mode: str | None, evidence_snapshot: str,
+                         evidence_hash: str) -> int:
+    """Store a safety incident with frozen evidence for audit trail."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """INSERT INTO safety_incidents
+               (review_id, product_sku, safety_level, failure_mode,
+                evidence_snapshot, evidence_hash, detected_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (review_id, product_sku, safety_level, failure_mode,
+             evidence_snapshot, evidence_hash),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_review_analysis_flags(review_id: int, flags_json: str):
+    """Store label anomaly flags on the review_analysis row."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE review_analysis SET label_anomaly_flags = ? WHERE review_id = ?",
+            (flags_json, review_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
