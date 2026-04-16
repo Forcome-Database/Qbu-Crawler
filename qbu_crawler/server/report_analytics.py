@@ -836,13 +836,32 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
             # ── factor 5: volume_sig (10%) ───────────────────────
             volume_sig = min(neg_count / 10.0, 1.0)
 
+            # ── factor 6: safety_flag (15%) — P008 ───────────────
+            # Boost risk for products with safety-related reviews.
+            # Two detection sources: impact_category field (from LLM Phase 1 analysis)
+            # and keyword-based detect_safety_level() as fallback.
+            from qbu_crawler.server.report_common import detect_safety_level
+            safety_flag = 0.0
+            for neg_item in neg_items:
+                review = neg_item["review"]
+                if review.get("impact_category") == "safety":
+                    safety_flag = 1.0
+                    break
+                text = f"{review.get('headline', '')} {review.get('body', '')}"
+                if detect_safety_level(text):
+                    safety_flag = 1.0
+                    break
+
             # ── weighted combination ──────────────────────────────
+            # Weights redistributed to make room for 15% safety factor (total = 1.0):
+            # neg_rate 35→30, severity 25→20, recency 15→10
             risk_score_raw = (
-                0.35 * neg_rate
-                + 0.25 * severity_avg
+                0.30 * neg_rate
+                + 0.20 * severity_avg
                 + 0.15 * evidence_rate
-                + 0.15 * recency
+                + 0.10 * recency
                 + 0.10 * volume_sig
+                + 0.15 * safety_flag    # P008: safety factor
             )
 
         risk_score = round(min(risk_score_raw, 1.0) * 100, 1)
