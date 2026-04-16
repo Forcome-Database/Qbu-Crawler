@@ -54,13 +54,11 @@ def should_send_quiet_email(run_id):
     """Determine whether to send a quiet-day email or skip.
 
     Returns (should_send: bool, digest_mode: str | None, consecutive: int).
-    digest_mode is "weekly_digest" on day 7, 14, 21...
+    digest_mode is always None — weekly_digest was retired in P008 Phase 3.
 
-    Rules (spec 15.5):
+    Rules:
     - First N quiet days (default 3): always send
-    - Days N+1 to 6: skip
-    - Day 7 (and 14, 21...): send as weekly digest
-    - Days 8+: repeat 7-day cycle
+    - Days N+1 onwards: skip (real weekly report from WeeklySchedulerWorker covers weekly cadence)
     """
     threshold = int(os.getenv("REPORT_QUIET_EMAIL_DAYS", "3"))
 
@@ -86,8 +84,7 @@ def should_send_quiet_email(run_id):
 
     if consecutive < threshold:
         return True, None, consecutive
-    if (consecutive + 1) % 7 == 0:  # +1 because current run is also quiet
-        return True, "weekly_digest", consecutive
+    # P008 Phase 3: weekly_digest retired — real weekly report replaces it
     return False, None, consecutive
 
 

@@ -458,12 +458,13 @@ class TestShouldSendQuietEmail:
         assert send is False
         assert consecutive == 3
 
-    def test_seventh_quiet_day_sends_weekly(self, db):
+    def test_seventh_quiet_day_skips(self, db):
+        # P008 Phase 3: weekly_digest retired — day 7 now skips like any other day past threshold
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
         self._create_runs(["full"] + ["quiet"] * 6)  # 6 consecutive quiet
         send, mode, consecutive = should_send_quiet_email(run_id=999)
-        assert send is True
-        assert mode == "weekly_digest"
+        assert send is False
+        assert mode is None
         assert consecutive == 6
 
     def test_no_previous_runs_sends(self, db):
@@ -480,13 +481,14 @@ class TestShouldSendQuietEmail:
         assert mode is None
         assert consecutive == 4
 
-    def test_fourteenth_quiet_day_sends_weekly(self, db):
+    def test_fourteenth_quiet_day_skips(self, db):
+        # P008 Phase 3: weekly_digest retired — day 14 now skips like any other day past threshold
         from qbu_crawler.server.report_snapshot import should_send_quiet_email
-        # 13 consecutive quiet → 14th is also quiet, (13+1)%7 == 0
+        # 13 consecutive quiet → 14th is also quiet, previously triggered weekly_digest
         self._create_runs(["full"] + ["quiet"] * 13)
         send, mode, consecutive = should_send_quiet_email(run_id=999)
-        assert send is True
-        assert mode == "weekly_digest"
+        assert send is False
+        assert mode is None
         assert consecutive == 13
 
     def test_custom_threshold_via_env(self, db, monkeypatch):
