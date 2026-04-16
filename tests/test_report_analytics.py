@@ -1000,3 +1000,53 @@ def test_detect_report_mode_baseline_with_fewer_than_3(analytics_db):
     result = detect_report_mode(current["id"], "2026-04-04")
     assert result["mode"] == "baseline"
     assert result["baseline_sample_days"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests for KPI delta activation (Fix-4)
+# ---------------------------------------------------------------------------
+
+import json
+from pathlib import Path
+
+
+def test_build_report_analytics_includes_kpi_deltas(analytics_db, tmp_path, monkeypatch):
+    """In incremental mode, analytics should include KPI deltas from previous run."""
+    from qbu_crawler.server import report_analytics
+
+    # Create 3 completed prior runs to exit baseline mode
+    for i, date in enumerate(["2026-04-01", "2026-04-02", "2026-04-03"]):
+        analytics_path = str(tmp_path / f"analytics-{date}.json")
+        prev_analytics = {
+            "kpis": {
+                "negative_review_rows": 10 + i,
+                "own_negative_review_rows": 5 + i,
+                "ingested_review_rows": 100 + i * 10,
+                "product_count": 5,
+                "health_index": 70.0 + i,
+                "recently_published_count": 3,
+            }
+        }
+        Path(analytics_path).write_text(json.dumps(prev_analytics, ensure_ascii=False), encoding="utf-8")
+        _create_daily_run(date, status="completed", analytics_path=analytics_path)
+
+    current_run = _create_daily_run("2026-04-04", status="reporting")
+    snapshot = _build_snapshot(current_run["id"], "2026-04-04")
+    analytics = report_analytics.build_report_analytics(snapshot)
+
+    assert analytics.get("mode") == "incremental" or analytics.get("mode_info", {}).get("mode") == "incremental"
+    kpis = analytics["kpis"]
+    assert "negative_review_rows_delta" in kpis, f"Missing delta keys. KPI keys: {list(kpis.keys())}"
+    assert "negative_review_rows_delta_display" in kpis
+
+
+def test_build_report_analytics_baseline_has_no_deltas(analytics_db, monkeypatch):
+    """In baseline mode, KPI deltas should not be present."""
+    from qbu_crawler.server import report_analytics
+
+    current_run = _create_daily_run("2026-04-04", status="reporting")
+    snapshot = _build_snapshot(current_run["id"], "2026-04-04")
+    analytics = report_analytics.build_report_analytics(snapshot)
+
+    kpis = analytics["kpis"]
+    assert "negative_review_rows_delta" not in kpis

@@ -1442,7 +1442,7 @@ def build_report_analytics(snapshot, synced_labels=None):
         if pub_date and pub_date >= recent_cutoff:
             recently_published_count += 1
 
-    return {
+    analytics = {
         "run_id": snapshot.get("run_id"),
         "logical_date": snapshot["logical_date"],
         "snapshot_hash": snapshot["snapshot_hash"],
@@ -1519,3 +1519,16 @@ def build_report_analytics(snapshot, synced_labels=None):
         **chart_data,
         "_trend_series": _trend_series,
     }
+
+    # ── KPI delta computation (Fix-4) ────────────────────────────────────
+    if mode_info["mode"] != "baseline":
+        from .report_snapshot import load_previous_report_context  # lazy import
+        from .report_common import _compute_kpi_deltas
+
+        _run_id = snapshot.get("run_id", 0)
+        prev_analytics, _ = load_previous_report_context(_run_id)
+        if prev_analytics:
+            deltas = _compute_kpi_deltas(analytics["kpis"], prev_analytics)
+            analytics["kpis"].update(deltas)
+
+    return analytics
