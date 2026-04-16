@@ -286,3 +286,104 @@ def test_quiet_email_no_weekly_digest(db):
     should, digest_mode, consecutive = should_send_quiet_email(9)
     assert digest_mode is None or digest_mode != "weekly_digest", \
         "weekly_digest should be retired — real weekly report replaces it"
+
+
+# ── Task 6: WeeklySchedulerWorker ───────────────────────────────
+
+
+def test_weekly_scheduler_skips_non_monday(db, monkeypatch):
+    from qbu_crawler.server.workflows import WeeklySchedulerWorker
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = WeeklySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False
+
+
+def test_weekly_scheduler_triggers_on_monday(db, monkeypatch):
+    from qbu_crawler.server.workflows import WeeklySchedulerWorker
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'completed', 'full_sent', '2026-04-14',"
+        " 'daily:2026-04-14', 'daily', '2026-04-14T00:00:00+08:00', '2026-04-15T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+    worker = WeeklySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is True
+
+
+def test_weekly_scheduler_idempotent(db, monkeypatch):
+    from qbu_crawler.server.workflows import WeeklySchedulerWorker
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = WeeklySchedulerWorker(schedule_time="09:30")
+    worker.process_once(now=now)
+    assert worker.process_once(now=now) is False
+
+
+def test_weekly_scheduler_waits_for_daily_runs(db, monkeypatch):
+    from qbu_crawler.server.workflows import WeeklySchedulerWorker
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'running', 'none', '2026-04-14',"
+        " 'daily:2026-04-14', 'daily', '2026-04-14T00:00:00+08:00', '2026-04-15T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+    worker = WeeklySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False
+
+
+# ── Task 11: V3 template enhancements ───────────────────────────
+
+
+def test_v3_template_renders_dispersion_type():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("daily_report_v3.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    js_path = template_dir / "daily_report_v3.js"
+
+    html = template.render(
+        logical_date="2026-04-20",
+        mode="incremental",
+        snapshot={"reviews": [], "cumulative": {"reviews": []}},
+        analytics={
+            "kpis": {"own_review_rows": 10, "ingested_review_rows": 10,
+                     "product_count": 2, "own_product_count": 2, "competitor_product_count": 0,
+                     "competitor_review_rows": 0, "own_negative_review_rows": 1,
+                     "own_positive_review_rows": 8},
+            "self": {"risk_products": [], "top_negative_clusters": [],
+                     "recommendations": [], "top_positive_clusters": [],
+                     "issue_cards": [
+                         {"label_display": "质量稳定性", "review_count": 5,
+                          "severity": "high", "severity_display": "高",
+                          "affected_product_count": 3, "dispersion_type": "systemic",
+                          "dispersion_display": "系统性", "lifecycle_status": "active",
+                          "example_reviews": [], "image_evidence": [],
+                          "recommendation": "", "translated_rate_display": "100%",
+                          "translation_warning": False, "evidence_refs_display": "",
+                          "first_seen": None, "last_seen": None, "duration_display": None,
+                          "image_review_count": 0, "recency_display": ""}
+                     ]},
+            "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                           "negative_opportunities": []},
+            "appendix": {"image_reviews": []},
+            "issue_cards": [],
+        },
+        charts={"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        alert_level="green", alert_text="",
+        report_copy={},
+        css_text=css_path.read_text(encoding="utf-8") if css_path.exists() else "",
+        js_text=js_path.read_text(encoding="utf-8") if js_path.exists() else "",
+        threshold=2, cumulative_kpis={}, window={}, changes=None,
+    )
+    assert "系统性" in html
+    assert "活跃" in html

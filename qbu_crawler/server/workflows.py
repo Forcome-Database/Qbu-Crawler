@@ -510,6 +510,68 @@ class DailySchedulerWorker:
             self._wake_event.wait(timeout=self._interval)
 
 
+class WeeklySchedulerWorker:
+    """Every Monday at WEEKLY_SCHEDULER_TIME, submit a weekly report run."""
+
+    def __init__(self, *, schedule_time: str | None = None, interval: int | None = None):
+        self._schedule_time = schedule_time or config.WEEKLY_SCHEDULER_TIME
+        self._schedule_hour, self._schedule_minute = _parse_schedule_time(self._schedule_time)
+        self._interval = interval or config.DAILY_SCHEDULER_INTERVAL
+        self._stop_event = Event()
+        self._wake_event = Event()
+        self._thread = Thread(target=self._run, daemon=True, name="weekly-scheduler")
+
+    def start(self):
+        self._thread.start()
+        logger.info("WeeklySchedulerWorker: started (time=%s)", self._schedule_time)
+
+    def stop(self):
+        self._stop_event.set()
+        self._wake_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                self.process_once()
+            except Exception:
+                logger.exception("WeeklySchedulerWorker: error in process_once")
+            self._stop_event.wait(timeout=self._interval)
+
+    def process_once(self, now: datetime | None = None) -> bool:
+        current = now or config.now_shanghai()
+        if current.weekday() != 0:  # 0 = Monday
+            return False
+
+        logical_date = current.date().isoformat()
+        scheduled_at = current.replace(
+            hour=self._schedule_hour, minute=self._schedule_minute,
+            second=0, microsecond=0,
+        )
+        if current < scheduled_at:
+            return False
+
+        trigger_key = build_weekly_trigger_key(logical_date)
+        if models.get_workflow_run_by_trigger_key(trigger_key):
+            return False  # idempotent
+
+        # Pre-check: all daily runs in window must be terminal
+        from qbu_crawler.server.report_common import tier_date_window
+        since, until = tier_date_window("weekly", logical_date)
+        if not _all_daily_runs_terminal(since, until):
+            return False
+
+        result = submit_weekly_run(logical_date=logical_date)
+        if result.get("created"):
+            logger.info(
+                "WeeklySchedulerWorker: submitted weekly run for %s (trigger_key=%s)",
+                logical_date, result["trigger_key"],
+            )
+            return True
+        return False
+
+
 def _parse_schedule_time(value: str) -> tuple[int, int]:
     parsed = datetime.strptime(value, "%H:%M")
     return parsed.hour, parsed.minute
