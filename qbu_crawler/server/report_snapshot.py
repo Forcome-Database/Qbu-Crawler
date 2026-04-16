@@ -19,15 +19,21 @@ _RECIPIENTS_FILE_PATH = os.path.join(
 )
 
 
-def _inject_meta(snapshot: dict, tier: str = "daily") -> dict:
+def _inject_meta(snapshot: dict, tier: str = "daily",
+                 expected_days: int | None = None, actual_days: int | None = None) -> dict:
     """Add version metadata to snapshot for traceability."""
     from qbu_crawler import __version__
-    snapshot["_meta"] = {
+    meta = {
         "schema_version": "3",
         "generator_version": __version__,
         "taxonomy_version": snapshot.get("taxonomy_version", "v1"),
         "report_tier": tier,
     }
+    if expected_days is not None and actual_days is not None and actual_days < expected_days:
+        meta["is_partial"] = True
+        meta["expected_days"] = expected_days
+        meta["actual_days"] = actual_days
+    snapshot["_meta"] = meta
     return snapshot
 
 
@@ -372,7 +378,9 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
-    _inject_meta(snapshot)
+    # P008 Phase 3: Pass report_tier from run to _meta
+    run_tier = run.get("report_tier", "daily")
+    _inject_meta(snapshot, tier=run_tier)
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     snapshot_path = os.path.join(
