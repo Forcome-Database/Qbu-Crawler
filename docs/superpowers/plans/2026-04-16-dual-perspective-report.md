@@ -2327,3 +2327,131 @@ Expected: **551 passed** (533 baseline + 18 new tests).
 | G (Low): REPORT_PERSPECTIVE config | Task 1 | Covered by test_report_perspective_config_default |
 | H (Low): Excel "本次新增" via ID matching | Task 7 | Covered by test_excel_has_new_column_when_window_ids_present |
 | I (Low): _build_trend_data double call acceptable | Task 3 | Acceptable, documented in plan |
+
+---
+
+## 审查修正（2026-04-16 全面对齐审查）
+
+对照设计文档、P006 后最新代码和边界场景逐项核实，发现以下**必须修正**的问题：
+
+### 修正 F1（严重）：query_cumulative_data LEFT JOIN 会产生重复行
+
+`review_analysis` 表有 `UNIQUE(review_id, prompt_version)` 约束，同一 review 可能有多条分析记录。计划中的 `LEFT JOIN review_analysis ra ON ra.review_id = r.id` 缺少 `MAX(analyzed_at)` 子查询，会导致评论重复。
+
+**修复**：参照 `models.py` 的 `get_reviews_with_analysis()`，在 JOIN 条件中添加：
+
+```sql
+LEFT JOIN review_analysis ra
+    ON ra.review_id = r.id
+    AND ra.analyzed_at = (
+        SELECT MAX(ra2.analyzed_at)
+        FROM review_analysis ra2
+        WHERE ra2.review_id = r.id
+    )
+```
+
+### 修正 F2（严重）：测试 fixture 缺少 prompt_version 列
+
+Task 1 的 `cumulative_db` fixture 中 `INSERT INTO review_analysis` 缺少 NOT NULL 的 `prompt_version` 列，INSERT 会直接失败。
+
+**修复**：在 fixture 的 INSERT 语句中添加 `prompt_version` 列，值填 `"v1"`。
+
+### 修正 F3（严重）：KPI delta 在双调用模式下被错误计算
+
+`build_report_analytics()` 末尾（P006 Fix-4）已有 KPI delta 计算块。双视角下调用两次：
+- 累积调用：用 run_id 加载上次 analytics，计算累积 vs 上次累积的 delta → **正确但冗余**（外层 `build_dual_report_analytics` 会再算一次）
+- 窗口调用：用相同 run_id 加载相同的上次 analytics，计算窗口 vs 上次累积的 delta → **错误且误导**
+
+**修复方案**：在 `build_report_analytics` 中添加 `skip_delta=False` 参数：
+
+```python
+def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
+    ...
+    if not skip_delta and mode_info["mode"] != "baseline":
+        from .report_snapshot import load_previous_report_context
+        ...
+    return analytics
+```
+
+`build_dual_report_analytics` 中窗口调用传入 `skip_delta=True`：
+
+```python
+if snapshot.get("reviews"):
+    window_analytics = build_report_analytics(snapshot, synced_labels=synced_labels, skip_delta=True)
+```
+
+### 修正 F4（中等）：_render_full_email_html 中多次加载 previous_snapshot
+
+Task 4 的 `_render_full_email_html` 实现中 `load_previous_report_context` 被调用了 3 次（line 1109, 1127, 1129），其中 line 1127 是死代码。
+
+**修复**：只调用一次，结果复用：
+
+```python
+prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
+changes = detect_snapshot_changes(snapshot, prev_snapshot) if prev_snapshot else {}
+cluster_changes = compute_cluster_changes(...) if prev_analytics_ctx else {}
+```
+
+更佳方案：从调用方 `generate_full_report_from_snapshot` 传入 `previous_snapshot` 参数，避免函数内重复 IO。
+
+### 修正 F5（中等）：小样本警告在累积模式下永远失效
+
+Fix-2 的 `_ingested < 5` 检查用的是 `kpis.get("ingested_review_rows")`，累积模式下此值为全量（~2579），永远不触发。但警告文本说"本期新增评论仅 N 条"。
+
+**修复**：改为检查窗口评论数：
+
+```python
+# 替换原来的：
+_ingested = kpis.get("ingested_review_rows", 0)
+if _ingested < 5:
+
+# 改为：
+_window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
+if _window_count < 5:
+    prompt += f"\n\n⚠️ 重要提示：本期新增评论仅 {_window_count} 条，样本极少。..."
+```
+
+当非双视角模式时，`analytics.get("window")` 返回 None，fallback 到 `ingested_review_rows`（保持 P006 行为）。
+
+### 修正 F6（严重）：Task 8 测试 fixture 和模板未更新
+
+**问题 1**：`dual_snapshot_db` fixture 未定义。Task 8 的测试引用了此 fixture 但任何 task 都没有创建它。
+
+**修复**：在 Task 8 的测试步骤中定义 `dual_snapshot_db` fixture（或复用 Task 2 中创建的 fixture，确保跨 task 可用）。
+
+**问题 2**：`email_change.html.j2` 和 `email_quiet.html.j2` 模板未更新。它们仍然从 `previous_analytics` 读取 KPI，标签写"上期数据"。即使通过 `effective_analytics` 间接传入了累积 KPIs，模板标签也是错误的。
+
+**修复**：在 Task 8 中增加模板修改步骤：
+- `email_change.html.j2`：将"上期数据"改为"当前累积"，或用 `analytics.kpis` 替代 `previous_analytics.kpis`
+- `email_quiet.html.j2`：同上
+- 如果传入方式是通过 `effective_analytics` 替换 `prev_analytics` 参数，则模板标签需要改为"当前数据快照"
+
+### 额外修正 W8（建议）：邮件模板补充价格/库存变动
+
+设计文档 Step 6 明确包含价格变动和库存变动的展示块（`changes.price_changes` 和 `changes.stock_changes`），但 Task 6 的邮件模板只展示了聚类级别的变化（escalated/new/improving），遗漏了产品级别的价格/库存变动。
+
+**建议**：在 Task 6 的"今日变化"section 中追加：
+
+```html
+{% if _changes.get("price_changes") %}
+<tr><td style="padding:8px 0;font-weight:600;font-size:12px;">价格变动</td></tr>
+{% for c in _changes.price_changes[:5] %}
+<tr><td style="padding:2px 0;font-size:12px;color:#6b7280;">
+  {{ c.product_name }}: {{ c.old_price }} → {{ c.new_price }}
+</td></tr>
+{% endfor %}
+{% endif %}
+```
+
+### 审查确认（无问题的设计点）
+
+以下经代码验证无问题：
+1. `build_report_analytics()` 无全局状态，可安全调用两次（✅）
+2. `detect_snapshot_changes()` 操作窗口层 `snapshot["products"]`，不受 cumulative 影响（✅）
+3. 快照 hash 排除 cumulative 的实现正确（✅）
+4. 老快照降级为单视角的 guard 正确（✅）
+5. `sync_review_labels` 在累积评论上调用一次，结果共享（✅）
+6. Excel review ID 匹配方案正确（✅）
+7. LLM prompt token 量可控（✅）
+8. `REPORT_PERSPECTIVE` 使用 `_enum_env` 验证优于设计文档的裸 `os.getenv`（✅）
+9. 向后兼容：老快照、老 analytics JSON 均有 fallback 路径（✅）
