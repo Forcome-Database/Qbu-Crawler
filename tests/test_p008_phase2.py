@@ -155,3 +155,171 @@ def test_review_attention_label_none_rating():
     review = {"rating": None, "body": "No rating", "images": []}
     result = review_attention_label(review, safety_level=None)
     assert result["label"] == "常规好评"
+
+
+# ── Task 5: compute_attention_signals ───────────────────────────
+
+
+def test_attention_signals_safety_keyword():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    window_reviews = [
+        {"id": 1, "headline": "Dangerous", "body": "Found metal shaving in food",
+         "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+         "ownership": "own", "images": []}
+    ]
+    signals = compute_attention_signals(window_reviews, changes={}, cumulative_clusters=[])
+    action_signals = [s for s in signals if s["urgency"] == "action"]
+    assert any(s["type"] == "safety_keyword" for s in action_signals)
+
+
+def test_attention_signals_image_evidence():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    window_reviews = [
+        {"id": 1, "headline": "Bad", "body": "Broken part",
+         "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+         "ownership": "own", "images": ["img1.jpg", "img2.jpg"]}
+    ]
+    signals = compute_attention_signals(window_reviews, changes={}, cumulative_clusters=[])
+    action_signals = [s for s in signals if s["urgency"] == "action"]
+    assert any(s["type"] == "image_evidence" for s in action_signals)
+
+
+def test_attention_signals_consecutive_negative_7d():
+    """Consecutive negative uses 7-day window, not just today's reviews."""
+    from qbu_crawler.server.report_common import compute_attention_signals
+    window_reviews = [
+        {"id": 2, "headline": "Also bad", "body": "Awful", "rating": 2.0,
+         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+         "images": [], "date_published_parsed": "2026-04-16"},
+    ]
+    recent_7d = [
+        {"id": 1, "headline": "Bad", "body": "Terrible", "rating": 1.0,
+         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+         "images": [], "date_published_parsed": "2026-04-12"},
+        {"id": 2, "headline": "Also bad", "body": "Awful", "rating": 2.0,
+         "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+         "images": [], "date_published_parsed": "2026-04-16"},
+    ]
+    signals = compute_attention_signals(
+        window_reviews, changes={}, cumulative_clusters=[],
+        recent_reviews_7d=recent_7d,
+    )
+    action_signals = [s for s in signals if s["urgency"] == "action"]
+    assert any(s["type"] == "consecutive_negative" for s in action_signals)
+
+
+def test_attention_signals_competitor_rating_drop():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    changes = {
+        "rating_changes": [
+            {"sku": "COMP1", "name": "Competitor Grinder", "old": 4.6, "new": 4.2,
+             "ownership": "competitor"}
+        ]
+    }
+    signals = compute_attention_signals([], changes=changes, cumulative_clusters=[])
+    ref_signals = [s for s in signals if s["urgency"] == "reference"]
+    assert any(s["type"] == "competitor_rating_change" for s in ref_signals)
+
+
+def test_attention_signals_own_stock_out():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    changes = {
+        "stock_changes": [
+            {"sku": "SKU1", "name": "Grinder", "old": "in_stock", "new": "out_of_stock",
+             "ownership": "own"}
+        ]
+    }
+    signals = compute_attention_signals([], changes=changes, cumulative_clusters=[])
+    action_signals = [s for s in signals if s["urgency"] == "action"]
+    assert any(s["type"] == "own_stock_out" for s in action_signals)
+
+
+def test_attention_signals_silence_good_news():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    clusters = [
+        {"label_code": "quality_stability", "last_seen": "2026-04-01",
+         "label_display": "质量稳定性"}
+    ]
+    signals = compute_attention_signals(
+        [], changes={}, cumulative_clusters=clusters,
+        logical_date="2026-04-17",
+    )
+    ref_signals = [s for s in signals if s["urgency"] == "reference"]
+    assert any(s["type"] == "silence_good_news" for s in ref_signals)
+
+
+def test_attention_signals_empty_when_nothing():
+    from qbu_crawler.server.report_common import compute_attention_signals
+    signals = compute_attention_signals([], changes={}, cumulative_clusters=[])
+    assert signals == []
+
+
+# ── Task 6: should_send_daily_email ─────────────────────────────
+
+
+def test_smart_send_true_when_new_reviews():
+    from qbu_crawler.server.report_snapshot import should_send_daily_email
+    assert should_send_daily_email(new_review_count=3, changes={}) is True
+
+
+def test_smart_send_true_when_price_changes():
+    from qbu_crawler.server.report_snapshot import should_send_daily_email
+    changes = {"price_changes": [{"sku": "SKU1"}]}
+    assert should_send_daily_email(new_review_count=0, changes=changes) is True
+
+
+def test_smart_send_true_when_stock_changes():
+    from qbu_crawler.server.report_snapshot import should_send_daily_email
+    changes = {"stock_changes": [{"sku": "SKU1"}]}
+    assert should_send_daily_email(new_review_count=0, changes=changes) is True
+
+
+def test_smart_send_true_when_rating_changes():
+    from qbu_crawler.server.report_snapshot import should_send_daily_email
+    changes = {"rating_changes": [{"sku": "SKU1"}]}
+    assert should_send_daily_email(new_review_count=0, changes=changes) is True
+
+
+def test_smart_send_false_when_nothing():
+    from qbu_crawler.server.report_snapshot import should_send_daily_email
+    assert should_send_daily_email(new_review_count=0, changes={}) is False
+
+
+# ── Task 7: Safety factor in risk scoring ───────────────────────
+
+
+def test_risk_score_higher_with_safety_reviews(db):
+    """A product with safety-flagged reviews should have higher risk_score."""
+    from qbu_crawler.server import report_analytics
+
+    labeled_reviews_normal = [
+        {"review": {"rating": 1.0, "ownership": "own", "product_sku": "SKU1",
+                     "product_name": "Grinder", "body": "Bad quality", "images": [],
+                     "date_published_parsed": "2026-04-10"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                      "severity": "medium"}]},
+    ]
+    labeled_reviews_safety = [
+        {"review": {"rating": 1.0, "ownership": "own", "product_sku": "SKU2",
+                     "product_name": "Grinder 2", "body": "Found metal shaving in food",
+                     "images": [],
+                     "date_published_parsed": "2026-04-10",
+                     "impact_category": "safety"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                      "severity": "medium"}]},
+    ]
+    products_data = [
+        {"sku": "SKU1", "review_count": 10, "rating": 3.5},
+        {"sku": "SKU2", "review_count": 10, "rating": 3.5},
+    ]
+
+    normal = report_analytics._risk_products(
+        labeled_reviews_normal, products_data, logical_date="2026-04-17",
+    )
+    safety = report_analytics._risk_products(
+        labeled_reviews_safety, products_data, logical_date="2026-04-17",
+    )
+
+    normal_score = normal[0]["risk_score"] if normal else 0
+    safety_score = safety[0]["risk_score"] if safety else 0
+    assert safety_score > normal_score, f"Safety review should boost risk score: {safety_score} vs {normal_score}"

@@ -85,6 +85,18 @@ def should_send_quiet_email(run_id):
     return False, None, consecutive
 
 
+def should_send_daily_email(new_review_count: int, changes: dict) -> bool:
+    """P008 Phase 2: Smart send — only email when there's something to report.
+
+    HTML is always archived regardless of this decision.
+    """
+    if new_review_count > 0:
+        return True
+    if changes.get("price_changes") or changes.get("stock_changes") or changes.get("rating_changes"):
+        return True
+    return False
+
+
 def load_previous_report_context(run_id):
     """Load most recent completed run's analytics and snapshot.
 
