@@ -210,6 +210,21 @@ def get_previous_completed_run(current_run_id: int, report_tier: str | None = No
 
 Note: removed the hardcoded `workflow_type = 'daily'` filter — tier-based filtering is more flexible.
 
+Also update `load_previous_report_context()` in `report_snapshot.py` (~line 100) to pass `report_tier`:
+
+```python
+def load_previous_report_context(run_id, report_tier=None):
+    """Load most recent completed run's analytics and snapshot.
+
+    When *report_tier* is provided, only matches runs of that tier
+    (e.g., weekly finds previous weekly, daily finds previous daily).
+    """
+    prev_run = models.get_previous_completed_run(run_id, report_tier=report_tier)
+    if not prev_run or not prev_run.get("analytics_path"):
+        return None, None
+    # ... rest unchanged ...
+```
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_p008_phase3.py::test_get_previous_completed_run_filters_by_tier -v`
@@ -885,19 +900,23 @@ Run: `uv run pytest tests/test_p008_phase3.py::test_advance_run_routes_weekly_to
 
 - [ ] **Step 3: Add _advance_periodic_run() and split _advance_run()**
 
-In `qbu_crawler/server/workflows.py`, find `_advance_run()` method in `WorkflowWorker` class. At the very beginning of the method (after fetching the run), add a tier check:
+In `qbu_crawler/server/workflows.py`, find `_advance_run()` method in `WorkflowWorker` class (~line 569). The tier check MUST go BEFORE the `task_rows` guard at line 574-576 (weekly runs have NO tasks, so `not task_rows` would return False and skip the run entirely):
 
 ```python
     def _advance_run(self, run_id: int, now: str) -> bool:
         run = models.get_workflow_run(run_id)
-        if not run:
+        if run is None:
             return False
 
-        # P008 Phase 3: Route periodic runs (weekly/monthly) to simplified pipeline
+        # P008 Phase 3: Route periodic runs BEFORE task_rows check
+        # (weekly/monthly have no tasks — the task_rows guard would exit early)
         run_tier = run.get("report_tier")
         if run_tier in ("weekly", "monthly"):
             return self._advance_periodic_run(run, now)
 
+        task_rows = models.list_workflow_run_tasks(run_id)
+        if not task_rows:
+            return False
         # ... existing daily logic unchanged below ...
 ```
 
@@ -1238,6 +1257,19 @@ def _generate_weekly_report(snapshot, send_email=True):
         _logger.exception("Weekly report: full generation failed for run %d", run_id)
         raise
 
+    # Guard: empty week (no data at all)
+    if full_result.get("status") == "completed_no_change" and not full_result.get("html_path"):
+        _logger.info("Weekly report: no data for run %d, skipping", run_id)
+        return {
+            "mode": "weekly_report",
+            "status": "completed_no_change",
+            "run_id": run_id,
+            "snapshot_hash": snapshot.get("snapshot_hash", ""),
+            "products_count": 0, "reviews_count": 0,
+            "html_path": None, "excel_path": None, "analytics_path": None,
+            "email": None,
+        }
+
     # Compute label quality stats for weekly template
     review_ids = [r.get("id") for r in
                   (snapshot.get("cumulative", {}).get("reviews") or snapshot.get("reviews", []))
@@ -1370,8 +1402,9 @@ def _send_weekly_email(snapshot, full_result):
     report.send_email(
         recipients=recipients,
         subject=subject,
+        body_text=f"QBU 周报 {logical_date}",
         body_html=body_html,
-        attachments=attachments if attachments else None,
+        attachment_paths=attachments if attachments else None,
     )
     return {"success": True, "error": None, "recipients": recipients}
 ```
@@ -1717,9 +1750,21 @@ git commit -m "test(p008): add Phase 3 integration test verifying weekly report 
 - [ ] 周报复用 V3 HTML 模板渲染（含 Excel）
 - [ ] 周报邮件为摘要卡片 + "查看完整报告"链接
 - [ ] get_previous_completed_run 按 report_tier 过滤
+- [ ] load_previous_report_context 传递 report_tier（确保周报 KPI delta 对比上次周报）
 - [ ] issue 卡片展示 dispersion_type（系统性/个体/待观察）
+- [ ] issue 卡片展示 active/dormant 状态标签
+- [ ] 冷周 Tab 3-5 显示"本周无新数据变动，以下为累积分析"
 - [ ] 标签质量统计在周报模板中展示
 - [ ] quiet weekly_digest 已退役
 - [ ] 冷启动保护：_meta.is_partial 标记不完整周期
 - [ ] 旧 daily run 不受影响
+- [ ] **手动验证**：在 `app.py` 中注册 `WeeklySchedulerWorker`（与 DailySchedulerWorker 同级位置）
 - [ ] 更新 CLAUDE.md 文档
+
+## 设计偏差记录
+
+| 偏差 | 理由 |
+|------|------|
+| 复用 `daily_report_v3.html.j2` 而非新建 `weekly_report.html.j2` | V3 模板结构完全匹配周报 6-Tab 需求，新建会导致大量重复代码 |
+| `compute_dispersion(label_code, reviews, total_skus)` 签名不同于设计稿 | 更可测试，直接传 total_skus 而非内部查询 |
+| 4-sheet 周报 Excel 暂复用现有分析 Excel | 现有 Excel 已有 6-sheet 分析版，包含评论明细+产品概览+标签分析，满足需求核心 |
