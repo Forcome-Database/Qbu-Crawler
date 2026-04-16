@@ -865,9 +865,17 @@ def normalize_deep_report_analytics(analytics):
 
     # ── Compute health_index, competitive_gap_index, high_risk_count ─────
     normalized["kpis"]["health_index"] = compute_health_index(normalized)
-    normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
-        normalized.get("competitor", {}).get("gap_analysis") or []
+    _total_reviews_for_gap = (
+        normalized.get("kpis", {}).get("own_review_rows", 0)
+        + normalized.get("kpis", {}).get("competitor_review_rows", 0)
     )
+    _MIN_GAP_SAMPLE = 20
+    if _total_reviews_for_gap < _MIN_GAP_SAMPLE:
+        normalized["kpis"]["competitive_gap_index"] = None
+    else:
+        normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
+            normalized.get("competitor", {}).get("gap_analysis") or []
+        )
     normalized["kpis"]["high_risk_count"] = sum(
         1 for p in normalized.get("self", {}).get("risk_products", [])
         if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
@@ -919,7 +927,7 @@ def normalize_deep_report_analytics(analytics):
         },
         {
             "label": "竞品差距指数",
-            "value": kpis.get("competitive_gap_index", "—"),
+            "value": kpis.get("competitive_gap_index") if kpis.get("competitive_gap_index") is not None else "—",
             "delta_display": kpis.get("competitive_gap_index_delta_display", ""),
             "delta_class": "delta-flat",
             "tooltip": _resolve_tooltip("竞品差距指数"),

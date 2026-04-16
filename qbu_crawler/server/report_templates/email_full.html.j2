@@ -88,7 +88,7 @@
           <td width="2%"></td>
           <td width="49%" style="padding:12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
             <div style="font-size:10px;color:#8e8ea0;margin-bottom:6px;">竞品差距指数</div>
-            <div style="font-size:24px;font-weight:800;color:#047857;line-height:1;">{{ _kpis.get("competitive_gap_index", "—") if _kpis else "—" }}</div>
+            <div style="font-size:24px;font-weight:800;color:#047857;line-height:1;">{% if _kpis and _kpis.get("competitive_gap_index") is not none %}{{ _kpis.get("competitive_gap_index") }}{% else %}—{% endif %}</div>
           </td>
         </tr>
       </table>

@@ -118,7 +118,7 @@
           <!-- Card: 竞品差距 -->
           <td width="49%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
             <div style="font-size:10px;color:#766d62;margin-bottom:6px;">竞品差距指数 <span title="{{ analytics.tooltips['竞品差距指数'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
-            <div style="font-size:26px;font-weight:800;color:#345f57;line-height:1;">{{ analytics.kpis.competitive_gap_index | default('—') }}</div>
+            <div style="font-size:26px;font-weight:800;color:#345f57;line-height:1;">{% if analytics.kpis.competitive_gap_index is not none %}{{ analytics.kpis.competitive_gap_index }}{% else %}—{% endif %}</div>
             {% if analytics.kpis.competitive_gap_index_delta_display is defined and analytics.kpis.competitive_gap_index_delta_display %}
             <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.competitive_gap_index_delta_display }}</div>
             {% endif %}

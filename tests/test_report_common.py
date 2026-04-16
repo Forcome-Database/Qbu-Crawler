@@ -1035,6 +1035,7 @@ def test_kpi_cards_value_class_competitive_gap():
     """KPI cards should assign status colors based on competitive_gap_index thresholds (0-100 scale)."""
     # severity-high: index > 60
     # Rate-based: (80/100 + 70/100) / 2 = 0.75 → 75 > 60 → severity-high
+    # own_review_rows + competitor_review_rows = 10 + 10 = 20 → meets MIN_GAP_SAMPLE
     analytics = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -1042,6 +1043,7 @@ def test_kpi_cards_value_class_competitive_gap():
             "translated_count": 10,
             "own_product_count": 1,
             "own_review_rows": 10,
+            "competitor_review_rows": 10,
             "own_negative_review_rate": 0.1,
             "own_avg_rating": 3.5,
         },
@@ -1069,6 +1071,7 @@ def test_kpi_cards_value_class_competitive_gap():
             "translated_count": 10,
             "own_product_count": 1,
             "own_review_rows": 10,
+            "competitor_review_rows": 10,
             "own_negative_review_rate": 0.1,
             "own_avg_rating": 3.5,
         },
@@ -1096,6 +1099,7 @@ def test_kpi_cards_value_class_competitive_gap():
             "translated_count": 10,
             "own_product_count": 1,
             "own_review_rows": 10,
+            "competitor_review_rows": 10,
             "own_negative_review_rate": 0.1,
             "own_avg_rating": 3.5,
         },
@@ -1369,3 +1373,63 @@ def test_kpi_cards_include_positive_rate():
     assert "好评率" in labels
     pos_card = next(c for c in result["kpi_cards"] if c["label"] == "好评率")
     assert pos_card["value"] == "62.5%"
+
+
+# ---------------------------------------------------------------------------
+# Tests for competitive_gap_index sample protection (Fix-6)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_sets_gap_index_none_when_low_sample():
+    """When total reviews < 20, competitive_gap_index should be None."""
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 5,
+            "negative_review_rows": 1,
+            "translated_count": 5,
+            "own_product_count": 1,
+            "own_avg_rating": 4.5,
+            "own_review_rows": 3,
+            "competitor_review_rows": 2,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"competitor_positive_count": 2, "own_negative_count": 1,
+                 "competitor_total": 2, "own_total": 3},
+            ],
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert result["kpis"]["competitive_gap_index"] is None
+
+
+def test_normalize_computes_gap_index_when_sufficient_sample():
+    """When total reviews >= 20, competitive_gap_index should be computed normally."""
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 40,
+            "negative_review_rows": 5,
+            "translated_count": 40,
+            "own_product_count": 2,
+            "own_avg_rating": 4.0,
+            "own_review_rows": 20,
+            "competitor_review_rows": 20,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"competitor_positive_count": 10, "own_negative_count": 5,
+                 "competitor_total": 20, "own_total": 20},
+            ],
+        },
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert result["kpis"]["competitive_gap_index"] is not None
+    assert isinstance(result["kpis"]["competitive_gap_index"], (int, float))
