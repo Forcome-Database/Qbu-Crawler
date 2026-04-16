@@ -1,0 +1,19 @@
+{
+  "critical": [
+    "metal shaving", "metal debris", "metal particle", "metal flake",
+    "grease in food", "oil contamination", "black substance",
+    "contamina", "foreign object", "foreign material",
+    "injury", "injured", "cut myself", "sliced finger",
+    "burned", "electric shock", "exploded", "shattered"
+  ],
+  "high": [
+    "rust on blade", "rust on plate", "rusty", "corrosion",
+    "worn blade", "chipped blade", "blade broke",
+    "motor overheating", "smoking", "burning smell",
+    "seal failure", "leaking grease"
+  ],
+  "moderate": [
+    "misaligned", "not aligned", "loose screw",
+    "bolt came off", "wobbles", "tips over", "unstable"
+  ]
+}

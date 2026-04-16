@@ -2,12 +2,70 @@
 
 import calendar
 import json
+import json as _json
 import os
 import re
 from datetime import date, datetime, timedelta
 
 from qbu_crawler import config
 from qbu_crawler.server import report_analytics
+
+# ── Safety Tier Detection ────────────────────────────────────────────────────
+
+_BUILTIN_SAFETY_TIERS = {
+    "critical": [
+        "metal shaving", "metal debris", "metal particle", "metal flake",
+        "grease in food", "oil contamination", "black substance",
+        "contamina", "foreign object", "foreign material",
+        "injury", "injured", "cut myself", "sliced finger",
+        "burned", "electric shock", "exploded", "shattered",
+    ],
+    "high": [
+        "rust on blade", "rust on plate", "rusty", "corrosion",
+        "worn blade", "chipped blade", "blade broke",
+        "motor overheating", "smoking", "burning smell",
+        "seal failure", "leaking grease",
+    ],
+    "moderate": [
+        "misaligned", "not aligned", "loose screw",
+        "bolt came off", "wobbles", "tips over", "unstable",
+    ],
+}
+
+_SAFETY_TIER_ORDER = ["critical", "high", "moderate"]
+
+
+def load_safety_tiers(path: str | None = None) -> dict:
+    """Load safety tier keywords from JSON file, falling back to built-in defaults."""
+    path = path or getattr(config, "SAFETY_TIERS_PATH", None)
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return _json.load(f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            pass
+    return _BUILTIN_SAFETY_TIERS
+
+
+_safety_tiers_cache: dict | None = None
+
+
+def _get_safety_tiers() -> dict:
+    global _safety_tiers_cache
+    if _safety_tiers_cache is None:
+        _safety_tiers_cache = load_safety_tiers()
+    return _safety_tiers_cache
+
+
+def detect_safety_level(text: str) -> str | None:
+    """Return highest matching safety tier ('critical'/'high'/'moderate') or None."""
+    text_lower = text.lower()
+    tiers = _get_safety_tiers()
+    for level in _SAFETY_TIER_ORDER:
+        keywords = tiers.get(level, [])
+        if any(kw in text_lower for kw in keywords):
+            return level
+    return None
 
 # ── Display-name mappings ─────────────────────────────────────────────────────
 

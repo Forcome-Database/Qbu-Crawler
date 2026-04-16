@@ -262,13 +262,8 @@ _POSITIVE_RULES = {
 
 _SEVERITY_SCORE = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
-_SAFETY_KEYWORDS = frozenset({
-    "metal shaving", "metal debris", "metal flake", "metal particle",
-    "broke", "broken", "snapped", "shattered", "exploded",
-    "dangerous", "hazard", "injury", "hurt", "unsafe",
-    "rust", "rusted", "corrosion",
-    "金属屑", "金属碎", "断裂", "爆裂", "危险", "安全", "锈",
-})
+# _SAFETY_KEYWORDS removed — replaced by configurable SAFETY_TIERS in report_common.py
+_SAFETY_SEVERITY_BONUS = {"critical": 5, "high": 3, "moderate": 1}
 
 
 def compute_cluster_severity(cluster, reviews_in_cluster, logical_date):
@@ -297,13 +292,26 @@ def compute_cluster_severity(cluster, reviews_in_cluster, logical_date):
             pass
     recency_rate = recent_count / max(review_count, 1)
 
-    # Safety signal
-    has_safety = False
+    # P008: Three-tier safety grading
+    from qbu_crawler.server.report_common import detect_safety_level
+    max_safety_level = None
     for r in reviews_in_cluster:
-        text = f"{r.get('headline', '')} {r.get('body', '')}".lower()
-        if any(kw in text for kw in _SAFETY_KEYWORDS):
-            has_safety = True
+        text = f"{r.get('headline', '')} {r.get('body', '')}"
+        level = detect_safety_level(text)
+        if level == "critical":
+            max_safety_level = "critical"
             break
+        if level and (max_safety_level is None or
+                      _SAFETY_SEVERITY_BONUS.get(level, 0) > _SAFETY_SEVERITY_BONUS.get(max_safety_level, 0)):
+            max_safety_level = level
+
+    if max_safety_level is None:
+        for r in reviews_in_cluster:
+            if r.get("impact_category") == "safety":
+                max_safety_level = "moderate"
+                break
+
+    safety_bonus = _SAFETY_SEVERITY_BONUS.get(max_safety_level, 0)
 
     score = 0
     if review_count >= 20:
@@ -323,8 +331,7 @@ def compute_cluster_severity(cluster, reviews_in_cluster, logical_date):
     elif recency_rate >= 0.10:
         score += 1
 
-    if has_safety:
-        score += 3
+    score += safety_bonus
 
     if score >= 7:
         return "critical"

@@ -1,7 +1,8 @@
-"""P008 Phase 1 — DB schema: safety_incidents, busy_timeout, label_anomaly_flags."""
+"""P008 Phase 1 — safety_incidents, busy_timeout, label_anomaly_flags, three-tier safety."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -86,3 +87,50 @@ def test_review_analysis_has_label_anomaly_flags(db):
     columns = {r[1] for r in info}
     assert "label_anomaly_flags" in columns
     conn.close()
+
+
+# ── Three-tier safety grading (Task 2) ──────────────────────────
+
+
+def test_load_safety_tiers_from_json(tmp_path):
+    cfg = {"critical": ["metal shaving"], "high": ["rust"], "moderate": ["loose screw"]}
+    path = tmp_path / "tiers.json"
+    path.write_text(json.dumps(cfg))
+    from qbu_crawler.server.report_common import load_safety_tiers
+    tiers = load_safety_tiers(str(path))
+    assert tiers["critical"] == ["metal shaving"]
+    assert tiers["high"] == ["rust"]
+
+
+def test_load_safety_tiers_fallback():
+    """Non-existent path falls back to built-in defaults."""
+    from qbu_crawler.server.report_common import load_safety_tiers
+    tiers = load_safety_tiers("/nonexistent/path.json")
+    assert "critical" in tiers
+    assert len(tiers["critical"]) > 0
+
+
+def test_detect_safety_level_critical():
+    from qbu_crawler.server.report_common import detect_safety_level
+    assert detect_safety_level("Found metal shaving in my ground beef") == "critical"
+
+
+def test_detect_safety_level_high():
+    from qbu_crawler.server.report_common import detect_safety_level
+    assert detect_safety_level("The blade is rusty after 2 months") == "high"
+
+
+def test_detect_safety_level_moderate():
+    from qbu_crawler.server.report_common import detect_safety_level
+    assert detect_safety_level("Motor housing is misaligned with the body") == "moderate"
+
+
+def test_detect_safety_level_none():
+    from qbu_crawler.server.report_common import detect_safety_level
+    assert detect_safety_level("Great product, works perfectly") is None
+
+
+def test_detect_safety_level_returns_highest():
+    """When multiple tiers match, return the highest."""
+    from qbu_crawler.server.report_common import detect_safety_level
+    assert detect_safety_level("Rusty blade caused injury to my hand") == "critical"
