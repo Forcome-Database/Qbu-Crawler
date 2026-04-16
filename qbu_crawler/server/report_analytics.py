@@ -1556,8 +1556,8 @@ def build_dual_report_analytics(snapshot, synced_labels=None):
         "untranslated_count": cum.get("untranslated_count", 0),
     }
 
-    # Cumulative analytics (main body) — WITH delta
-    cum_analytics = build_report_analytics(cumulative_snapshot, synced_labels=synced_labels)
+    # Cumulative analytics (main body) — skip_delta=True: outer block handles delta correctly
+    cum_analytics = build_report_analytics(cumulative_snapshot, synced_labels=synced_labels, skip_delta=True)
 
     # Window analytics — skip delta (F3: avoids meaningless window-vs-cumulative comparison)
     window_analytics = None

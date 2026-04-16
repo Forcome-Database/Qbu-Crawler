@@ -794,6 +794,13 @@ def _render_full_email_html(snapshot, analytics):
         html_name = f"workflow-run-{run_id}-full-report.html"
         report_url = f"{report_html_public_url}/{html_name}"
 
+    # Merge snapshot changes (price/stock/rating) with cluster changes (escalated/new/improving)
+    merged_changes = {**cluster_changes}
+    merged_changes["price_changes"] = changes.get("price_changes", [])
+    merged_changes["stock_changes"] = changes.get("stock_changes", [])
+    merged_changes["rating_changes"] = changes.get("rating_changes", [])
+    merged_changes["has_changes"] = changes.get("has_changes", False)
+
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         logical_date=snapshot.get("logical_date", ""),
@@ -808,7 +815,7 @@ def _render_full_email_html(snapshot, analytics):
         cumulative_kpis=cumulative_kpis,
         window=window,
         health_confidence=health_confidence,
-        changes=cluster_changes,
+        changes=merged_changes,
         new_review_summary=new_review_summary,
         report_url=report_url,
     )
