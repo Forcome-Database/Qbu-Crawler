@@ -409,7 +409,7 @@ from qbu_crawler.server import report_common
 
 
 def test_compute_health_index_perfect():
-    # NPS-proxy: all promoters → NPS=100, health=100
+    # NPS-proxy: all promoters → NPS=100 — but only 10 reviews so shrinkage applies
     analytics = {
         "kpis": {
             "own_review_rows": 10,
@@ -417,11 +417,14 @@ def test_compute_health_index_perfect():
             "own_negative_review_rows": 0,
         },
     }
-    assert report_common.compute_health_index(analytics) == 100.0
+    health, confidence = report_common.compute_health_index(analytics)
+    # weight=10/30, health = 10/30*100 + 20/30*50 = 66.67
+    assert 66.0 <= health <= 67.5
+    assert confidence == "medium"
 
 
 def test_compute_health_index_worst():
-    # NPS-proxy: all detractors → NPS=-100, health=0
+    # NPS-proxy: all detractors → NPS=-100 — but only 10 reviews so shrinkage applies
     analytics = {
         "kpis": {
             "own_review_rows": 10,
@@ -429,7 +432,10 @@ def test_compute_health_index_worst():
             "own_negative_review_rows": 10,
         },
     }
-    assert report_common.compute_health_index(analytics) == 0.0
+    health, confidence = report_common.compute_health_index(analytics)
+    # weight=10/30, health = 10/30*0 + 20/30*50 = 33.33
+    assert 33.0 <= health <= 34.0
+    assert confidence == "medium"
 
 
 def test_compute_competitive_gap_index():
@@ -751,7 +757,8 @@ def test_parse_date_flexible_month_precision():
     assert result == real_date(2025, 11, 7), \
         f"Expected 2025-11-07 but got {result}"
 
-    # Create analytics with high health (NPS-proxy: 9 promoters, 1 detractor → health=90)
+    # Create analytics with high raw health (NPS-proxy: 9 promoters, 1 detractor → raw=90)
+    # But only 10 reviews → Bayesian shrinkage: weight=10/30, health≈63.3 → severity-medium
     analytics2 = {
         "kpis": {
             "ingested_review_rows": 10,
@@ -760,7 +767,7 @@ def test_parse_date_flexible_month_precision():
             "own_product_count": 1,
             "own_review_rows": 10,
             "own_positive_review_rows": 9,  # 9 promoters
-            "own_negative_review_rows": 1,  # 1 detractor → health=90
+            "own_negative_review_rows": 1,  # 1 detractor → raw health=90, shrunk ≈63.3
             "own_negative_review_rate": 0.1,
             "own_avg_rating": 4.8,
         },
@@ -773,8 +780,8 @@ def test_parse_date_flexible_month_precision():
     }
     result2 = normalize_deep_report_analytics(analytics2)
     health_card2 = [c for c in result2["kpi_cards"] if c["label"] == "健康指数"][0]
-    # High health should either be severity-low or have no class
-    assert health_card2["value_class"] in ["severity-low", ""]
+    # Small sample shrinkage pulls 90→~63.3, which is severity-medium (60-80 range)
+    assert health_card2["value_class"] in ["severity-medium", "severity-low", ""]
 
 
 def test_kpi_cards_value_class_negative_rate():
@@ -1025,8 +1032,8 @@ def test_health_index_sensitive_to_negative_spike():
             "own_negative_review_rows": 6,
         },
     }
-    idx_baseline = compute_health_index(baseline)
-    idx_spiked = compute_health_index(spiked)
+    idx_baseline, _ = compute_health_index(baseline)
+    idx_spiked, _ = compute_health_index(spiked)
     assert idx_baseline - idx_spiked > 15, \
         f"Index drop too small: {idx_baseline} → {idx_spiked} (diff {idx_baseline - idx_spiked})"
 
@@ -1433,3 +1440,98 @@ def test_normalize_computes_gap_index_when_sufficient_sample():
     result = normalize_deep_report_analytics(analytics)
     assert result["kpis"]["competitive_gap_index"] is not None
     assert isinstance(result["kpis"]["competitive_gap_index"], (int, float))
+
+
+# ---------------------------------------------------------------------------
+# Tests for compute_health_index Bayesian shrinkage (Fix-3)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_health_index_returns_tuple():
+    """compute_health_index should return (health, confidence) tuple."""
+    analytics = {
+        "kpis": {
+            "own_review_rows": 10,
+            "own_positive_review_rows": 10,
+            "own_negative_review_rows": 0,
+        },
+    }
+    result = report_common.compute_health_index(analytics)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    health, confidence = result
+    assert isinstance(health, float)
+    assert confidence in ("high", "medium", "low", "no_data")
+
+
+def test_compute_health_index_shrinks_small_sample():
+    """1 perfect review: raw=100, but should shrink toward 50."""
+    analytics = {
+        "kpis": {
+            "own_review_rows": 1,
+            "own_positive_review_rows": 1,
+            "own_negative_review_rows": 0,
+        },
+    }
+    health, confidence = report_common.compute_health_index(analytics)
+    # weight = 1/30, health = 1/30 * 100 + 29/30 * 50 = 51.67
+    assert 51.0 <= health <= 52.5
+    assert confidence == "low"
+
+
+def test_compute_health_index_medium_confidence():
+    """10 reviews: medium confidence, partial shrinkage."""
+    analytics = {
+        "kpis": {
+            "own_review_rows": 10,
+            "own_positive_review_rows": 10,
+            "own_negative_review_rows": 0,
+        },
+    }
+    health, confidence = report_common.compute_health_index(analytics)
+    # weight = 10/30, health = 10/30 * 100 + 20/30 * 50 = 66.67
+    assert 66.0 <= health <= 67.5
+    assert confidence == "medium"
+
+
+def test_compute_health_index_high_confidence():
+    """30+ reviews: no shrinkage, high confidence."""
+    analytics = {
+        "kpis": {
+            "own_review_rows": 100,
+            "own_positive_review_rows": 90,
+            "own_negative_review_rows": 5,
+        },
+    }
+    health, confidence = report_common.compute_health_index(analytics)
+    # NPS = (90-5)/100 * 100 = 85, health = (85+100)/2 = 92.5
+    assert health == 92.5
+    assert confidence == "high"
+
+
+def test_compute_health_index_no_data():
+    analytics = {"kpis": {"own_review_rows": 0}}
+    health, confidence = report_common.compute_health_index(analytics)
+    assert health == 50.0
+    assert confidence == "no_data"
+
+
+def test_normalize_injects_health_confidence():
+    """normalize_deep_report_analytics should set health_confidence alongside health_index."""
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 2,
+            "negative_review_rows": 1,
+            "translated_count": 2,
+            "own_product_count": 1,
+            "own_avg_rating": 3.0,
+            "own_review_rows": 2,
+            "competitor_review_rows": 0,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+    result = normalize_deep_report_analytics(analytics)
+    assert "health_confidence" in result["kpis"]
+    assert result["kpis"]["health_confidence"] in ("low", "medium", "high", "no_data")
+    assert isinstance(result["kpis"]["health_index"], float)

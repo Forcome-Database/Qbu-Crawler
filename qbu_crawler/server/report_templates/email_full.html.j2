@@ -34,6 +34,11 @@
     <td style="background:{{ hero_bg }};padding:28px 24px 20px;text-align:center;">
       <div style="font-size:10px;color:{{ hero_color }};letter-spacing:0.15em;text-transform:uppercase;opacity:0.8;margin-bottom:8px;">产品健康指数</div>
       <div style="font-size:52px;font-weight:900;color:{{ hero_color }};line-height:1;margin-bottom:6px;">{{ _kpis.get("health_index", "—") if _kpis else "—" }}</div>
+      {% if _kpis.get("health_confidence") == "low" %}
+      <div style="font-size:11px;color:{{ hero_color }};opacity:0.7;margin-bottom:4px;">&#9888; 样本仅 {{ _kpis.get("own_review_rows", 0) }} 条，置信度低</div>
+      {% elif _kpis.get("health_confidence") == "medium" %}
+      <div style="font-size:11px;color:{{ hero_color }};opacity:0.7;margin-bottom:4px;">样本 {{ _kpis.get("own_review_rows", 0) }} 条</div>
+      {% endif %}
       <div style="font-size:12px;color:{{ hero_color }};opacity:0.6;">/ 100 · 深度日报</div>
     </td>
   </tr>

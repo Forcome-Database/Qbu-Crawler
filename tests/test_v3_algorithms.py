@@ -27,35 +27,48 @@ class TestHealthIndexV3:
     """NPS-proxy: (promoters - detractors) / total * 100, mapped to 0-100."""
 
     def test_balanced_reviews(self):
-        """76 promoters, 55 detractors, 141 total → NPS=14.9, health=57.4"""
+        """76 promoters, 55 detractors, 141 total → NPS=14.9, health=57.4 (no shrinkage, >=30)"""
         kpis = {
             "own_review_rows": 141,
             "own_positive_review_rows": 76,
             "own_negative_review_rows": 55,
         }
-        result = compute_health_index({"kpis": kpis})
-        assert 57.0 <= result <= 58.0
+        health, confidence = compute_health_index({"kpis": kpis})
+        assert 57.0 <= health <= 58.0
+        assert confidence == "high"
 
     def test_zero_own_reviews_returns_neutral(self):
         kpis = {"own_review_rows": 0, "own_positive_review_rows": 0, "own_negative_review_rows": 0}
-        assert compute_health_index({"kpis": kpis}) == 50.0
+        health, confidence = compute_health_index({"kpis": kpis})
+        assert health == 50.0
+        assert confidence == "no_data"
 
     def test_all_promoters(self):
+        """10 reviews, all promoters: raw=100, shrunk to ~66.7 (medium confidence)"""
         kpis = {"own_review_rows": 10, "own_positive_review_rows": 10, "own_negative_review_rows": 0}
-        assert compute_health_index({"kpis": kpis}) == 100.0
+        health, confidence = compute_health_index({"kpis": kpis})
+        assert 66.0 <= health <= 67.5
+        assert confidence == "medium"
 
     def test_all_detractors(self):
+        """10 reviews, all detractors: raw=0, shrunk to ~33.3 (medium confidence)"""
         kpis = {"own_review_rows": 10, "own_positive_review_rows": 0, "own_negative_review_rows": 10}
-        assert compute_health_index({"kpis": kpis}) == 0.0
+        health, confidence = compute_health_index({"kpis": kpis})
+        assert 33.0 <= health <= 34.0
+        assert confidence == "medium"
 
     def test_clamped_to_0_100(self):
         kpis = {"own_review_rows": 5, "own_positive_review_rows": 0, "own_negative_review_rows": 5}
-        result = compute_health_index({"kpis": kpis})
-        assert 0 <= result <= 100
+        health, confidence = compute_health_index({"kpis": kpis})
+        assert 0 <= health <= 100
 
     def test_missing_kpis_returns_neutral(self):
-        assert compute_health_index({}) == 50.0
-        assert compute_health_index(None) == 50.0
+        health1, conf1 = compute_health_index({})
+        health2, conf2 = compute_health_index(None)
+        assert health1 == 50.0
+        assert conf1 == "no_data"
+        assert health2 == 50.0
+        assert conf2 == "no_data"
 
 
 from datetime import date
