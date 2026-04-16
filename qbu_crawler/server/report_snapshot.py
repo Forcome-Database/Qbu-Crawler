@@ -305,7 +305,8 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
             ea = _enriched_map.get(r.get("id"))
             if ea:
                 for _key in ("sentiment", "analysis_features", "analysis_labels",
-                             "analysis_insight_cn", "analysis_insight_en"):
+                             "analysis_insight_cn", "analysis_insight_en",
+                             "impact_category", "failure_mode"):
                     _val = ea.get(_key)
                     if _val is not None:
                         r.setdefault(_key, _val)

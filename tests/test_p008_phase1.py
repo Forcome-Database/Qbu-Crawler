@@ -134,3 +134,63 @@ def test_detect_safety_level_returns_highest():
     """When multiple tiers match, return the highest."""
     from qbu_crawler.server.report_common import detect_safety_level
     assert detect_safety_level("Rusty blade caused injury to my hand") == "critical"
+
+
+# ── impact_category / failure_mode pipeline (Task 3) ────────────
+
+
+def _seed_product_review_analysis(db_file):
+    """Insert a product + review + analysis with impact_category/failure_mode."""
+    conn = _get_test_conn(db_file)
+    conn.execute(
+        "INSERT INTO products (url, name, sku, site) VALUES (?, ?, ?, ?)",
+        ("http://test.com/p1", "Test Product", "SKU001", "test"),
+    )
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, rating)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (1, "Tester", "Title", "Body text", 4.0),
+    )
+    conn.execute(
+        """INSERT INTO review_analysis
+           (review_id, sentiment, sentiment_score, labels, features,
+            insight_cn, insight_en, impact_category, failure_mode, llm_model, prompt_version)
+           VALUES (1, 'negative', 0.2, '[]', '[]', '', '',
+                   'safety', 'rust_corrosion', 'test', 'v1')"""
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_query_cumulative_data_includes_impact_category(db):
+    from qbu_crawler.server import report
+    _seed_product_review_analysis(db)
+    products, reviews = report.query_cumulative_data()
+    assert len(reviews) >= 1
+    assert reviews[0]["impact_category"] == "safety"
+    assert reviews[0]["failure_mode"] == "rust_corrosion"
+
+
+def test_get_reviews_with_analysis_includes_impact_fields(db):
+    _seed_product_review_analysis(db)
+    reviews = models.get_reviews_with_analysis([1])
+    assert len(reviews) == 1
+    assert reviews[0]["impact_category"] == "safety"
+    assert reviews[0]["failure_mode"] == "rust_corrosion"
+
+
+def test_freeze_snapshot_enriches_impact_fields(db):
+    """freeze enrichment must copy impact_category/failure_mode into snapshot reviews."""
+    _seed_product_review_analysis(db)
+    enriched = models.get_reviews_with_analysis([1])
+    # Simulate the enrichment loop from report_snapshot.py
+    review = {"id": 1, "product_id": 1}
+    ea = enriched[0]
+    for _key in ("sentiment", "analysis_features", "analysis_labels",
+                 "analysis_insight_cn", "analysis_insight_en",
+                 "impact_category", "failure_mode"):
+        _val = ea.get(_key)
+        if _val is not None:
+            review.setdefault(_key, _val)
+    assert review["impact_category"] == "safety"
+    assert review["failure_mode"] == "rust_corrosion"

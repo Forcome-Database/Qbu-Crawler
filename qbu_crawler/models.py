@@ -1965,7 +1965,9 @@ def get_reviews_with_analysis(
             ra.labels   AS analysis_labels,
             ra.features AS analysis_features,
             ra.insight_cn AS analysis_insight_cn,
-            ra.insight_en AS analysis_insight_en
+            ra.insight_en AS analysis_insight_en,
+            ra.impact_category,
+            ra.failure_mode
         FROM reviews r
         JOIN products p ON r.product_id = p.id
         LEFT JOIN review_analysis ra ON ra.review_id = r.id
