@@ -81,3 +81,35 @@ def render_v3_html(snapshot, analytics, output_path=None, changes=None):
     Path(output_path).write_text(html, encoding="utf-8")
     logger.info("V3 HTML report rendered: %s (%d bytes)", output_path, len(html))
     return output_path
+
+
+def render_daily_briefing(snapshot, cumulative_kpis, window_reviews,
+                          attention_signals, changes, output_path,
+                          quiet_days=0):
+    """Render the P008 Phase 2 daily briefing three-block HTML."""
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("daily_briefing.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    css_text = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+
+    html = template.render(
+        logical_date=snapshot.get("logical_date", ""),
+        snapshot=snapshot,
+        cumulative_kpis=cumulative_kpis,
+        window_reviews=window_reviews,
+        attention_signals=attention_signals,
+        changes=changes,
+        quiet_days=quiet_days,
+        css_text=css_text,
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    Path(output_path).write_text(html, encoding="utf-8")
+    logger.info("Daily briefing HTML rendered: %s (%d bytes)", output_path, len(html))
+    return output_path

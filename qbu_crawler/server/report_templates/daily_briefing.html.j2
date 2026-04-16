@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QBU 网评监控 · 日报 {{ logical_date }}</title>
+  <style>{{ css_text }}</style>
+</head>
+<body style="margin:0;padding:0;background:var(--bg, #f8f9fa);">
+
+  {# ── Sticky KPI Bar ── #}
+  <header class="kpi-bar" style="position:sticky;top:0;z-index:100;background:var(--surface, #fff);border-bottom:1px solid var(--border, #e2e8f0);padding:12px 24px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
+    <strong style="font-size:14px;color:var(--text, #1a202c);">QBU 网评监控 · {{ logical_date }}</strong>
+    <span style="font-family:var(--font-mono, monospace);font-size:13px;">健康 <strong>{{ cumulative_kpis.get("health_index", "—") }}</strong></span>
+    <span style="font-family:var(--font-mono, monospace);font-size:13px;">差评 <strong>{{ cumulative_kpis.get("own_negative_review_rate_display", "—") }}</strong></span>
+    <span style="font-family:var(--font-mono, monospace);font-size:13px;">高风险 <strong>{{ cumulative_kpis.get("high_risk_count", 0) }}</strong></span>
+  </header>
+
+  <main style="max-width:720px;margin:0 auto;padding:24px 16px;">
+
+    {# ── Block 1: 累积快照（始终存在）── #}
+    <section class="briefing-section" style="margin-bottom:24px;">
+      <h2 style="font-size:16px;font-weight:600;margin:0 0 12px;">累积快照</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;">
+        <div class="kpi-card" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:12px;color:var(--text-secondary,#718096);">健康指数</div>
+          <div style="font-size:24px;font-weight:700;color:var(--accent,#2b6cb0);">{{ cumulative_kpis.get("health_index", "—") }}</div>
+          <div style="font-size:11px;color:var(--text-muted,#a0aec0);">/ 100</div>
+        </div>
+        <div class="kpi-card" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:12px;color:var(--text-secondary,#718096);">差评率</div>
+          <div style="font-size:24px;font-weight:700;">{{ cumulative_kpis.get("own_negative_review_rate_display", "—") }}</div>
+        </div>
+        <div class="kpi-card" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:12px;color:var(--text-secondary,#718096);">高风险产品</div>
+          <div style="font-size:24px;font-weight:700;{% if cumulative_kpis.get('high_risk_count', 0) > 0 %}color:var(--critical,#e53e3e);{% endif %}">{{ cumulative_kpis.get("high_risk_count", 0) }}</div>
+        </div>
+        <div class="kpi-card" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:12px;color:var(--text-secondary,#718096);">评论总量</div>
+          <div style="font-size:24px;font-weight:700;">{{ cumulative_kpis.get("own_review_rows", 0) }}</div>
+        </div>
+      </div>
+      {% if quiet_days is defined and quiet_days and quiet_days > 0 %}
+      <p style="margin:8px 0 0;font-size:13px;color:var(--text-muted,#a0aec0);">距上次有内容已 {{ quiet_days }} 天</p>
+      {% endif %}
+    </section>
+
+    {# ── Block 2: 今日变化（有内容时展示）── #}
+    {% if window_reviews %}
+    <section class="briefing-section" style="margin-bottom:24px;">
+      <h2 style="font-size:16px;font-weight:600;margin:0 0 12px;">今日变化 · 新评论（{{ window_reviews|length }}条）</h2>
+      {% for r in window_reviews[:15] %}
+      <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:12px 16px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span style="font-size:13px;">{{ "★" * ((r.rating|int) if r.rating is defined and r.rating is not none else 0) }}{{ "☆" * (5 - ((r.rating|int) if r.rating is defined and r.rating is not none else 0)) }}</span>
+          <strong style="font-size:13px;">{{ r.get("product_name", "") if r.get is defined else "" }}</strong>
+          {% if r.attention is defined and r.attention %}
+          <span style="font-size:11px;padding:2px 6px;border-radius:4px;{% if r.attention.label == '高关注度评论' %}background:#fed7d7;color:#c53030;{% elif r.attention.label == '差评' %}background:#fefcbf;color:#975a16;{% else %}background:#c6f6d5;color:#276749;{% endif %}">{{ r.attention.label }}</span>
+          {% endif %}
+        </div>
+        <div style="font-size:13px;font-weight:600;">{{ r.get("headline_cn", "") or r.get("headline", "") if r.get is defined else "" }}</div>
+        <div style="font-size:12px;color:var(--text-secondary,#718096);margin-top:2px;">{{ ((r.get("body_cn", "") or r.get("body", "")) if r.get is defined else "")[:200] }}{% if ((r.get("body", "") or "") if r.get is defined else "")|length > 200 %}...{% endif %}</div>
+        {% if r.attention is defined and r.attention and r.attention.signals %}
+        <div style="font-size:11px;color:var(--text-muted,#a0aec0);margin-top:4px;">{{ r.attention.signals | join(" · ") }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ── Block 2b: Price/Stock/Rating Changes ── #}
+    {% set _ch = changes if changes is defined and changes else {} %}
+    {% if _ch.get("price_changes") or _ch.get("stock_changes") or _ch.get("rating_changes") %}
+    <section class="briefing-section" style="margin-bottom:24px;">
+      <h2 style="font-size:16px;font-weight:600;margin:0 0 12px;">产品数据变动</h2>
+      {% if _ch.get("price_changes") %}
+      <p style="font-size:13px;font-weight:600;margin:8px 0 4px;">💰 价格变化（{{ _ch.price_changes|length }}）</p>
+      {% for c in _ch.price_changes %}
+      <div style="font-size:13px;padding:4px 0;">{{ c.name }}: ${{ c.old }} → {% if c.new is not none %}${{ c.new }}{% else %}已下架{% endif %}</div>
+      {% endfor %}
+      {% endif %}
+      {% if _ch.get("stock_changes") %}
+      <p style="font-size:13px;font-weight:600;margin:8px 0 4px;">📦 库存变化（{{ _ch.stock_changes|length }}）</p>
+      {% for c in _ch.stock_changes %}
+      <div style="font-size:13px;padding:4px 0;">{{ c.name }}: {{ "有货" if c.old == "in_stock" else "缺货" }} → {{ "有货" if c.new == "in_stock" else "缺货" }}</div>
+      {% endfor %}
+      {% endif %}
+      {% if _ch.get("rating_changes") %}
+      <p style="font-size:13px;font-weight:600;margin:8px 0 4px;">⭐ 评分变化（{{ _ch.rating_changes|length }}）</p>
+      {% for c in _ch.rating_changes %}
+      <div style="font-size:13px;padding:4px 0;">{{ c.name }}: {{ c.old if c.old is not none else "—" }} → {{ c.new if c.new is not none else "已下架" }}</div>
+      {% endfor %}
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {# ── Block 3: 需注意（条件触发）── #}
+    {% set action_signals = attention_signals | selectattr("urgency", "equalto", "action") | list if attention_signals else [] %}
+    {% set ref_signals = attention_signals | selectattr("urgency", "equalto", "reference") | list if attention_signals else [] %}
+
+    {% if action_signals or ref_signals %}
+    <section class="briefing-section" style="margin-bottom:24px;">
+      <h2 style="font-size:16px;font-weight:600;margin:0 0 12px;">需注意</h2>
+
+      {% if action_signals %}
+      <div style="border-left:4px solid var(--critical,#e53e3e);background:#fff5f5;border-radius:4px;padding:12px 16px;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;color:var(--critical,#e53e3e);margin-bottom:6px;">需行动</div>
+        {% for s in action_signals %}
+        <div style="font-size:13px;padding:2px 0;">{{ s.title }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if ref_signals %}
+      <div style="border-left:4px solid var(--accent,#2b6cb0);background:#ebf8ff;border-radius:4px;padding:12px 16px;">
+        <div style="font-size:12px;font-weight:700;color:var(--accent,#2b6cb0);margin-bottom:6px;">供参考</div>
+        {% for s in ref_signals %}
+        <div style="font-size:13px;padding:2px 0;">{{ s.title }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+  </main>
+
+  <footer style="text-align:center;font-size:11px;color:var(--text-muted,#a0aec0);padding:16px;">
+    差评定义: ≤{{ threshold }}星 · 内部资料 · AI 自动生成
+  </footer>
+</body>
+</html>
