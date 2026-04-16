@@ -620,3 +620,81 @@ def test_select_insight_samples_includes_risk_product_negatives():
     # Check that at least one negative review (rating <= 2) from risk products is included
     neg_samples = [s for s in samples if (s.get("rating") or 5) <= 2]
     assert len(neg_samples) > 0, "Should include at least one negative review from risk products"
+
+
+# ---------------------------------------------------------------------------
+# Tests for Task 5 (P007): cumulative review pool + window summary in prompt
+# ---------------------------------------------------------------------------
+
+
+def test_select_insight_samples_prefers_cumulative():
+    """_select_insight_samples should prefer snapshot['cumulative']['reviews'] over snapshot['reviews']."""
+    from qbu_crawler.server.report_llm import _select_insight_samples
+
+    # Reviews that only exist in cumulative (id=999) vs only in top-level (id=101..202)
+    cumulative_only_review = {
+        "id": 999,
+        "product_name": "Own Grinder",
+        "product_sku": "OWN-1",
+        "ownership": "own",
+        "headline": "Cumulative only review",
+        "body": "This review only exists in the cumulative pool.",
+        "rating": 1,
+        "images": [],
+    }
+    snapshot = _snapshot()
+    snapshot["cumulative"] = {
+        "reviews": [cumulative_only_review],
+    }
+    analytics = _analytics()
+
+    samples = _select_insight_samples(snapshot, analytics)
+    sample_ids = {s["id"] for s in samples}
+
+    # The cumulative-only review must be included
+    assert 999 in sample_ids, "cumulative review (id=999) should be selected from cumulative pool"
+    # Top-level reviews (not in cumulative) should NOT be selected
+    top_level_ids = {r["id"] for r in _snapshot()["reviews"]}
+    assert not sample_ids.intersection(top_level_ids), (
+        "Reviews from top-level snapshot['reviews'] should be excluded when cumulative pool is present"
+    )
+
+
+def test_select_insight_samples_works_without_cumulative():
+    """_select_insight_samples should fall back to snapshot['reviews'] when no cumulative key."""
+    from qbu_crawler.server.report_llm import _select_insight_samples
+
+    snapshot = _snapshot()
+    # Ensure no cumulative key
+    snapshot.pop("cumulative", None)
+    analytics = _analytics()
+
+    samples = _select_insight_samples(snapshot, analytics)
+    sample_ids = {s["id"] for s in samples}
+
+    # Should still return samples from top-level reviews
+    top_level_ids = {r["id"] for r in snapshot["reviews"]}
+    assert len(samples) > 0, "Should return samples even without cumulative key"
+    assert sample_ids.issubset(top_level_ids), (
+        "All samples should come from snapshot['reviews'] when no cumulative key"
+    )
+
+
+def test_build_insights_prompt_includes_window_summary():
+    """_build_insights_prompt should append a 今日变化 section when window data is present."""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = _insights_analytics()
+    analytics["window"] = {
+        "reviews_count": 12,
+        "own_reviews_count": 8,
+        "competitor_reviews_count": 4,
+        "new_negative_count": 3,
+    }
+    analytics["perspective"] = "dual"
+
+    prompt = _build_insights_prompt(analytics)
+
+    assert "今日" in prompt, "Prompt should contain '今日' when window data is present"
+    assert "12" in prompt, "Prompt should mention window reviews_count (12)"
+    assert "今日新增评论" in prompt, "Prompt should contain '今日新增评论' section"
