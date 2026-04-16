@@ -535,10 +535,44 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     run_id = snapshot.get("run_id", 0)
     changes = context.get("changes", {})
 
+    # ── Cumulative analytics: compute from snapshot["cumulative"] when available ──
+    cum_analytics = None
+    analytics_path = None
+    cumulative_computed = False
+    if snapshot.get("cumulative"):
+        try:
+            cum_snapshot = {
+                "run_id": run_id,
+                "logical_date": snapshot.get("logical_date", ""),
+                "data_since": snapshot.get("data_since", ""),
+                "data_until": snapshot.get("data_until", ""),
+                "snapshot_hash": snapshot.get("snapshot_hash", ""),
+                **snapshot["cumulative"],
+            }
+            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            os.makedirs(config.REPORT_DIR, exist_ok=True)
+            analytics_path = os.path.join(
+                config.REPORT_DIR,
+                f"workflow-run-{run_id}-analytics-{snapshot.get('logical_date', 'unknown')}.json",
+            )
+            Path(analytics_path).write_text(
+                json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            cumulative_computed = True
+            _logger.info("Change report: cumulative analytics computed and saved to %s", analytics_path)
+        except Exception:
+            _logger.exception("Change report: cumulative analytics computation failed")
+            cum_analytics = None
+            analytics_path = None
+
+    # Use cumulative analytics when available, fall back to prev_analytics
+    effective_analytics = cum_analytics or prev_analytics
+
     # Render quiet day HTML with change info
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, prev_analytics, changes=changes)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics, changes=changes)
     except Exception:
         _logger.exception("Change report HTML generation failed")
 
@@ -546,7 +580,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     email_result = None
     if send_email:
         try:
-            email_result = _send_mode_email("change", snapshot, prev_analytics, changes=changes)
+            email_result = _send_mode_email("change", snapshot, effective_analytics, changes=changes)
         except Exception as e:
             email_result = {"success": False, "error": str(e), "recipients": []}
 
@@ -559,7 +593,8 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         "reviews_count": 0,
         "html_path": html_path,
         "excel_path": None,
-        "analytics_path": None,
+        "analytics_path": analytics_path,
+        "cumulative_computed": cumulative_computed,
         "email": email_result,
     }
 
@@ -571,9 +606,43 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     # Check if we should send this quiet-day email (also returns consecutive count)
     should_send, digest_mode, consecutive = should_send_quiet_email(run_id)
 
+    # ── Cumulative analytics: compute from snapshot["cumulative"] when available ──
+    cum_analytics = None
+    analytics_path = None
+    cumulative_computed = False
+    if snapshot.get("cumulative"):
+        try:
+            cum_snapshot = {
+                "run_id": run_id,
+                "logical_date": snapshot.get("logical_date", ""),
+                "data_since": snapshot.get("data_since", ""),
+                "data_until": snapshot.get("data_until", ""),
+                "snapshot_hash": snapshot.get("snapshot_hash", ""),
+                **snapshot["cumulative"],
+            }
+            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            os.makedirs(config.REPORT_DIR, exist_ok=True)
+            analytics_path = os.path.join(
+                config.REPORT_DIR,
+                f"workflow-run-{run_id}-analytics-{snapshot.get('logical_date', 'unknown')}.json",
+            )
+            Path(analytics_path).write_text(
+                json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            cumulative_computed = True
+            _logger.info("Quiet report: cumulative analytics computed and saved to %s", analytics_path)
+        except Exception:
+            _logger.exception("Quiet report: cumulative analytics computation failed")
+            cum_analytics = None
+            analytics_path = None
+
+    # Use cumulative analytics when available, fall back to prev_analytics
+    effective_analytics = cum_analytics or prev_analytics
+
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, prev_analytics)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics)
     except Exception:
         _logger.exception("Quiet report HTML generation failed")
 
@@ -581,7 +650,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     if send_email and should_send:
         try:
             email_result = _send_mode_email(
-                "quiet", snapshot, prev_analytics,
+                "quiet", snapshot, effective_analytics,
                 consecutive_quiet=consecutive,
             )
         except Exception as e:
@@ -599,7 +668,8 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "reviews_count": 0,
         "html_path": html_path,
         "excel_path": None,
-        "analytics_path": None,
+        "analytics_path": analytics_path,
+        "cumulative_computed": cumulative_computed,
         "email": email_result,
         "email_skipped": not should_send,
         "digest_mode": digest_mode,

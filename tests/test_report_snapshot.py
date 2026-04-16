@@ -1078,3 +1078,95 @@ def test_full_report_analytics_has_dual_perspective(dual_snapshot_db, monkeypatc
     assert analytics.get("perspective") == "dual"
     assert "cumulative_kpis" in analytics
     assert "window" in analytics
+
+
+# ---------------------------------------------------------------------------
+# Tests for change/quiet modes using cumulative analytics (P007 Task 8)
+# ---------------------------------------------------------------------------
+
+
+def test_change_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
+    """Change mode should compute cumulative analytics when snapshot['cumulative'] exists."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Simulate a change-mode day: clear window reviews so it becomes no-new-reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # Build cum_snapshot so report_analytics.build_report_analytics is callable
+    # monkeypatch it to return a lightweight stub
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None, skip_delta=False: {
+            "mode": "baseline",
+            "kpis": {"ingested_review_rows": 2, "own_review_rows": 1},
+            "self": {},
+            "competitor": {},
+            "appendix": {},
+        },
+    )
+
+    change_result = report_snapshot._generate_change_report(
+        snapshot,
+        send_email=False,
+        prev_analytics=None,
+        context={"changes": {"has_changes": True, "price_changes": [{"sku": "SKU-DUAL-1", "name": "Dual Product", "old": 49.99, "new": 44.99}]}},
+    )
+
+    assert change_result["mode"] == "change"
+    assert change_result["status"] == "completed"
+    # When cumulative data exists, analytics_path should be written
+    assert change_result["analytics_path"] is not None
+    assert change_result.get("cumulative_computed") is True
+    assert Path(change_result["analytics_path"]).is_file()
+
+
+def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
+    """Quiet mode should compute cumulative analytics when snapshot['cumulative'] exists."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Simulate a quiet-mode day: clear window reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # monkeypatch build_report_analytics to a lightweight stub
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None, skip_delta=False: {
+            "mode": "baseline",
+            "kpis": {"ingested_review_rows": 2, "own_review_rows": 1},
+            "self": {},
+            "competitor": {},
+            "appendix": {},
+        },
+    )
+
+    # monkeypatch should_send_quiet_email to always return True (avoid DB lookup on run_id)
+    monkeypatch.setattr(
+        report_snapshot,
+        "should_send_quiet_email",
+        lambda run_id: (True, None, 0),
+    )
+
+    quiet_result = report_snapshot._generate_quiet_report(
+        snapshot,
+        send_email=False,
+        prev_analytics=None,
+    )
+
+    assert quiet_result["mode"] == "quiet"
+    assert quiet_result["status"] == "completed_no_change"
+    # When cumulative data exists, analytics_path should be written
+    assert quiet_result["analytics_path"] is not None
+    assert quiet_result.get("cumulative_computed") is True
+    assert Path(quiet_result["analytics_path"]).is_file()
