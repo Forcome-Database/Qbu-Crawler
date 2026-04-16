@@ -632,32 +632,13 @@ class WorkflowWorker:
         if run.get("report_phase") == "none":
             snapshot = load_report_snapshot(run["snapshot_path"])
             if snapshot.get("reviews_count", 0) == 0:
-                # No new reviews — skip fast/full report entirely.
-                # Only send a single "report skipped" notification.
+                # No new reviews — skip fast report (meaningless without reviews),
+                # jump directly to full_pending where generate_report_from_snapshot
+                # will route to change or quiet mode.
                 _clear_translation_progress(run_id)
-                _enqueue_workflow_notification(
-                    kind="workflow_report_skipped",
-                    target=config.WORKFLOW_NOTIFICATION_TARGET,
-                    payload={
-                        "run_id": run_id,
-                        "logical_date": run["logical_date"],
-                        "snapshot_hash": run.get("snapshot_hash", ""),
-                        "products_count": snapshot.get("products_count", 0),
-                        "reviews_count": 0,
-                        "reason": "no_new_reviews",
-                    },
-                    dedupe_key=f"workflow:{run_id}:report-skipped",
-                )
-                models.update_workflow_run(
-                    run_id,
-                    status="completed",
-                    report_phase="skipped_no_reviews",
-                    report_mode="skipped",
-                    finished_at=now,
-                    error=None,
-                )
-                return True
-            run = models.update_workflow_run(run_id, report_phase="fast_pending")
+                run = models.update_workflow_run(run_id, report_phase="full_pending")
+            else:
+                run = models.update_workflow_run(run_id, report_phase="fast_pending")
             changed = True
 
         if run.get("report_phase") == "fast_pending":
@@ -821,12 +802,11 @@ def _workflow_email_status(email_success: bool | None, untranslated_count: int) 
 
 
 def _should_send_workflow_email(task_rows: list[dict], snapshot: dict) -> bool:
-    reviews_saved = _workflow_reviews_saved(task_rows)
-    if reviews_saved is not None:
-        return reviews_saved > 0
-    if snapshot.get("reviews_count") is None:
-        return True
-    return int(snapshot.get("reviews_count") or 0) > 0
+    """Always return True — email send/skip decisions are delegated to
+    ``generate_report_from_snapshot`` which routes to the appropriate mode
+    (full / change / quiet) and each mode handler decides internally whether
+    to actually send an email (e.g. quiet-day frequency gating)."""
+    return True
 
 
 def _workflow_reviews_saved(task_rows: list[dict]) -> int | None:

@@ -108,10 +108,10 @@ def run_metrics():
     from qbu_crawler.server.report_analytics import compute_cluster_severity
     from qbu_crawler.server.report_common import compute_health_index
 
-    # Health Index (NPS-proxy)
+    # Health Index (NPS-proxy) — 141 reviews, no shrinkage (>= 30)
     kpis = {"own_review_rows": 141, "own_positive_review_rows": 76, "own_negative_review_rows": 55}
-    health = compute_health_index({"kpis": kpis})
-    print(f"Health Index: {health} (expected ~57.4)")
+    health, confidence = compute_health_index({"kpis": kpis})
+    print(f"Health Index: {health} (expected ~57.4), confidence: {confidence}")
 
     # Cluster Severity
     cluster = {
@@ -124,8 +124,8 @@ def run_metrics():
     print(f"Cluster Severity: {severity} (expected: critical)")
 
     # Zero reviews
-    health_zero = compute_health_index({"kpis": {"own_review_rows": 0}})
-    print(f"Health (zero reviews): {health_zero} (expected: 50.0)")
+    health_zero, conf_zero = compute_health_index({"kpis": {"own_review_rows": 0}})
+    print(f"Health (zero reviews): {health_zero} (expected: 50.0), confidence: {conf_zero}")
 
     print("\nAll metric checks passed!" if health == 57.4 and severity == "critical" and health_zero == 50.0 else "\nSome checks FAILED!")
 

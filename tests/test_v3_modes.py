@@ -364,6 +364,58 @@ class TestGenerateReportFromSnapshot:
             generate_report_from_snapshot(snapshot, send_email=False)
 
 
+class TestSnapshotHashInReturnDicts:
+    """Verify that change and quiet return dicts include snapshot_hash (Fix-1A)."""
+
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        db_file = str(tmp_path / "test.db")
+        monkeypatch.setattr(config, "DB_PATH", db_file)
+        monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+        models.init_db()
+        return tmp_path
+
+    def test_quiet_mode_includes_snapshot_hash(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        snapshot = {
+            "run_id": 1, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "snapshot_hash": "abc123hash",
+            "products": [{"sku": "A", "name": "P", "price": 10.0, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["mode"] == "quiet"
+        assert result["snapshot_hash"] == "abc123hash"
+
+    def test_change_mode_includes_snapshot_hash(self, db):
+        from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
+        # Create a previous run with different price
+        analytics_path = str(db / "prev_analytics.json")
+        snapshot_path = str(db / "prev_snapshot.json")
+        Path(analytics_path).write_text('{"kpis": {"health_index": 60}}')
+        Path(snapshot_path).write_text(json.dumps({
+            "products": [{"sku": "A", "name": "P", "price": 169.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+        }))
+        models.create_workflow_run({
+            "workflow_type": "daily", "status": "completed", "report_phase": "full_done",
+            "logical_date": "2026-04-09", "trigger_key": "daily:2026-04-09",
+            "analytics_path": analytics_path, "snapshot_path": snapshot_path,
+        })
+
+        snapshot = {
+            "run_id": 2, "logical_date": "2026-04-10",
+            "snapshot_at": "2026-04-10T08:00:00",
+            "snapshot_hash": "def456hash",
+            "products": [{"sku": "A", "name": "P", "price": 149.99, "stock_status": "in_stock", "rating": 4.5, "review_count": 50}],
+            "reviews": [], "products_count": 1, "reviews_count": 0,
+        }
+        result = generate_report_from_snapshot(snapshot, send_email=False)
+        assert result["mode"] == "change"
+        assert result["snapshot_hash"] == "def456hash"
+
+
 class TestShouldSendQuietEmail:
     @pytest.fixture()
     def db(self, tmp_path, monkeypatch):

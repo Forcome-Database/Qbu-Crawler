@@ -490,8 +490,12 @@ def _humanize_bullets(normalized):
 # ── Health & competitive gap indices ─────────────────────────────────────────
 
 
-def compute_health_index(analytics: dict) -> float:
-    """NPS-proxy health index.
+def compute_health_index(analytics: dict) -> tuple[float, str]:
+    """NPS-proxy health index with Bayesian shrinkage for small samples.
+
+    Returns (health_index, confidence) where:
+        health_index: 0-100 scale (shrunk toward 50.0 prior when sample < 30)
+        confidence: "high" (>=30), "medium" (5-29), "low" (<5), "no_data" (0)
 
     Maps Net Promoter Score (-100..+100) to a 0..100 scale:
         promoters (rating >= 4) minus detractors (rating <= NEGATIVE_THRESHOLD),
@@ -503,15 +507,26 @@ def compute_health_index(analytics: dict) -> float:
     kpis = analytics.get("kpis", {}) if isinstance(analytics, dict) else {}
     own_reviews = kpis.get("own_review_rows", 0)
     if own_reviews == 0:
-        return 50.0  # No data → neutral sentinel
+        return 50.0, "no_data"
 
     promoters = kpis.get("own_positive_review_rows", 0)
     detractors = kpis.get("own_negative_review_rows", 0)
 
     nps = ((promoters - detractors) / own_reviews) * 100
-    health = (nps + 100) / 2
+    raw_health = (nps + 100) / 2
 
-    return round(max(0.0, min(100.0, health)), 1)
+    # Bayesian shrinkage: pull toward prior (50.0) when sample is small
+    MIN_RELIABLE = 30
+    PRIOR = 50.0
+    if own_reviews < MIN_RELIABLE:
+        weight = own_reviews / MIN_RELIABLE
+        health = weight * raw_health + (1 - weight) * PRIOR
+        confidence = "low" if own_reviews < 5 else "medium"
+    else:
+        health = raw_health
+        confidence = "high"
+
+    return round(max(0.0, min(100.0, health)), 1), confidence
 
 
 def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:
@@ -864,10 +879,20 @@ def normalize_deep_report_analytics(analytics):
     kpis["gap_catch_count"] = sum(1 for g in gap_analysis if g.get("gap_type") == "追赶")
 
     # ── Compute health_index, competitive_gap_index, high_risk_count ─────
-    normalized["kpis"]["health_index"] = compute_health_index(normalized)
-    normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
-        normalized.get("competitor", {}).get("gap_analysis") or []
+    _health, _health_confidence = compute_health_index(normalized)
+    normalized["kpis"]["health_index"] = _health
+    normalized["kpis"]["health_confidence"] = _health_confidence
+    _total_reviews_for_gap = (
+        normalized.get("kpis", {}).get("own_review_rows", 0)
+        + normalized.get("kpis", {}).get("competitor_review_rows", 0)
     )
+    _MIN_GAP_SAMPLE = 20
+    if _total_reviews_for_gap < _MIN_GAP_SAMPLE:
+        normalized["kpis"]["competitive_gap_index"] = None
+    else:
+        normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
+            normalized.get("competitor", {}).get("gap_analysis") or []
+        )
     normalized["kpis"]["high_risk_count"] = sum(
         1 for p in normalized.get("self", {}).get("risk_products", [])
         if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
@@ -919,7 +944,7 @@ def normalize_deep_report_analytics(analytics):
         },
         {
             "label": "竞品差距指数",
-            "value": kpis.get("competitive_gap_index", "—"),
+            "value": kpis.get("competitive_gap_index") if kpis.get("competitive_gap_index") is not None else "—",
             "delta_display": kpis.get("competitive_gap_index_delta_display", ""),
             "delta_class": "delta-flat",
             "tooltip": _resolve_tooltip("竞品差距指数"),

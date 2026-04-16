@@ -964,3 +964,89 @@ def test_example_reviews_diverse_selection():
     assert max(ratings) >= 2, f"All examples are 1-star: {ratings}"
     has_image = any(r.get("images") for r in selected)
     assert has_image, "Should include at least one review with images"
+
+
+# ---------------------------------------------------------------------------
+# Tests for detect_report_mode baseline exit condition (Fix-5)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_report_mode_counts_quiet_runs(analytics_db):
+    """Quiet runs (no analytics_path) should count toward the 3-run baseline threshold."""
+    from qbu_crawler.server.report_analytics import detect_report_mode
+
+    _create_daily_run("2026-04-01", status="completed", analytics_path="/tmp/a1.json")
+    _create_daily_run("2026-04-02", status="completed", analytics_path=None)
+    _create_daily_run("2026-04-03", status="completed", analytics_path="/tmp/a3.json")
+
+    current = _create_daily_run("2026-04-04", status="reporting")
+
+    result = detect_report_mode(current["id"], "2026-04-04")
+    assert result["mode"] == "incremental", (
+        f"Expected incremental with 3 completed runs (1 quiet), got {result['mode']} "
+        f"with baseline_sample_days={result['baseline_sample_days']}"
+    )
+
+
+def test_detect_report_mode_baseline_with_fewer_than_3(analytics_db):
+    """Fewer than 3 completed runs should remain baseline."""
+    from qbu_crawler.server.report_analytics import detect_report_mode
+
+    _create_daily_run("2026-04-01", status="completed", analytics_path=None)
+    _create_daily_run("2026-04-02", status="completed", analytics_path=None)
+
+    current = _create_daily_run("2026-04-04", status="reporting")
+
+    result = detect_report_mode(current["id"], "2026-04-04")
+    assert result["mode"] == "baseline"
+    assert result["baseline_sample_days"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests for KPI delta activation (Fix-4)
+# ---------------------------------------------------------------------------
+
+import json
+from pathlib import Path
+
+
+def test_build_report_analytics_includes_kpi_deltas(analytics_db, tmp_path, monkeypatch):
+    """In incremental mode, analytics should include KPI deltas from previous run."""
+    from qbu_crawler.server import report_analytics
+
+    # Create 3 completed prior runs to exit baseline mode
+    for i, date in enumerate(["2026-04-01", "2026-04-02", "2026-04-03"]):
+        analytics_path = str(tmp_path / f"analytics-{date}.json")
+        prev_analytics = {
+            "kpis": {
+                "negative_review_rows": 10 + i,
+                "own_negative_review_rows": 5 + i,
+                "ingested_review_rows": 100 + i * 10,
+                "product_count": 5,
+                "health_index": 70.0 + i,
+                "recently_published_count": 3,
+            }
+        }
+        Path(analytics_path).write_text(json.dumps(prev_analytics, ensure_ascii=False), encoding="utf-8")
+        _create_daily_run(date, status="completed", analytics_path=analytics_path)
+
+    current_run = _create_daily_run("2026-04-04", status="reporting")
+    snapshot = _build_snapshot(current_run["id"], "2026-04-04")
+    analytics = report_analytics.build_report_analytics(snapshot)
+
+    assert analytics.get("mode") == "incremental" or analytics.get("mode_info", {}).get("mode") == "incremental"
+    kpis = analytics["kpis"]
+    assert "negative_review_rows_delta" in kpis, f"Missing delta keys. KPI keys: {list(kpis.keys())}"
+    assert "negative_review_rows_delta_display" in kpis
+
+
+def test_build_report_analytics_baseline_has_no_deltas(analytics_db, monkeypatch):
+    """In baseline mode, KPI deltas should not be present."""
+    from qbu_crawler.server import report_analytics
+
+    current_run = _create_daily_run("2026-04-04", status="reporting")
+    snapshot = _build_snapshot(current_run["id"], "2026-04-04")
+    analytics = report_analytics.build_report_analytics(snapshot)
+
+    kpis = analytics["kpis"]
+    assert "negative_review_rows_delta" not in kpis

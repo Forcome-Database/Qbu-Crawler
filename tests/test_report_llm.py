@@ -566,3 +566,57 @@ def test_insights_prompt_includes_benchmark_examples():
     prompt = _build_insights_prompt(analytics)
     assert "25 LB Motorized" in prompt
     assert "benchmark_takeaway" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Tests for _select_insight_samples snapshot-only mode (Fix-2)
+# ---------------------------------------------------------------------------
+
+
+def test_select_insight_samples_does_not_query_db(monkeypatch):
+    """_select_insight_samples should NOT call models.query_reviews."""
+    from qbu_crawler.server import report_llm
+    from qbu_crawler import models
+
+    call_count = 0
+    original_query = models.query_reviews
+
+    def _spy(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_query(*args, **kwargs)
+
+    monkeypatch.setattr(models, "query_reviews", _spy)
+
+    snapshot = _snapshot()
+    analytics = _analytics()
+
+    samples = report_llm._select_insight_samples(snapshot, analytics)
+
+    assert call_count == 0, f"query_reviews was called {call_count} times, expected 0"
+    snapshot_ids = {r["id"] for r in snapshot["reviews"]}
+    sample_ids = {s["id"] for s in samples}
+    assert sample_ids.issubset(snapshot_ids)
+
+
+def test_select_insight_samples_no_reviews():
+    """Empty snapshot reviews should return empty samples."""
+    from qbu_crawler.server.report_llm import _select_insight_samples
+
+    snapshot = {**_snapshot(), "reviews": []}
+    analytics = _analytics()
+    samples = _select_insight_samples(snapshot, analytics)
+    assert samples == []
+
+
+def test_select_insight_samples_includes_risk_product_negatives():
+    """Should include negative reviews from risk products."""
+    from qbu_crawler.server.report_llm import _select_insight_samples
+
+    snapshot = _snapshot()
+    analytics = _analytics()
+    samples = _select_insight_samples(snapshot, analytics)
+
+    # Check that at least one negative review (rating <= 2) from risk products is included
+    neg_samples = [s for s in samples if (s.get("rating") or 5) <= 2]
+    assert len(neg_samples) > 0, "Should include at least one negative review from risk products"

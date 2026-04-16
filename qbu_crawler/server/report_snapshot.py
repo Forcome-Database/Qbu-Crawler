@@ -14,6 +14,23 @@ from qbu_crawler.server import report, report_analytics, report_html, report_llm
 
 _logger = logging.getLogger(__name__)
 
+_RECIPIENTS_FILE_PATH = os.path.join(
+    os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
+)
+
+
+def _get_email_recipients() -> list[str]:
+    """Unified email recipient loader.
+
+    Priority: config.EMAIL_RECIPIENTS (env var) > openclaw file > empty list.
+    """
+    if config.EMAIL_RECIPIENTS:
+        return list(config.EMAIL_RECIPIENTS)
+
+    if os.path.exists(_RECIPIENTS_FILE_PATH):
+        return report.load_email_recipients(_RECIPIENTS_FILE_PATH)
+    return []
+
 
 def should_send_quiet_email(run_id):
     """Determine whether to send a quiet-day email or skip.
@@ -479,10 +496,7 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
         return {"success": False, "error": f"Template render error: {e}", "recipients": []}
 
     # Load recipients and send
-    recipients_file = os.path.join(
-        os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
-    )
-    recipients = report.load_email_recipients(recipients_file) if os.path.exists(recipients_file) else []
+    recipients = _get_email_recipients()
 
     if not recipients:
         return {"success": True, "error": "No recipients configured", "recipients": []}
@@ -524,6 +538,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         "mode": "change",
         "status": "completed",
         "run_id": run_id,
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
         "products_count": snapshot.get("products_count", 0),
         "reviews_count": 0,
         "html_path": html_path,
@@ -563,6 +578,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "mode": "quiet",
         "status": "completed_no_change",
         "run_id": run_id,
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
         "products_count": snapshot.get("products_count", 0),
         "reviews_count": 0,
         "html_path": html_path,
@@ -622,10 +638,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         _logger.exception("Report generation failed for run %d", run_id)
         # Send failure notification
         try:
-            recipients_file = os.path.join(
-                os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
-            )
-            recipients = report.load_email_recipients(recipients_file) if os.path.exists(recipients_file) else []
+            recipients = _get_email_recipients()
             if recipients:
                 report.send_email(
                     recipients=recipients,
@@ -758,7 +771,7 @@ def generate_full_report_from_snapshot(
             body_html = report.render_daily_email_html(snapshot, analytics)
         try:
             email_result = report.send_email(
-                recipients=config.EMAIL_RECIPIENTS,
+                recipients=_get_email_recipients(),
                 subject=subject,
                 body_text=body,
                 body_html=body_html,

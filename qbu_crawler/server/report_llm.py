@@ -271,11 +271,16 @@ _INSIGHTS_KEYS = (
 
 
 def _select_insight_samples(snapshot, analytics):
-    """Select 15-20 diverse reviews for LLM synthesis from the full DB corpus.
+    """Select 15-20 diverse reviews for LLM synthesis from snapshot only.
 
+    All samples come from snapshot["reviews"] to ensure consistency with KPI cards.
     Strategy: worst per risk product, image-bearing negatives, top competitor,
     mixed sentiment, most recent.
     """
+    reviews = snapshot.get("reviews", [])
+    if not reviews:
+        return []
+
     risk_products = analytics.get("self", {}).get("risk_products", [])
     samples = []
     seen_ids = set()
@@ -291,50 +296,44 @@ def _select_insight_samples(snapshot, analytics):
                 if added >= limit:
                     break
 
-    # 1. Worst reviews per risk product (these are OWN products)
-    for product in risk_products[:3]:
-        sku = product.get("product_sku", "")
-        if not sku:
-            continue
-        worst, _ = models.query_reviews(
-            sku=sku, max_rating=config.NEGATIVE_THRESHOLD,
-            sort_by="rating", order="asc", limit=5,
+    # 1. Worst reviews per risk product (OWN products)
+    risk_skus = [p.get("product_sku", "") for p in risk_products[:3] if p.get("product_sku")]
+    for sku in risk_skus:
+        sku_neg = sorted(
+            [r for r in reviews
+             if r.get("product_sku") == sku
+             and (r.get("rating") or 5) <= config.NEGATIVE_THRESHOLD],
+            key=lambda r: r.get("rating") or 5,
         )
-        for r in worst:
-            r.setdefault("ownership", "own")
-        _add(worst, 2)
+        _add(sku_neg, 2)
 
-    # 2. Image-bearing own negatives — explicitly OWN
-    img_neg, _ = models.query_reviews(
-        ownership="own", has_images=True, max_rating=config.NEGATIVE_THRESHOLD,
-        sort_by="rating", order="asc", limit=10,
+    # 2. Image-bearing own negatives
+    img_neg = sorted(
+        [r for r in reviews
+         if r.get("ownership") == "own"
+         and r.get("images")
+         and (r.get("rating") or 5) <= config.NEGATIVE_THRESHOLD],
+        key=lambda r: r.get("rating") or 5,
     )
-    for r in img_neg:
-        r.setdefault("ownership", "own")
-    _add([r for r in img_neg if r.get("id") not in seen_ids], 3)
+    _add(img_neg, 3)
 
-    # 3. Top competitor reviews — explicitly COMPETITOR
-    comp_best, _ = models.query_reviews(
-        ownership="competitor", min_rating=5,
-        sort_by="scraped_at", order="desc", limit=10,
+    # 3. Top competitor reviews (5-star, most recent)
+    comp_pos = sorted(
+        [r for r in reviews
+         if r.get("ownership") == "competitor"
+         and (r.get("rating") or 0) >= 5],
+        key=lambda r: r.get("scraped_at") or "",
+        reverse=True,
     )
-    for r in comp_best:
-        r.setdefault("ownership", "competitor")
-    _add([r for r in comp_best if r.get("id") not in seen_ids], 3)
+    _add(comp_pos, 3)
 
-    # 4. Mixed sentiment from snapshot (only if sentiment field available)
-    mixed_count = 0
-    for r in snapshot.get("reviews", []):
-        if r.get("sentiment") == "mixed" and r.get("id") not in seen_ids and len(samples) < 20:
-            seen_ids.add(r["id"])
-            samples.append(r)
-            mixed_count += 1
-            if mixed_count >= 2:
-                break
+    # 4. Mixed sentiment
+    mixed = [r for r in reviews if r.get("sentiment") == "mixed"]
+    _add(mixed, 2)
 
-    # 5. Most recent from snapshot
+    # 5. Most recent
     recent = sorted(
-        [r for r in snapshot.get("reviews", []) if r.get("id") not in seen_ids],
+        reviews,
         key=lambda r: r.get("date_published_parsed") or "",
         reverse=True,
     )
@@ -466,6 +465,15 @@ def _build_insights_prompt(analytics, snapshot=None):
 }}
 
 重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
+
+    # Low-sample warning (Fix-2)
+    _ingested = kpis.get("ingested_review_rows", 0)
+    if _ingested < 5:
+        prompt += (
+            f"\n\n⚠️ 重要提示：本期新增评论仅 {_ingested} 条，样本极少。"
+            "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
+            "hero_headline 应体现「样本不足」或「数据有限」。"
+        )
 
     # Inject review samples for grounded insights
     if snapshot:

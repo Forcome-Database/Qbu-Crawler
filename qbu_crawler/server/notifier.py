@@ -125,7 +125,13 @@ class OpenClawBridgeSender:
                 "collect_count": len(payload.get("collect_task_ids") or []),
                 "scrape_count": len(payload.get("scrape_task_ids") or []),
             }
-        return dict(payload)
+        # Sanitize path fields that may be None for change/quiet report modes
+        # to avoid the literal string "None" in DingTalk messages.
+        result = dict(payload)
+        for path_key in ("excel_path", "analytics_path", "pdf_path", "html_path"):
+            if result.get(path_key) is None:
+                result[path_key] = ""
+        return result
 
 
 class NotifierWorker:
