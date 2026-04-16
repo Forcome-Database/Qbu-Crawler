@@ -234,17 +234,36 @@
       <h2 class="section-title">自有产品问题诊断</h2>
       <p class="section-sub">按影响规模排序，每个问题簇附带证据引用和改良建议。</p>
 
-      {% if not analytics.issue_cards %}
+      {% if (snapshot.reviews if snapshot.reviews is defined else []) | length == 0 %}
+      <div style="margin-bottom:var(--sp-md);padding:8px 12px;background:#f7fafc;border-radius:4px;font-size:13px;color:var(--text-muted,#a0aec0);">
+        本周无新数据变动，以下为累积分析。
+      </div>
+      {% endif %}
+
+      {% set _issue_cards = analytics.issue_cards if analytics.issue_cards else (analytics.self.issue_cards if analytics.self is defined and analytics.self.issue_cards is defined else []) %}
+
+      {% if not _issue_cards %}
       <div class="empty-state">未发现问题，所有评论均为正面反馈。</div>
       {% endif %}
 
-      {% for card in analytics.issue_cards %}
+      {% for card in _issue_cards %}
       <div class="issue-card severity-{{ card.severity }} reveal"
            {% if loop.index > 4 %}data-default-collapsed="true"{% endif %}>
         <div class="card-header">
           <span class="card-number">#{{ loop.index }}</span>
           <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
           <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
+              {% if card.dispersion_type is defined and card.dispersion_type %}
+              <span style="font-size:11px;padding:2px 6px;border-radius:4px;margin-left:4px;
+                {% if card.dispersion_type == 'systemic' %}background:#fed7d7;color:#c53030;
+                {% elif card.dispersion_type == 'isolated' %}background:#c6f6d5;color:#276749;
+                {% else %}background:#e2e8f0;color:#718096;{% endif %}">{{ card.dispersion_display if card.dispersion_display is defined else card.dispersion_type }}</span>
+              {% endif %}
+              {% if card.lifecycle_status is defined and card.lifecycle_status %}
+              <span style="font-size:11px;padding:2px 6px;border-radius:4px;margin-left:4px;
+                {% if card.lifecycle_status == 'active' %}background:#fed7d7;color:#c53030;
+                {% else %}background:#e2e8f0;color:#718096;{% endif %}">{{ "活跃" if card.lifecycle_status == "active" else "静默" }}</span>
+              {% endif %}
           <span class="card-toggle">▼</span>
         </div>
         <div class="card-body">
@@ -534,6 +553,15 @@
       {% endif %}
       {% endif %}
     </section>
+
+    {% if analytics.label_quality is defined and analytics.label_quality and analytics.label_quality.total_flagged is defined and analytics.label_quality.total_flagged > 0 %}
+    <section style="margin-top:24px;padding:12px 16px;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:8px;">
+      <h3 style="font-size:14px;margin:0 0 8px;">标签质量</h3>
+      <p style="font-size:13px;color:var(--text-secondary,#718096);">
+        {{ analytics.label_quality.total_checked }} 条评论已分析，其中 {{ analytics.label_quality.total_flagged }} 条标注存疑
+      </p>
+    </section>
+    {% endif %}
 
   </main>
 
