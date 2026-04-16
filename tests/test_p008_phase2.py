@@ -530,3 +530,85 @@ def test_old_run_without_report_tier_stays_null(db):
     row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = 1").fetchone()
     conn.close()
     assert row["report_tier"] is None
+
+
+# ── Task 12: Integration test ────────────────────────────────────
+
+
+def test_p008_phase2_integration(db, tmp_path, monkeypatch):
+    """End-to-end: daily tier run goes through full pipeline → HTML archived, correct mode."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+
+    # 1. Create a daily-tier workflow run
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key, report_tier)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-17', 'daily:2026-04-17', 'daily')"
+    )
+    conn.commit()
+    conn.close()
+
+    # 2. Build snapshot with safety review + cumulative data
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-17",
+        "data_since": "2026-04-17T00:00:00+08:00",
+        "data_until": "2026-04-18T00:00:00+08:00",
+        "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                       "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+        "reviews": [
+            {"id": 1, "headline": "Dangerous", "body": "Found metal shaving in food",
+             "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+             "ownership": "own", "images": ["img.jpg"], "author": "Tester",
+             "date_published": "2026-04-17"},
+        ],
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [
+                {"id": 1, "rating": 1.0, "ownership": "own", "product_sku": "SKU1",
+                 "headline": "Dangerous", "body": "Metal shaving", "sentiment": "negative",
+                 "analysis_labels": "[]"},
+            ],
+        },
+    }
+
+    # 3. Call the full pipeline
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+
+    # 4. Verify results
+    assert result["mode"] == "daily_briefing"
+    assert result["status"] == "completed"
+    assert result["reviews_count"] == 1
+    assert result.get("html_path") is not None
+    assert result["email_skipped"] is False  # has reviews → should send
+
+    # 5. Verify HTML content
+    import os
+    assert os.path.isfile(result["html_path"])
+    html = open(result["html_path"], encoding="utf-8").read()
+    assert "高关注度评论" in html  # safety + image → high attention
+    assert "需行动" in html or "安全" in html  # safety signal in attention block
+
+    # 6. Verify old run (NULL tier) still uses old path
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date, trigger_key)"
+        " VALUES ('daily', 'reporting', 'full_pending', '2026-04-16', 'daily:2026-04-16')"
+    )
+    conn.commit()
+    conn.close()
+
+    old_snapshot = {
+        "run_id": 2, "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "products": [], "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    old_result = report_snapshot.generate_report_from_snapshot(old_snapshot, send_email=False)
+    assert old_result["mode"] in ("quiet", "change", "full"), \
+        f"NULL tier should use old path, got mode={old_result['mode']}"
