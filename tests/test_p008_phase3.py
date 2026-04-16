@@ -337,6 +337,26 @@ def test_weekly_scheduler_waits_for_daily_runs(db, monkeypatch):
     worker = WeeklySchedulerWorker(schedule_time="09:30")
     assert worker.process_once(now=now) is False
 
+# ── Task 12: email_weekly.html.j2 ───────────────────────────────
+
+
+def test_email_weekly_template_renders():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("email_weekly.html.j2")
+    html = template.render(
+        logical_date="2026-04-20",
+        kpis={"health_index": 75.0, "own_negative_review_rate_display": "3.5%", "high_risk_count": 1},
+        report_url="https://reports.example.com/weekly-2026-04-20.html",
+        reviews_count=15,
+        threshold=2,
+    )
+    assert "75.0" in html
+    assert "周报" in html
+    assert "查看完整周报" in html
+
 
 # ── Task 11: V3 template enhancements ───────────────────────────
 
