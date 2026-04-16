@@ -407,3 +407,107 @@ def test_v3_template_renders_dispersion_type():
     )
     assert "系统性" in html
     assert "活跃" in html
+
+
+# ── Task 7: _advance_periodic_run ───────────────────────────────
+
+
+def test_advance_run_routes_weekly_to_periodic(db, tmp_path, monkeypatch):
+    """Weekly run should skip fast_pending and go directly to report generation."""
+    from qbu_crawler.server.workflows import WorkflowWorker
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (1, 'weekly', 'reporting', 'none', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly',"
+        " '2026-04-13T00:00:00+08:00', '2026-04-20T00:00:00+08:00')"
+    )
+    conn.execute("INSERT INTO products (url, name, sku, site, ownership, scraped_at)"
+                 " VALUES ('http://t.com/p1', 'Grinder', 'SKU1', 'test', 'own', '2026-04-14 10:00:00')")
+    conn.execute("INSERT INTO reviews (product_id, author, headline, body, rating, scraped_at)"
+                 " VALUES (1, 'A', 'Good', 'Works', 4.0, '2026-04-14 10:00:00')")
+    conn.commit()
+    conn.close()
+
+    generated = {}
+    def mock_generate(snapshot, send_email=True, **kw):
+        generated["called"] = True
+        generated["snapshot"] = snapshot
+        return {
+            "mode": "weekly_report", "status": "completed", "run_id": 1,
+            "html_path": None, "excel_path": None, "analytics_path": None,
+            "email": None, "snapshot_hash": "",
+        }
+    monkeypatch.setattr(report_snapshot, "generate_report_from_snapshot", mock_generate)
+
+    worker = WorkflowWorker()
+    now = "2026-04-20T10:00:00+08:00"
+    worker._advance_run(1, now)
+
+    assert generated.get("called") is True
+
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT status, report_phase FROM workflow_runs WHERE id = 1").fetchone()
+    conn.close()
+    assert row["status"] == "completed"
+
+
+# ── Task 10: _generate_weekly_report + routing ──────────────────
+
+
+def test_generate_report_weekly_tier_routes_correctly(db, tmp_path, monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (1, 'weekly', 'reporting', 'full_pending', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly')"
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-20",
+        "data_since": "2026-04-13T00:00:00+08:00",
+        "data_until": "2026-04-20T00:00:00+08:00",
+        "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                       "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+        "reviews": [
+            {"id": 1, "headline": "Good", "body": "Works well", "rating": 4.0,
+             "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+             "images": [], "author": "A", "date_published": "2026-04-14"}
+        ],
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 0,
+        "untranslated_count": 1,
+        "snapshot_hash": "testhash",
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [
+                {"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "SKU1",
+                 "headline": "Good", "body": "Works well", "sentiment": "positive",
+                 "analysis_labels": "[]"}
+            ],
+            "products_count": 1,
+            "reviews_count": 1,
+            "translated_count": 0,
+            "untranslated_count": 1,
+        },
+    }
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+    assert result["mode"] == "weekly_report"
+    assert result.get("html_path") is not None

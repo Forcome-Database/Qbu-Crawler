@@ -882,6 +882,177 @@ def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
     return {"success": True, "error": None, "recipients": recipients}
 
 
+def _generate_weekly_report(snapshot, send_email=True):
+    """P008 Phase 3: Generate weekly report — V3 HTML + Excel + summary email.
+
+    Reuses generate_full_report_from_snapshot for V3 HTML and Excel,
+    uses separate email template (summary card + link).
+    """
+    run_id = snapshot.get("run_id", 0)
+    logical_date = snapshot.get("logical_date", "")
+
+    # Generate full report (V3 HTML + Excel) using existing pipeline
+    try:
+        full_result = generate_full_report_from_snapshot(
+            snapshot, send_email=False,  # We send our own email
+        )
+    except Exception as exc:
+        _logger.exception("Weekly report: full generation failed for run %d", run_id)
+        raise
+
+    # Guard: empty week (no data at all)
+    if full_result.get("status") == "completed_no_change" and not full_result.get("html_path"):
+        _logger.info("Weekly report: no data for run %d, skipping", run_id)
+        return {
+            "mode": "weekly_report",
+            "status": "completed_no_change",
+            "run_id": run_id,
+            "snapshot_hash": snapshot.get("snapshot_hash", ""),
+            "products_count": 0, "reviews_count": 0,
+            "html_path": None, "excel_path": None, "analytics_path": None,
+            "email": None,
+        }
+
+    # Compute label quality stats
+    review_ids = [r.get("id") for r in
+                  (snapshot.get("cumulative", {}).get("reviews") or snapshot.get("reviews", []))
+                  if r.get("id")]
+    label_quality = models.get_label_anomaly_stats(review_ids)
+
+    # Enrich analytics with label_quality + dispersion + RCW sort
+    analytics_path = full_result.get("analytics_path")
+    if analytics_path and os.path.isfile(analytics_path):
+        try:
+            analytics = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+            analytics["label_quality"] = label_quality
+
+            # Enrich issue_cards with dispersion + lifecycle status
+            from qbu_crawler.server.report_common import compute_dispersion, credibility_weight
+            all_reviews = snapshot.get("cumulative", {}).get("reviews") or snapshot.get("reviews", [])
+            own_skus = sum(1 for p in (snapshot.get("cumulative", {}).get("products") or [])
+                          if p.get("ownership") == "own")
+            for card in analytics.get("self", {}).get("issue_cards", []):
+                label_code = card.get("label_code", "")
+                if label_code:
+                    dtype, skus = compute_dispersion(label_code, all_reviews, total_skus=own_skus or 1)
+                    card["dispersion_type"] = dtype
+                    card["dispersion_display"] = {"systemic": "系统性", "isolated": "个体", "uncertain": "待观察"}.get(dtype, dtype)
+
+                # Simplified lifecycle status
+                last_seen = card.get("last_seen")
+                if last_seen:
+                    from datetime import date as _date
+                    try:
+                        ls = _date.fromisoformat(last_seen[:10])
+                        ld = _date.fromisoformat(logical_date[:10])
+                        card["lifecycle_status"] = "active" if (ld - ls).days < 14 else "dormant"
+                    except (ValueError, TypeError):
+                        card["lifecycle_status"] = None
+                else:
+                    card["lifecycle_status"] = None
+
+                # Sort example_reviews by RCW
+                examples = card.get("example_reviews") or []
+                if examples:
+                    from datetime import date as _date
+                    today = _date.fromisoformat(logical_date[:10]) if logical_date else _date.today()
+                    examples.sort(key=lambda r: credibility_weight(r, today=today), reverse=True)
+                    card["example_reviews"] = examples
+
+            Path(analytics_path).write_text(
+                json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            _logger.debug("Weekly report: failed to enrich analytics", exc_info=True)
+
+    # Send weekly email (summary + link, not full body)
+    email_result = None
+    if send_email:
+        try:
+            email_result = _send_weekly_email(snapshot, full_result, logical_date)
+        except Exception as e:
+            email_result = {"success": False, "error": str(e), "recipients": []}
+
+    try:
+        models.update_workflow_run(
+            run_id,
+            report_mode="standard",
+            analytics_path=analytics_path,
+        )
+    except Exception:
+        pass
+
+    return {
+        "mode": "weekly_report",
+        "status": "completed",
+        "run_id": run_id,
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
+        "products_count": full_result.get("products_count", 0),
+        "reviews_count": full_result.get("reviews_count", 0),
+        "html_path": full_result.get("html_path"),
+        "excel_path": full_result.get("excel_path"),
+        "analytics_path": analytics_path,
+        "email": email_result,
+    }
+
+
+def _send_weekly_email(snapshot, full_result, logical_date):
+    """Send weekly report email: summary card + attachments."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+
+    # Build report URL
+    report_url = ""
+    if config.REPORT_HTML_PUBLIC_URL and full_result.get("html_path"):
+        html_name = Path(full_result["html_path"]).name
+        report_url = f"{config.REPORT_HTML_PUBLIC_URL}/{html_name}"
+
+    # Load analytics for KPI summary
+    analytics = {}
+    analytics_path = full_result.get("analytics_path")
+    if analytics_path and os.path.isfile(analytics_path):
+        try:
+            analytics = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    kpis = analytics.get("kpis", {})
+    template = env.get_template("email_weekly.html.j2")
+    body_html = template.render(
+        logical_date=logical_date,
+        kpis=kpis,
+        report_url=report_url,
+        reviews_count=full_result.get("reviews_count", 0),
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
+
+    recipients = _get_email_recipients()
+    if not recipients:
+        return {"success": True, "error": "No recipients configured", "recipients": []}
+
+    subject = f"产品评论周报 {logical_date}"
+    attachments = []
+    if full_result.get("html_path") and os.path.isfile(full_result["html_path"]):
+        attachments.append(full_result["html_path"])
+    if full_result.get("excel_path") and os.path.isfile(full_result["excel_path"]):
+        attachments.append(full_result["excel_path"])
+
+    report.send_email(
+        recipients=recipients,
+        subject=subject,
+        body_text=f"QBU 周报 {logical_date}",
+        body_html=body_html,
+        attachment_paths=attachments if attachments else None,
+    )
+    return {"success": True, "error": None, "recipients": recipients}
+
+
 def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     """Generate report for any mode (full/change/quiet).
 
@@ -909,6 +1080,8 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
 
     if run_tier == "daily":
         return _generate_daily_briefing(snapshot, send_email)
+    elif run_tier == "weekly":
+        return _generate_weekly_report(snapshot, send_email)
 
     # Load previous context
     prev_analytics, prev_snapshot = load_previous_report_context(run_id)
