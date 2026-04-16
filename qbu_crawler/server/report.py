@@ -745,11 +745,19 @@ def _generate_analytical_excel(
     # ── Sheet 1: 评论明细 ──────────────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "评论明细"
+
+    # Determine whether to add the "本次新增" column (Correction H)
+    _window_review_ids = set(analytics.get("window_review_ids") or [])
+
     review_headers = [
         "ID", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
         "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
         "特征短语", "洞察", "评论时间", "照片",
     ]
+    if _window_review_ids:
+        # Insert "本次新增" as the second column (after "ID")
+        review_headers.insert(1, "本次新增")
+
     _write_headers(ws1, review_headers)
     images_col = len(review_headers)  # "照片" column (1-indexed)
 
@@ -812,7 +820,7 @@ def _generate_analytical_excel(
             features_list = features_raw if isinstance(features_raw, list) else []
         features_text = ", ".join(str(f) for f in features_list)
 
-        ws1.append([
+        _row = [
             r.get("id"),
             r.get("product_name"),
             r.get("product_sku"),
@@ -830,7 +838,12 @@ def _generate_analytical_excel(
             r.get("analysis_insight_cn") or r.get("insight_cn") or "",
             r.get("date_published_parsed") or r.get("date_published") or "",
             "",  # placeholder for images column
-        ])
+        ]
+        if _window_review_ids:
+            # Insert "本次新增" flag after "ID" (index 0)
+            _is_new = "是" if r.get("id") in _window_review_ids else ""
+            _row.insert(1, _is_new)
+        ws1.append(_row)
 
         # Embed images as thumbnails (same approach as legacy Excel)
         row_idx = ws1.max_row
@@ -1026,6 +1039,70 @@ def query_report_data(
         "query_report_data: since=%s until=%s -> %d products, %d reviews",
         since_str,
         until_str,
+        len(products),
+        len(reviews),
+    )
+    return products, reviews
+
+
+def query_cumulative_data() -> tuple[list[dict], list[dict]]:
+    """Query all products and all reviews (no time-window filter).
+
+    Returns (products, reviews) — both as lists of dicts.
+    Reviews include the latest analysis fields (sentiment, analysis_labels, etc.)
+    via a LEFT JOIN with MAX(analyzed_at) subquery to prevent duplicate rows.
+    """
+    conn = models.get_conn()
+    try:
+        product_rows = conn.execute(
+            """
+            SELECT url, name, sku, price, stock_status, rating, review_count,
+                   scraped_at, site, ownership
+            FROM products
+            ORDER BY scraped_at DESC
+            """
+        ).fetchall()
+        products = [dict(r) for r in product_rows]
+
+        review_rows = conn.execute(
+            """
+            SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+                   r.author, r.headline, r.body, r.rating,
+                   r.date_published, r.date_published_parsed, r.images,
+                   p.ownership,
+                   r.headline_cn, r.body_cn, r.translate_status,
+                   ra.sentiment,
+                   ra.sentiment_score,
+                   ra.labels   AS analysis_labels,
+                   ra.features AS analysis_features,
+                   ra.insight_cn AS analysis_insight_cn,
+                   ra.insight_en AS analysis_insight_en
+            FROM reviews r
+            JOIN products p ON r.product_id = p.id
+            LEFT JOIN review_analysis ra
+                ON ra.review_id = r.id
+                AND ra.analyzed_at = (
+                    SELECT MAX(ra2.analyzed_at)
+                    FROM review_analysis ra2
+                    WHERE ra2.review_id = r.id
+                )
+            ORDER BY r.scraped_at DESC
+            """
+        ).fetchall()
+        reviews = []
+        for row in review_rows:
+            data = dict(row)
+            if data.get("images") and isinstance(data["images"], str):
+                try:
+                    data["images"] = json.loads(data["images"])
+                except Exception:
+                    pass
+            reviews.append(data)
+    finally:
+        conn.close()
+
+    logger.info(
+        "query_cumulative_data: %d products, %d reviews",
         len(products),
         len(reviews),
     )

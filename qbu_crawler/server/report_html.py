@@ -68,6 +68,8 @@ def render_v3_html(snapshot, analytics, output_path=None):
         css_text=css_text,
         js_text=js_text,
         threshold=config.NEGATIVE_THRESHOLD,
+        cumulative_kpis=normalized.get("cumulative_kpis") or normalized.get("kpis", {}),
+        window=normalized.get("window", {}),
     )
 
     if output_path is None:

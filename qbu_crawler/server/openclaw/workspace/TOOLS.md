@@ -86,6 +86,22 @@ For ad-hoc email/report requests:
 - Do not widen the scope back to `name`, `site`, `ownership`, or other broader selectors after the single product is known.
 - If preview comes back with more than 1 product, treat that as scope drift and fix the scope first; do not continue to `send_filtered_report`.
 
+### 报告模式说明（P006+P007）
+
+`get_workflow_status` 返回的 `report_mode` 字段：
+- `full` — 有新评论，完整分析已生成
+- `change` — 无新评论但有价格/库存变动
+- `quiet` — 无变化，静默日
+- `skipped` — 旧模式（已废弃，P006 后不再出现）
+
+`REPORT_PERSPECTIVE` 环境变量控制分析视角：
+- `dual` — 累积全景 + 增量双视角（默认）
+- `window` — 仅当日窗口
+
+邮件发送规则：
+- full/change：始终发送
+- quiet：前 3 天每天发（`REPORT_QUIET_EMAIL_DAYS` 可配），之后每周发一次
+
 ## Output Contract
 
 ### Basic Principles

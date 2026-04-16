@@ -277,7 +277,10 @@ def _select_insight_samples(snapshot, analytics):
     Strategy: worst per risk product, image-bearing negatives, top competitor,
     mixed sentiment, most recent.
     """
-    reviews = snapshot.get("reviews", [])
+    reviews = (
+        (snapshot.get("cumulative") or {}).get("reviews")
+        or snapshot.get("reviews", [])
+    )
     if not reviews:
         return []
 
@@ -466,14 +469,26 @@ def _build_insights_prompt(analytics, snapshot=None):
 
 重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
 
-    # Low-sample warning (Fix-2)
-    _ingested = kpis.get("ingested_review_rows", 0)
-    if _ingested < 5:
+    # Low-sample warning (Fix-5: use window review count, not cumulative ingested_review_rows)
+    _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
+    if _window_count < 5:
         prompt += (
-            f"\n\n⚠️ 重要提示：本期新增评论仅 {_ingested} 条，样本极少。"
+            f"\n\n⚠️ 重要提示：本期新增评论仅 {_window_count} 条，样本极少。"
             "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
             "hero_headline 应体现「样本不足」或「数据有限」。"
         )
+
+    # Window summary section (P007 Task 5)
+    window = analytics.get("window", {})
+    if window.get("reviews_count", 0) > 0:
+        prompt += f"\n\n--- 今日变化 ---"
+        prompt += f"\n今日新增评论 {window['reviews_count']} 条"
+        prompt += f"（自有 {window.get('own_reviews_count', 0)}，竞品 {window.get('competitor_reviews_count', 0)}）"
+        if window.get("new_negative_count", 0) > 0:
+            prompt += f"\n注意：新增自有差评 {window['new_negative_count']} 条"
+        prompt += "\n请在 executive_bullets 中提及今日新增变化（如有值得关注的新评论）。"
+    elif analytics.get("perspective") == "dual":
+        prompt += "\n\n今日无新增评论。executive_bullets 应聚焦累积数据中的关键洞察和持续存在的问题。"
 
     # Inject review samples for grounded insights
     if snapshot:

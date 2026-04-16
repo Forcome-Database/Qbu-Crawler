@@ -325,8 +325,24 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         "translated_count": translated_count,
         "untranslated_count": len(reviews) - translated_count,
     }
+
+    # ── Dual-perspective: embed cumulative (all-time) data ──
+    if config.REPORT_PERSPECTIVE == "dual":
+        cum_products, cum_reviews = report.query_cumulative_data()
+        cum_translated = sum(1 for r in cum_reviews if r.get("translate_status") == "done")
+        snapshot["cumulative"] = {
+            "products": cum_products,
+            "reviews": cum_reviews,
+            "products_count": len(cum_products),
+            "reviews_count": len(cum_reviews),
+            "translated_count": cum_translated,
+            "untranslated_count": len(cum_reviews) - cum_translated,
+        }
+
+    # ── Hash excludes cumulative (Correction C) ──
+    hash_payload = {k: v for k, v in snapshot.items() if k != "cumulative"}
     snapshot_hash = hashlib.sha1(
-        json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
@@ -519,10 +535,44 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     run_id = snapshot.get("run_id", 0)
     changes = context.get("changes", {})
 
+    # ── Cumulative analytics: compute from snapshot["cumulative"] when available ──
+    cum_analytics = None
+    analytics_path = None
+    cumulative_computed = False
+    if snapshot.get("cumulative"):
+        try:
+            cum_snapshot = {
+                "run_id": run_id,
+                "logical_date": snapshot.get("logical_date", ""),
+                "data_since": snapshot.get("data_since", ""),
+                "data_until": snapshot.get("data_until", ""),
+                "snapshot_hash": snapshot.get("snapshot_hash", ""),
+                **snapshot["cumulative"],
+            }
+            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            os.makedirs(config.REPORT_DIR, exist_ok=True)
+            analytics_path = os.path.join(
+                config.REPORT_DIR,
+                f"workflow-run-{run_id}-analytics-{snapshot.get('logical_date', 'unknown')}.json",
+            )
+            Path(analytics_path).write_text(
+                json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            cumulative_computed = True
+            _logger.info("Change report: cumulative analytics computed and saved to %s", analytics_path)
+        except Exception:
+            _logger.exception("Change report: cumulative analytics computation failed")
+            cum_analytics = None
+            analytics_path = None
+
+    # Use cumulative analytics when available, fall back to prev_analytics
+    effective_analytics = cum_analytics or prev_analytics
+
     # Render quiet day HTML with change info
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, prev_analytics, changes=changes)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics, changes=changes)
     except Exception:
         _logger.exception("Change report HTML generation failed")
 
@@ -530,7 +580,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     email_result = None
     if send_email:
         try:
-            email_result = _send_mode_email("change", snapshot, prev_analytics, changes=changes)
+            email_result = _send_mode_email("change", snapshot, effective_analytics, changes=changes)
         except Exception as e:
             email_result = {"success": False, "error": str(e), "recipients": []}
 
@@ -543,7 +593,8 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         "reviews_count": 0,
         "html_path": html_path,
         "excel_path": None,
-        "analytics_path": None,
+        "analytics_path": analytics_path,
+        "cumulative_computed": cumulative_computed,
         "email": email_result,
     }
 
@@ -555,9 +606,43 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     # Check if we should send this quiet-day email (also returns consecutive count)
     should_send, digest_mode, consecutive = should_send_quiet_email(run_id)
 
+    # ── Cumulative analytics: compute from snapshot["cumulative"] when available ──
+    cum_analytics = None
+    analytics_path = None
+    cumulative_computed = False
+    if snapshot.get("cumulative"):
+        try:
+            cum_snapshot = {
+                "run_id": run_id,
+                "logical_date": snapshot.get("logical_date", ""),
+                "data_since": snapshot.get("data_since", ""),
+                "data_until": snapshot.get("data_until", ""),
+                "snapshot_hash": snapshot.get("snapshot_hash", ""),
+                **snapshot["cumulative"],
+            }
+            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            os.makedirs(config.REPORT_DIR, exist_ok=True)
+            analytics_path = os.path.join(
+                config.REPORT_DIR,
+                f"workflow-run-{run_id}-analytics-{snapshot.get('logical_date', 'unknown')}.json",
+            )
+            Path(analytics_path).write_text(
+                json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            cumulative_computed = True
+            _logger.info("Quiet report: cumulative analytics computed and saved to %s", analytics_path)
+        except Exception:
+            _logger.exception("Quiet report: cumulative analytics computation failed")
+            cum_analytics = None
+            analytics_path = None
+
+    # Use cumulative analytics when available, fall back to prev_analytics
+    effective_analytics = cum_analytics or prev_analytics
+
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, prev_analytics)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics)
     except Exception:
         _logger.exception("Quiet report HTML generation failed")
 
@@ -565,7 +650,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     if send_email and should_send:
         try:
             email_result = _send_mode_email(
-                "quiet", snapshot, prev_analytics,
+                "quiet", snapshot, effective_analytics,
                 consecutive_quiet=consecutive,
             )
         except Exception as e:
@@ -583,7 +668,8 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "reviews_count": 0,
         "html_path": html_path,
         "excel_path": None,
-        "analytics_path": None,
+        "analytics_path": analytics_path,
+        "cumulative_computed": cumulative_computed,
         "email": email_result,
         "email_skipped": not should_send,
         "digest_mode": digest_mode,
@@ -665,6 +751,56 @@ def _render_full_email_html(snapshot, analytics):
     alert_level = alert[0] if isinstance(alert, (list, tuple)) else "green"
     alert_text = alert[1] if isinstance(alert, (list, tuple)) else ""
 
+    # Dual-perspective template variables (Correction E)
+    cumulative_kpis = normalized.get("cumulative_kpis") or normalized.get("kpis", {})
+    window = normalized.get("window", {})
+    health_confidence = cumulative_kpis.get("health_confidence", "high")
+
+    # F4 fix: load previous context ONCE, reuse for detect_snapshot_changes,
+    # cluster_changes, and prev_analytics
+    prev_analytics_ctx = None
+    prev_snapshot = None
+    run_id = snapshot.get("run_id", 0)
+    if run_id:
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
+    changes = detect_snapshot_changes(snapshot, prev_snapshot)
+
+    # New review summary for email template
+    window_reviews = window.get("new_reviews") or snapshot.get("reviews", [])
+    own_new = [r for r in window_reviews if r.get("ownership") == "own"]
+    comp_new = [r for r in window_reviews if r.get("ownership") == "competitor"]
+    new_review_summary = {
+        "own_count": len(own_new),
+        "comp_count": len(comp_new),
+        "own_negative": sum(
+            1 for r in own_new if (r.get("rating") or 5) <= config.NEGATIVE_THRESHOLD
+        ),
+    }
+
+    # Compute cluster changes for "today's changes" section
+    prev_clusters = None
+    if prev_analytics_ctx:
+        prev_clusters = (prev_analytics_ctx.get("self") or {}).get("top_negative_clusters")
+    cluster_changes = compute_cluster_changes(
+        (normalized.get("self") or {}).get("top_negative_clusters", []),
+        prev_clusters,
+        snapshot.get("logical_date", ""),
+    )
+
+    # Build report URL
+    report_url = ""
+    report_html_public_url = getattr(config, "REPORT_HTML_PUBLIC_URL", "")
+    if report_html_public_url:
+        html_name = f"workflow-run-{run_id}-full-report.html"
+        report_url = f"{report_html_public_url}/{html_name}"
+
+    # Merge snapshot changes (price/stock/rating) with cluster changes (escalated/new/improving)
+    merged_changes = {**cluster_changes}
+    merged_changes["price_changes"] = changes.get("price_changes", [])
+    merged_changes["stock_changes"] = changes.get("stock_changes", [])
+    merged_changes["rating_changes"] = changes.get("rating_changes", [])
+    merged_changes["has_changes"] = changes.get("has_changes", False)
+
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         logical_date=snapshot.get("logical_date", ""),
@@ -675,6 +811,13 @@ def _render_full_email_html(snapshot, analytics):
         report_copy=normalized.get("report_copy") or analytics.get("report_copy") or {},
         risk_products=(normalized.get("self") or {}).get("risk_products", [])[:3],
         threshold=config.NEGATIVE_THRESHOLD,
+        # New dual-perspective variables
+        cumulative_kpis=cumulative_kpis,
+        window=window,
+        health_confidence=health_confidence,
+        changes=merged_changes,
+        new_review_summary=new_review_summary,
+        report_url=report_url,
     )
 
 
@@ -683,7 +826,7 @@ def generate_full_report_from_snapshot(
     send_email: bool = True,
     output_path: str | None = None,
 ) -> dict:
-    if not snapshot.get("reviews"):
+    if not snapshot.get("reviews") and not snapshot.get("cumulative"):
         return {"status": "completed_no_change", "reason": "No new reviews"}
 
     report_date = datetime.fromisoformat(
@@ -709,8 +852,24 @@ def generate_full_report_from_snapshot(
     html_path = None
 
     try:
-        synced_labels = report_analytics.sync_review_labels(snapshot)
-        analytics = report_analytics.build_report_analytics(snapshot, synced_labels=synced_labels)
+        # Correction F: sync labels on cumulative reviews (superset), call once
+        if snapshot.get("cumulative"):
+            _label_snapshot = {
+                "reviews": snapshot["cumulative"]["reviews"],
+            }
+        else:
+            _label_snapshot = snapshot
+        synced_labels = report_analytics.sync_review_labels(_label_snapshot)
+
+        # Use dual analytics when cumulative data exists
+        if snapshot.get("cumulative"):
+            analytics = report_analytics.build_dual_report_analytics(
+                snapshot, synced_labels=synced_labels,
+            )
+        else:
+            analytics = report_analytics.build_report_analytics(
+                snapshot, synced_labels=synced_labels,
+            )
 
         # Pre-normalize so LLM gets gap_analysis, enriched clusters, and top_symptoms
         from qbu_crawler.server.report_common import normalize_deep_report_analytics
@@ -735,14 +894,27 @@ def generate_full_report_from_snapshot(
                     if deep:
                         cluster["deep_analysis"] = deep
 
+        # Attach window_review_ids so Excel can mark newly-added reviews (Correction H)
+        if snapshot.get("cumulative"):
+            analytics["window_review_ids"] = [
+                r.get("id") for r in snapshot.get("reviews", []) if r.get("id")
+            ]
+
         Path(analytics_path).write_text(
             json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
 
+        # Excel uses cumulative reviews when available, with window ID marking
+        if snapshot.get("cumulative"):
+            _excel_products = snapshot["cumulative"]["products"]
+            _excel_reviews = snapshot["cumulative"]["reviews"]
+        else:
+            _excel_products = snapshot["products"]
+            _excel_reviews = snapshot["reviews"]
         excel_path = report.generate_excel(
-            snapshot["products"],
-            snapshot["reviews"],
+            _excel_products,
+            _excel_reviews,
             report_date=report_date,
             output_path=output_path,
             analytics=analytics,

@@ -263,6 +263,31 @@ Workspace 文件体系：
 
 CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目 `data/`（products.db）物理分离。
 
+### V3 报告模式系统（P006+P007）
+
+报告模式根据每日采集结果自动选择：
+
+1. **Full 模式**：检测到新评论 → 生成完整分析（聚类、风险评分、LLM 洞察）+ Excel + V3 HTML + 邮件
+2. **Change 模式**：无新评论但价格/库存/评分有变动 → 生成变动摘要 HTML + 邮件
+3. **Quiet 模式**：无新评论且无变动 → 前 N 天每天发邮件（`REPORT_QUIET_EMAIL_DAYS`），之后每周发一次
+
+`REPORT_PERSPECTIVE` 控制分析视角：
+- `dual`（默认）：累积全景 + 今日增量双视角。核心 KPI（健康指数、风险产品、竞品差距）基于全量累积数据计算（稳定有意义），"今日变化"区块展示窗口增量。解决"基线后失明"问题。
+- `window`：仅当日 24h 窗口数据（旧行为）
+
+快照结构（双视角模式）：
+- `snapshot["products"]` / `snapshot["reviews"]` — 当日窗口数据
+- `snapshot["cumulative"]["products"]` / `snapshot["cumulative"]["reviews"]` — 全量累积数据
+- `snapshot_hash` 仅对窗口数据计算，不受累积数据影响
+
+KPI Delta 计算：
+- 双视角模式：累积 KPI vs 上次累积 KPI（稳定、有意义的趋势）
+- 窗口模式：窗口 KPI vs 上次窗口 KPI（波动大，仅作参考）
+
+健康指数贝叶斯修正：
+- 样本 < 30 条时向先验值 50.0 收缩，避免小样本下的虚假满分/零分
+- 返回 `(health_index, confidence)` 元组，confidence: high/medium/low/no_data
+
 ### 稳定性机制
 
 - **内置重试**：`ChromiumOptions.set_retry(times=3, interval=2)` 处理网络抖动

@@ -839,3 +839,334 @@ def test_get_email_recipients_returns_empty_when_no_source(monkeypatch, tmp_path
     )
     result = report_snapshot._get_email_recipients()
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for dual-perspective snapshot (P007 Task 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def dual_snapshot_db(tmp_path, monkeypatch):
+    """DB with 1 product and 2 reviews across 2 days; workflow window = day 2 only."""
+    db_file = str(tmp_path / "dual.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "dual")
+
+    models.init_db()
+
+    conn = _get_test_conn(db_file)
+    conn.execute(
+        """
+        INSERT INTO products (url, site, name, sku, price, stock_status,
+                              review_count, rating, ownership, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "https://example.com/product/dual-1",
+            "basspro",
+            "Dual Product",
+            "SKU-DUAL-1",
+            49.99,
+            "in_stock",
+            2,
+            4.5,
+            "own",
+            "2026-04-15 10:00:00",
+        ),
+    )
+    product_id = conn.execute("SELECT id FROM products WHERE sku = 'SKU-DUAL-1'").fetchone()["id"]
+
+    # Day 1 review — outside the window (before data_since)
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at,
+                             headline_cn, body_cn, translate_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            product_id,
+            "Bob",
+            "Old review",
+            "Day 1 body",
+            "hash-d1",
+            4.0,
+            "2026-04-14",
+            json.dumps([]),
+            "2026-04-14 09:00:00",
+            "",
+            "",
+            "pending",
+        ),
+    )
+
+    # Day 2 review — inside the window (on/after data_since)
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, date_published, images, scraped_at,
+                             headline_cn, body_cn, translate_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            product_id,
+            "Alice",
+            "New review",
+            "Day 2 body",
+            "hash-d2",
+            5.0,
+            "2026-04-15",
+            json.dumps([]),
+            "2026-04-15 10:00:00",
+            "",
+            "",
+            "done",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    run = models.create_workflow_run(
+        {
+            "workflow_type": "daily",
+            "status": "reporting",
+            "logical_date": "2026-04-15",
+            "trigger_key": "daily:2026-04-15:dual",
+            "data_since": "2026-04-15T00:00:00+08:00",
+            "data_until": "2026-04-16T00:00:00+08:00",
+            "requested_by": "systemd",
+            "service_version": "test",
+        }
+    )
+    return {"db_file": db_file, "run": run, "tmp_path": tmp_path}
+
+
+def test_dual_snapshot_has_cumulative_field(dual_snapshot_db):
+    """When REPORT_PERSPECTIVE='dual', snapshot includes cumulative with all products+reviews."""
+    import hashlib
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert "cumulative" in snapshot, "cumulative field should be present for dual perspective"
+    cum = snapshot["cumulative"]
+    assert cum["products_count"] == 1
+    assert cum["reviews_count"] == 2
+
+
+def test_dual_snapshot_window_only_has_new_reviews(dual_snapshot_db):
+    """Window-only data in snapshot['reviews'] should contain only day-2 review."""
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert snapshot["reviews_count"] == 1, "Window should only contain 1 review (day 2)"
+    assert snapshot["reviews"][0]["headline"] == "New review"
+
+
+def test_dual_snapshot_hash_excludes_cumulative(dual_snapshot_db):
+    """snapshot_hash must be computed without the cumulative field."""
+    import hashlib
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    # Recompute hash without cumulative
+    hash_payload = {k: v for k, v in snapshot.items() if k != "cumulative"}
+    # Remove snapshot_hash itself for recomputation (it was added after hashing)
+    hash_payload.pop("snapshot_hash", None)
+    expected_hash = hashlib.sha1(
+        json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    assert snapshot["snapshot_hash"] == expected_hash, (
+        "snapshot_hash should be computed without the cumulative field"
+    )
+
+
+def test_window_perspective_skips_cumulative(dual_snapshot_db, monkeypatch):
+    """When REPORT_PERSPECTIVE='window', snapshot should NOT have cumulative field."""
+    from pathlib import Path
+    from qbu_crawler.server.report_snapshot import freeze_report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "window")
+
+    frozen = freeze_report_snapshot(dual_snapshot_db["run"]["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = json.loads(Path(frozen["snapshot_path"]).read_text(encoding="utf-8"))
+
+    assert "cumulative" not in snapshot, "cumulative should be absent for window perspective"
+
+
+# ---------------------------------------------------------------------------
+# Tests for dual-perspective report generation routing (P007 Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_full_report_continues_with_cumulative_no_window_reviews(dual_snapshot_db, monkeypatch):
+    """When window has no reviews but cumulative exists, should NOT early-return."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Remove window reviews to simulate no-new-reviews day
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # Mock out expensive operations
+    monkeypatch.setattr(config, "LLM_API_BASE", "")  # disable LLM
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+
+    result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+
+    # Should NOT get "completed_no_change" because cumulative data exists
+    assert result.get("status") != "completed_no_change"
+    # Should have analytics path (dual analytics was computed)
+    assert result.get("analytics_path") is not None
+
+
+def test_full_report_early_returns_without_cumulative_or_reviews(snapshot_db, monkeypatch):
+    """Without cumulative and without reviews, should still early-return."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_PERSPECTIVE", "window")
+    run = snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-03-29T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Remove reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+    assert result.get("status") == "completed_no_change"
+
+
+def test_full_report_analytics_has_dual_perspective(dual_snapshot_db, monkeypatch):
+    """Full report analytics should contain perspective='dual' when cumulative exists."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    gen_result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False,
+    )
+
+    # Load saved analytics and verify dual perspective
+    analytics = json.loads(Path(gen_result["analytics_path"]).read_text(encoding="utf-8"))
+    assert analytics.get("perspective") == "dual"
+    assert "cumulative_kpis" in analytics
+    assert "window" in analytics
+
+
+# ---------------------------------------------------------------------------
+# Tests for change/quiet modes using cumulative analytics (P007 Task 8)
+# ---------------------------------------------------------------------------
+
+
+def test_change_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
+    """Change mode should compute cumulative analytics when snapshot['cumulative'] exists."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Simulate a change-mode day: clear window reviews so it becomes no-new-reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # Build cum_snapshot so report_analytics.build_report_analytics is callable
+    # monkeypatch it to return a lightweight stub
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None, skip_delta=False: {
+            "mode": "baseline",
+            "kpis": {"ingested_review_rows": 2, "own_review_rows": 1},
+            "self": {},
+            "competitor": {},
+            "appendix": {},
+        },
+    )
+
+    change_result = report_snapshot._generate_change_report(
+        snapshot,
+        send_email=False,
+        prev_analytics=None,
+        context={"changes": {"has_changes": True, "price_changes": [{"sku": "SKU-DUAL-1", "name": "Dual Product", "old": 49.99, "new": 44.99}]}},
+    )
+
+    assert change_result["mode"] == "change"
+    assert change_result["status"] == "completed"
+    # When cumulative data exists, analytics_path should be written
+    assert change_result["analytics_path"] is not None
+    assert change_result.get("cumulative_computed") is True
+    assert Path(change_result["analytics_path"]).is_file()
+
+
+def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
+    """Quiet mode should compute cumulative analytics when snapshot['cumulative'] exists."""
+    from qbu_crawler.server import report_snapshot
+
+    run = dual_snapshot_db["run"]
+    result = report_snapshot.freeze_report_snapshot(run["id"], now="2026-04-15T12:00:00+08:00")
+    snapshot = report_snapshot.load_report_snapshot(result["snapshot_path"])
+
+    # Simulate a quiet-mode day: clear window reviews
+    snapshot["reviews"] = []
+    snapshot["reviews_count"] = 0
+
+    # monkeypatch build_report_analytics to a lightweight stub
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None, skip_delta=False: {
+            "mode": "baseline",
+            "kpis": {"ingested_review_rows": 2, "own_review_rows": 1},
+            "self": {},
+            "competitor": {},
+            "appendix": {},
+        },
+    )
+
+    # monkeypatch should_send_quiet_email to always return True (avoid DB lookup on run_id)
+    monkeypatch.setattr(
+        report_snapshot,
+        "should_send_quiet_email",
+        lambda run_id: (True, None, 0),
+    )
+
+    quiet_result = report_snapshot._generate_quiet_report(
+        snapshot,
+        send_email=False,
+        prev_analytics=None,
+    )
+
+    assert quiet_result["mode"] == "quiet"
+    assert quiet_result["status"] == "completed_no_change"
+    # When cumulative data exists, analytics_path should be written
+    assert quiet_result["analytics_path"] is not None
+    assert quiet_result.get("cumulative_computed") is True
+    assert Path(quiet_result["analytics_path"]).is_file()
