@@ -1007,14 +1007,15 @@ class TestWorkflowReconcile:
         assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
         assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
 
-    def test_reconcile_skips_report_when_zero_reviews_in_snapshot(
+    def test_reconcile_routes_zero_reviews_to_change_or_quiet_mode(
         self,
         workflow_db,
         monkeypatch,
         tmp_path,
     ):
-        """When snapshot reviews_count == 0, workflow should short-circuit:
-        no fast report, no full report, no email, single 'skipped' notification."""
+        """When snapshot reviews_count == 0, workflow should skip fast report
+        and jump directly to full_pending, where generate_report_from_snapshot
+        routes to change or quiet mode."""
         from qbu_crawler.server import workflows as workflows_module
         from qbu_crawler.server.workflows import WorkflowWorker
 
@@ -1078,42 +1079,57 @@ class TestWorkflowReconcile:
             },
         )
 
-        # These should NOT be called — if they are, the test will fail
+        # build_fast_report should NOT be called for 0-review run
         def fail_fast_report(snapshot):
             raise AssertionError("build_fast_report should not be called for 0-review run")
 
-        def fail_generate_report(snapshot, send_email=True):
-            raise AssertionError("generate_report_from_snapshot should not be called for 0-review run")
-
         monkeypatch.setattr(workflows_module, "build_fast_report", fail_fast_report)
-        monkeypatch.setattr(workflows_module, "generate_report_from_snapshot", fail_generate_report)
+
+        # generate_report_from_snapshot SHOULD be called (routes to change/quiet)
+        captured = {}
+
+        def fake_generate_report(snapshot, send_email=True):
+            captured["send_email"] = send_email
+            captured["snapshot"] = snapshot
+            return {
+                "mode": "quiet",
+                "snapshot_hash": snapshot["snapshot_hash"],
+                "excel_path": None,
+                "analytics_path": None,
+                "pdf_path": None,
+                "html_path": str(tmp_path / "quiet-report.html"),
+                "email": {"success": True},
+            }
+
+        monkeypatch.setattr(
+            workflows_module,
+            "generate_report_from_snapshot",
+            fake_generate_report,
+        )
 
         worker = WorkflowWorker(task_stale_seconds=60)
-        assert worker.process_once(now="2026-03-29T08:10:00+08:00") is True
+        # Run multiple times to advance through all phases
+        while worker.process_once(now="2026-03-29T08:10:00+08:00"):
+            pass
 
         refreshed = models.get_workflow_run(run["id"])
         notifications = models.list_notifications(statuses=["pending"])
 
-        # Should NOT have fast_report or full_report notifications
+        # Should NOT have fast_report (skipped for 0-review)
         fast_notifs = [n for n in notifications if n["kind"] == "workflow_fast_report"]
         full_notifs = [n for n in notifications if n["kind"] == "workflow_full_report"]
-        skip_notifs = [n for n in notifications if n["kind"] == "workflow_report_skipped"]
 
         assert len(fast_notifs) == 0, "Should not send fast report for 0-review run"
-        assert len(full_notifs) == 0, "Should not send full report for 0-review run"
-        assert len(skip_notifs) == 1, "Should send exactly one skipped notification"
+        assert len(full_notifs) == 1, "Should send full report notification (with change/quiet mode)"
 
         assert refreshed["status"] == "completed"
-        assert refreshed["report_phase"] == "skipped_no_reviews"
-        assert refreshed["report_mode"] == "skipped"
+        assert refreshed["report_phase"] == "full_sent"
         assert refreshed["error"] is None
-        assert refreshed["excel_path"] is None
+        assert captured["send_email"] is True
 
-        skipped = skip_notifs[0]
-        assert skipped["payload"]["run_id"] == run["id"]
-        assert skipped["payload"]["products_count"] == 41
-        assert skipped["payload"]["reviews_count"] == 0
-        assert skipped["payload"]["reason"] == "no_new_reviews"
+        # The notification should include report_mode from generate_report_from_snapshot
+        full_report_notif = full_notifs[0]
+        assert full_report_notif["payload"]["report_mode"] == "quiet"
 
     def test_reconcile_continues_full_path_when_reviews_exist(
         self,
@@ -1525,3 +1541,35 @@ def test_cli_daily_submit_defaults_logical_date_to_shanghai_now(monkeypatch, cap
 
     capsys.readouterr()
     assert captured["logical_date"] == "2026-03-30"
+
+
+class TestShouldSendWorkflowEmail:
+    """_should_send_workflow_email always returns True (Fix-1B).
+
+    Email send/skip decisions are delegated to generate_report_from_snapshot
+    which routes to the appropriate mode (full / change / quiet).
+    """
+
+    def test_returns_true_for_zero_reviews(self):
+        from qbu_crawler.server.workflows import _should_send_workflow_email
+        task_rows = [{"result": {"products_saved": 41, "reviews_saved": 0}}]
+        snapshot = {"reviews_count": 0}
+        assert _should_send_workflow_email(task_rows, snapshot) is True
+
+    def test_returns_true_for_positive_reviews(self):
+        from qbu_crawler.server.workflows import _should_send_workflow_email
+        task_rows = [{"result": {"products_saved": 5, "reviews_saved": 10}}]
+        snapshot = {"reviews_count": 10}
+        assert _should_send_workflow_email(task_rows, snapshot) is True
+
+    def test_returns_true_for_none_reviews_count(self):
+        from qbu_crawler.server.workflows import _should_send_workflow_email
+        task_rows = []
+        snapshot = {"reviews_count": None}
+        assert _should_send_workflow_email(task_rows, snapshot) is True
+
+    def test_returns_true_for_empty_task_rows(self):
+        from qbu_crawler.server.workflows import _should_send_workflow_email
+        task_rows = []
+        snapshot = {"reviews_count": 0}
+        assert _should_send_workflow_email(task_rows, snapshot) is True

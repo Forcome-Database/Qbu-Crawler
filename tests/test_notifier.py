@@ -787,6 +787,37 @@ def test_openclaw_bridge_sender_translates_task_completed_payload_to_human_templ
     assert template_vars["failed_summary"] == "无"
 
 
+def test_openclaw_bridge_sender_sanitizes_none_paths_for_change_quiet_modes():
+    """When report mode is change or quiet, excel_path/analytics_path/pdf_path
+    may be None. _template_vars_for should sanitize them to empty strings
+    so DingTalk messages don't show the literal string 'None' (Fix-1C)."""
+    from qbu_crawler.server.notifier import OpenClawBridgeSender
+
+    sender = OpenClawBridgeSender("http://bridge.local/notify", auth_token="secret", timeout=10)
+    template_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_full_report",
+            "payload": {
+                "run_id": 7,
+                "logical_date": "2026-04-10",
+                "snapshot_hash": "hash-change",
+                "excel_path": None,
+                "analytics_path": None,
+                "pdf_path": None,
+                "html_path": "/reports/change-report.html",
+                "report_mode": "change",
+                "email_status": "success",
+            },
+        }
+    )
+
+    assert template_vars["excel_path"] == "", "None excel_path should be sanitized to empty string"
+    assert template_vars["analytics_path"] == "", "None analytics_path should be sanitized to empty string"
+    assert template_vars["pdf_path"] == "", "None pdf_path should be sanitized to empty string"
+    assert template_vars["html_path"] == "/reports/change-report.html", "Non-None paths should be preserved"
+    assert template_vars["excel_path"] != "None", "Should not be the string 'None'"
+
+
 def test_openclaw_bridge_sender_classifies_retryable_and_permanent_failures():
     from qbu_crawler.server.notifier import NotificationDeliveryError, OpenClawBridgeSender
 
