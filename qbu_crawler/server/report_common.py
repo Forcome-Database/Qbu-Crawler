@@ -126,6 +126,40 @@ def tier_date_window(tier: str, logical_date: str) -> tuple[str, str]:
     )
 
 
+# ── Review attention label ───────────────────────────────────────────────────
+
+
+def review_attention_label(review: dict, safety_level: str | None) -> dict:
+    """Generate a human-readable weight label for a single review.
+
+    Returns {"signals": [...], "label": "高关注度评论" | "差评" | "常规好评" | "中评"}.
+    Uses RCW signal factors but does NOT expose the RCW score (D4 decision).
+    """
+    signals = []
+    if safety_level:
+        signals.append(f"⚠安全关键词({safety_level})")
+    images = review.get("images") or []
+    if images:
+        signals.append(f"📸 {len(images)}张图")
+    body_len = len(review.get("body", ""))
+    if body_len > 300:
+        signals.append(f"{body_len}字详评")
+    elif body_len < 50:
+        signals.append("短评")
+
+    rating = float(review.get("rating") or 5)  # None defaults to 5 (lenient, consistent with signals)
+    if safety_level == "critical" or (rating <= 2 and len(images) > 0):
+        label = "高关注度评论"
+    elif rating <= 2:
+        label = "差评"
+    elif rating >= 4:
+        label = "常规好评"
+    else:
+        label = "中评"
+
+    return {"signals": signals, "label": label}
+
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {
