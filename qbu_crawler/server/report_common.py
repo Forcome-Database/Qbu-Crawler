@@ -282,6 +282,74 @@ def compute_attention_signals(
     return signals
 
 
+# ── Weekly report: dispersion + credibility ──────────────────────────────────
+
+
+def compute_dispersion(
+    label_code: str,
+    reviews: list[dict],
+    total_skus: int,
+) -> tuple[str, set[str]]:
+    """Classify issue dispersion across SKUs.
+
+    Returns (dispersion_type, affected_skus) where dispersion_type is:
+    - "systemic": > 20% of SKUs affected (supply chain / design issue)
+    - "isolated": < 10% AND <= 2 SKUs (batch / individual issue)
+    - "uncertain": in between (needs more observation)
+    """
+    affected_skus: set[str] = set()
+    for r in reviews:
+        labels_raw = r.get("analysis_labels") or "[]"
+        if isinstance(labels_raw, str):
+            try:
+                labels = json.loads(labels_raw)
+            except (json.JSONDecodeError, TypeError):
+                labels = []
+        else:
+            labels = labels_raw
+        if any(lb.get("code") == label_code for lb in labels):
+            sku = r.get("product_sku", "")
+            if sku:
+                affected_skus.add(sku)
+
+    ldi = len(affected_skus) / total_skus if total_skus > 0 else 0
+
+    if ldi > 0.2:
+        return "systemic", affected_skus
+    elif ldi < 0.1 and len(affected_skus) <= 2:
+        return "isolated", affected_skus
+    else:
+        return "uncertain", affected_skus
+
+
+def credibility_weight(review: dict, today: date | None = None) -> float:
+    """Review Credibility Weight for internal sorting (D4: not exposed as KPI).
+
+    Factors: body length, image count, recency (6-month half-life).
+    """
+    today = today or date.today()
+    w = 1.0
+
+    body_len = len(review.get("body", ""))
+    if body_len > 500:
+        w *= 1.5
+    elif body_len < 50:
+        w *= 0.6
+
+    images = review.get("images") or []
+    if images:
+        w *= 1.0 + min(len(images), 3) * 0.15
+
+    parsed = review.get("date_published_parsed")
+    if parsed:
+        pub_date = _parse_date_flexible(parsed)
+        if pub_date:
+            days_old = (today - pub_date).days
+            w *= 0.5 ** (days_old / 180)  # half-life 6 months
+
+    return w
+
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {

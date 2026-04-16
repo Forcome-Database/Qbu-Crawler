@@ -79,3 +79,101 @@ def test_get_previous_completed_run_filters_by_tier(db):
     prev_daily = models.get_previous_completed_run(3, report_tier="daily")
     assert prev_daily is not None
     assert prev_daily["id"] == 1
+
+
+# ── Task 3: compute_dispersion + credibility_weight ─────────────
+
+from datetime import date
+
+
+def test_compute_dispersion_systemic():
+    from qbu_crawler.server.report_common import compute_dispersion
+    reviews = [
+        {"product_sku": "SKU1", "analysis_labels": '[{"code":"quality_stability"}]'},
+        {"product_sku": "SKU2", "analysis_labels": '[{"code":"quality_stability"}]'},
+        {"product_sku": "SKU3", "analysis_labels": '[{"code":"quality_stability"}]'},
+    ]
+    dtype, skus = compute_dispersion("quality_stability", reviews, total_skus=10)
+    assert dtype == "systemic"
+    assert len(skus) == 3
+
+
+def test_compute_dispersion_isolated():
+    from qbu_crawler.server.report_common import compute_dispersion
+    reviews = [
+        {"product_sku": "SKU1", "analysis_labels": '[{"code":"quality_stability"}]'},
+    ]
+    dtype, skus = compute_dispersion("quality_stability", reviews, total_skus=20)
+    assert dtype == "isolated"
+    assert len(skus) == 1
+
+
+def test_compute_dispersion_uncertain():
+    from qbu_crawler.server.report_common import compute_dispersion
+    reviews = [
+        {"product_sku": "SKU1", "analysis_labels": '[{"code":"quality_stability"}]'},
+        {"product_sku": "SKU2", "analysis_labels": '[{"code":"quality_stability"}]'},
+        {"product_sku": "SKU3", "analysis_labels": '[{"code":"quality_stability"}]'},
+    ]
+    dtype, skus = compute_dispersion("quality_stability", reviews, total_skus=20)
+    assert dtype == "uncertain"
+
+
+def test_credibility_weight_long_review_with_images():
+    from qbu_crawler.server.report_common import credibility_weight
+    review = {"body": "x" * 600, "images": ["img1.jpg", "img2.jpg"],
+              "date_published_parsed": "2026-04-10"}
+    w = credibility_weight(review, today=date(2026, 4, 17))
+    assert w > 1.0
+
+
+def test_credibility_weight_short_old_review():
+    from qbu_crawler.server.report_common import credibility_weight
+    review = {"body": "bad", "images": [],
+              "date_published_parsed": "2025-04-10"}
+    w = credibility_weight(review, today=date(2026, 4, 17))
+    assert w < 1.0
+
+
+def test_credibility_weight_no_date_defaults_to_recent():
+    from qbu_crawler.server.report_common import credibility_weight
+    review = {"body": "decent review text here", "images": []}
+    w = credibility_weight(review, today=date(2026, 4, 17))
+    assert w > 0
+
+
+# ── Task 4: get_label_anomaly_stats ─────────────────────────────
+
+
+def test_get_label_anomaly_stats(db):
+    conn = _get_test_conn(db)
+    conn.execute("INSERT INTO products (url, name, sku, site) VALUES (?, ?, ?, ?)",
+                 ("http://test.com/p1", "Test", "SKU1", "test"))
+    conn.execute("INSERT INTO reviews (product_id, author, headline, body, rating)"
+                 " VALUES (1, 'A', 'H', 'B', 3.0)")
+    conn.execute("INSERT INTO reviews (product_id, author, headline, body, rating)"
+                 " VALUES (1, 'B', 'H2', 'B2', 2.0)")
+    conn.execute(
+        "INSERT INTO review_analysis (review_id, sentiment, sentiment_score, labels, features,"
+        " insight_cn, insight_en, llm_model, prompt_version, label_anomaly_flags)"
+        " VALUES (1, 'positive', 0.8, '[]', '[]', '', '', 'test', 'v1',"
+        " '[{\"type\": \"sentiment_label_mismatch\", \"label_code\": \"quality_stability\"}]')"
+    )
+    conn.execute(
+        "INSERT INTO review_analysis (review_id, sentiment, sentiment_score, labels, features,"
+        " insight_cn, insight_en, llm_model, prompt_version, label_anomaly_flags)"
+        " VALUES (2, 'negative', 0.2, '[]', '[]', '', '', 'test', 'v1', NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    stats = models.get_label_anomaly_stats([1, 2])
+    assert stats["total_flagged"] == 1
+    assert stats["total_checked"] == 2
+    assert "quality_stability" in stats["flagged_labels"]
+
+
+def test_get_label_anomaly_stats_empty(db):
+    stats = models.get_label_anomaly_stats([])
+    assert stats["total_flagged"] == 0
+    assert stats["total_checked"] == 0
