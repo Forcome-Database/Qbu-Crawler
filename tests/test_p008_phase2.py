@@ -323,3 +323,105 @@ def test_risk_score_higher_with_safety_reviews(db):
     normal_score = normal[0]["risk_score"] if normal else 0
     safety_score = safety[0]["risk_score"] if safety else 0
     assert safety_score > normal_score, f"Safety review should boost risk score: {safety_score} vs {normal_score}"
+
+# ── Task 8: Daily briefing template ─────────────────────────────
+
+
+def test_render_daily_briefing_basic():
+    from qbu_crawler.server.report_html import render_daily_briefing
+
+    snapshot = {
+        "logical_date": "2026-04-17",
+        "run_id": 99,
+        "reviews": [],
+        "products": [],
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [],
+        },
+    }
+    cumulative_kpis = {
+        "health_index": 72.3,
+        "health_confidence": "medium",
+        "own_review_rows": 42,
+        "own_negative_review_rate_display": "4.2%",
+        "high_risk_count": 2,
+    }
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "test-briefing.html")
+        result = render_daily_briefing(
+            snapshot=snapshot,
+            cumulative_kpis=cumulative_kpis,
+            window_reviews=[],
+            attention_signals=[],
+            changes={},
+            output_path=path,
+        )
+        assert os.path.isfile(result)
+        html = open(result, encoding="utf-8").read()
+        assert "72.3" in html  # health index
+        assert "4.2%" in html  # negative rate
+        assert "需注意" not in html  # no signals → no attention block
+
+
+def test_render_daily_briefing_with_attention_signals():
+    from qbu_crawler.server.report_html import render_daily_briefing
+
+    snapshot = {
+        "logical_date": "2026-04-17",
+        "run_id": 99,
+        "reviews": [{"id": 1, "headline": "Bad", "body": "Metal shaving found",
+                      "rating": 1.0, "product_sku": "SKU1", "product_name": "Grinder",
+                      "ownership": "own", "images": ["img.jpg"],
+                      "author": "Tester", "date_published": "2026-04-17"}],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    signals = [
+        {"type": "safety_keyword", "urgency": "action",
+         "title": "安全: Grinder 评论提及安全关键词", "detail": "级别: critical"},
+    ]
+    reviews_with_labels = [
+        {**snapshot["reviews"][0],
+         "attention": {"signals": ["⚠安全关键词(critical)", "📸 1张图"], "label": "高关注度评论"}}
+    ]
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "test-briefing.html")
+        result = render_daily_briefing(
+            snapshot=snapshot,
+            cumulative_kpis={"health_index": 65.0, "own_negative_review_rate_display": "8.1%",
+                             "high_risk_count": 1, "own_review_rows": 20, "health_confidence": "medium"},
+            window_reviews=reviews_with_labels,
+            attention_signals=signals,
+            changes={},
+            output_path=path,
+        )
+        html = open(result, encoding="utf-8").read()
+        assert "需行动" in html
+        assert "安全" in html
+        assert "高关注度评论" in html
+
+
+# ── Task 9: Email daily template ─────────────────────────────
+
+
+def test_email_daily_template_renders():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("email_daily.html.j2")
+    html = template.render(
+        logical_date="2026-04-17",
+        cumulative_kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%",
+                         "high_risk_count": 1, "own_review_rows": 42},
+        window_reviews=[],
+        attention_signals=[],
+        threshold=2,
+    )
+    assert "72.3" in html
+    assert "QBU" in html
