@@ -19,6 +19,7 @@ from typing import Any
 
 from qbu_crawler import __version__, config, models
 from qbu_crawler.server.daily_inputs import load_daily_inputs
+from qbu_crawler.server import report_snapshot as _report_snapshot_mod
 from qbu_crawler.server.report_snapshot import (
     FullReportGenerationError,
     build_fast_report,
@@ -689,10 +690,76 @@ class WorkflowWorker:
                 updated += 1
         return updated
 
+    def _advance_periodic_run(self, run: dict, now: str) -> bool:
+        """Simplified pipeline for weekly/monthly: freeze → report → complete.
+
+        No fast_pending phase. No scraping tasks to wait for.
+        """
+        run_id = run["id"]
+        changed = False
+
+        if run.get("report_phase") == "none":
+            try:
+                freeze_report_snapshot(run_id, now=now)
+                models.update_workflow_run(run_id, report_phase="full_pending")
+                changed = True
+            except Exception as exc:
+                logger.exception("Periodic run %d: snapshot freeze failed", run_id)
+                self._move_run_to_attention(run, now, str(exc))
+                return True
+
+        # Re-fetch run after potential update
+        if changed:
+            run = models.get_workflow_run(run_id)
+
+        if run.get("report_phase") == "full_pending":
+            try:
+                snapshot = load_report_snapshot(run["snapshot_path"])
+                full_report = _report_snapshot_mod.generate_report_from_snapshot(snapshot, send_email=True)
+            except Exception as exc:
+                logger.exception("Periodic run %d: report generation failed", run_id)
+                self._move_run_to_attention(run, now, str(exc))
+                return True
+
+            excel_path = full_report.get("excel_path")
+            analytics_path = full_report.get("analytics_path")
+            html_path = full_report.get("html_path") or full_report.get("v3_html_path")
+
+            _enqueue_workflow_notification(
+                kind=f"workflow_{run.get('report_tier', 'weekly')}_report",
+                target=config.WORKFLOW_NOTIFICATION_TARGET,
+                payload={
+                    "run_id": run_id,
+                    "logical_date": run["logical_date"],
+                    "report_tier": run.get("report_tier"),
+                    "html_path": html_path,
+                    "excel_path": excel_path,
+                },
+                dedupe_key=f"workflow:{run_id}:full-report",
+            )
+            models.update_workflow_run(
+                run_id,
+                status="completed",
+                report_phase="full_sent",
+                excel_path=excel_path,
+                analytics_path=analytics_path,
+                finished_at=now,
+                error=None,
+            )
+            return True
+
+        return changed
+
     def _advance_run(self, run_id: int, now: str) -> bool:
         run = models.get_workflow_run(run_id)
         if run is None:
             return False
+
+        # P008 Phase 3: Route periodic runs BEFORE task_rows check
+        # (weekly/monthly have no tasks — the task_rows guard would exit early)
+        run_tier = run.get("report_tier")
+        if run_tier in ("weekly", "monthly"):
+            return self._advance_periodic_run(run, now)
 
         task_rows = models.list_workflow_run_tasks(run_id)
         if not task_rows:
