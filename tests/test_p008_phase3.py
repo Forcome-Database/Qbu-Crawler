@@ -511,3 +511,81 @@ def test_generate_report_weekly_tier_routes_correctly(db, tmp_path, monkeypatch)
     result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
     assert result["mode"] == "weekly_report"
     assert result.get("html_path") is not None
+
+
+# ── Task 13: Integration test ────────────────────────────────────
+
+
+def test_p008_phase3_integration(db, tmp_path, monkeypatch):
+    """End-to-end: weekly run goes through submit → route → report."""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.workflows import submit_weekly_run
+    from qbu_crawler.server.report_common import compute_dispersion, credibility_weight, tier_date_window
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    # 1. Verify tier_date_window
+    since, until = tier_date_window("weekly", "2026-04-20")
+    assert since == "2026-04-13T00:00:00+08:00"
+    assert until == "2026-04-20T00:00:00+08:00"
+
+    # 2. Submit weekly run
+    result = submit_weekly_run(logical_date="2026-04-20")
+    assert result["created"] is True
+    run_id = result["run_id"]
+
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+    conn.close()
+    assert row["report_tier"] == "weekly"
+    assert row["status"] == "reporting"
+
+    # 3. Verify get_previous_completed_run with tier
+    prev = models.get_previous_completed_run(run_id, report_tier="weekly")
+    assert prev is None
+
+    # 4. Verify compute_dispersion
+    reviews = [
+        {"product_sku": "SKU1", "analysis_labels": '[{"code":"quality_stability"}]'},
+        {"product_sku": "SKU2", "analysis_labels": '[{"code":"quality_stability"}]'},
+    ]
+    dtype, skus = compute_dispersion("quality_stability", reviews, total_skus=5)
+    assert dtype in ("systemic", "uncertain", "isolated")
+
+    # 5. Verify credibility_weight (long body + image + recent date → weight > 1.0)
+    w = credibility_weight(
+        {"body": "x" * 600, "images": ["img.jpg"], "date_published_parsed": "2026-04-14"},
+        today=date(2026, 4, 20),
+    )
+    assert w > 1.0
+
+    # 6. Verify weekly routing
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
+    snapshot = {
+        "run_id": run_id,
+        "logical_date": "2026-04-20",
+        "data_since": "2026-04-13T00:00:00+08:00",
+        "data_until": "2026-04-20T00:00:00+08:00",
+        "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                       "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+        "reviews": [{"id": 1, "headline": "Good", "body": "Works", "rating": 4.0,
+                      "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+                      "images": [], "author": "A", "date_published": "2026-04-14",
+                      "date_published_parsed": "2026-04-14"}],
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [{"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "SKU1",
+                         "headline": "Good", "body": "Works", "sentiment": "positive",
+                         "analysis_labels": "[]"}],
+            "products_count": 1,
+            "reviews_count": 1,
+            "translated_count": 1,
+            "untranslated_count": 0,
+        },
+        "products_count": 1, "reviews_count": 1,
+        "translated_count": 1, "untranslated_count": 0, "snapshot_hash": "test",
+    }
+    report_result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+    assert report_result["mode"] == "weekly_report"
+    assert report_result.get("html_path") is not None
