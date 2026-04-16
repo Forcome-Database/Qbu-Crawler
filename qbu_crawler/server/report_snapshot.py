@@ -550,6 +550,8 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
                 **snapshot["cumulative"],
             }
             cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            from qbu_crawler.server.report_common import normalize_deep_report_analytics
+            cum_analytics = normalize_deep_report_analytics(cum_analytics)
             os.makedirs(config.REPORT_DIR, exist_ok=True)
             analytics_path = os.path.join(
                 config.REPORT_DIR,
@@ -621,6 +623,8 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
                 **snapshot["cumulative"],
             }
             cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            from qbu_crawler.server.report_common import normalize_deep_report_analytics
+            cum_analytics = normalize_deep_report_analytics(cum_analytics)
             os.makedirs(config.REPORT_DIR, exist_ok=True)
             analytics_path = os.path.join(
                 config.REPORT_DIR,

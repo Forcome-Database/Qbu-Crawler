@@ -267,8 +267,8 @@
                 {% for c in changes.rating_changes %}
                 <tr>
                   <td>{{ c.name }}</td>
-                  <td style="text-align:center;color:var(--text-muted);font-family:var(--font-mono);">{{ c.old }}</td>
-                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new }}</td>
+                  <td style="text-align:center;color:var(--text-muted);font-family:var(--font-mono);">{{ c.old if c.old is not none else "—" }}</td>
+                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new if c.new is not none else "—" }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
