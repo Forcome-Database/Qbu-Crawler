@@ -160,6 +160,128 @@ def review_attention_label(review: dict, safety_level: str | None) -> dict:
     return {"signals": signals, "label": label}
 
 
+# ── Attention signals engine ─────────────────────────────────────────────────
+
+
+def compute_attention_signals(
+    window_reviews: list[dict],
+    changes: dict,
+    cumulative_clusters: list[dict],
+    logical_date: str | None = None,
+    recent_reviews_7d: list[dict] | None = None,
+) -> list[dict]:
+    """Compute "needs attention" signals for the daily briefing.
+
+    Args:
+        window_reviews: Today's 24h window reviews.
+        changes: Snapshot changes dict (price/stock/rating).
+        cumulative_clusters: Negative clusters from cumulative analytics.
+        logical_date: Current report date.
+        recent_reviews_7d: Last 7 days of own reviews (for consecutive negative check).
+                           Falls back to window_reviews if not provided.
+
+    Returns list of signal dicts sorted by urgency (action first, reference second).
+    Each signal: {"type": str, "urgency": "action"|"reference", "title": str, "detail": str}
+    """
+    signals = []
+    changes = changes or {}
+    ref_date = date.fromisoformat(logical_date[:10]) if logical_date else date.today()
+
+    # ── Signal 1: Safety keyword hit (action) ──
+    for r in window_reviews:
+        text = f"{r.get('headline', '')} {r.get('body', '')}"
+        level = detect_safety_level(text)
+        if level:
+            signals.append({
+                "type": "safety_keyword",
+                "urgency": "action",
+                "title": f"安全: {r.get('product_name', '')} 评论提及安全关键词",
+                "detail": f"级别: {level} · SKU: {r.get('product_sku', '')}",
+                "review_id": r.get("id"),
+                "safety_level": level,
+            })
+
+    # ── Signal 1b: Image evidence in negative review (action) ──
+    for r in window_reviews:
+        images = r.get("images") or []
+        rating = float(r.get("rating") or 5)
+        if images and rating <= config.NEGATIVE_THRESHOLD:
+            signals.append({
+                "type": "image_evidence",
+                "urgency": "action",
+                "title": f"图片证据: {r.get('product_name', '')} 差评含 {len(images)} 张图片",
+                "detail": f"SKU: {r.get('product_sku', '')}",
+                "review_id": r.get("id"),
+            })
+
+    # ── Signal 2: Consecutive negative for same SKU within 7 days (action) ──
+    neg_source = recent_reviews_7d if recent_reviews_7d is not None else window_reviews
+    own_negative_by_sku: dict[str, int] = {}
+    for r in neg_source:
+        if r.get("ownership") == "own" and (float(r.get("rating") or 5)) <= config.NEGATIVE_THRESHOLD:
+            sku = r.get("product_sku", "")
+            if sku:
+                own_negative_by_sku[sku] = own_negative_by_sku.get(sku, 0) + 1
+    for sku, count in own_negative_by_sku.items():
+        if count >= 2:
+            name = next(
+                (r.get("product_name", sku) for r in neg_source if r.get("product_sku") == sku),
+                sku,
+            )
+            signals.append({
+                "type": "consecutive_negative",
+                "urgency": "action",
+                "title": f"连续差评: {name} 7天内 {count} 条差评",
+                "detail": f"SKU: {sku}",
+            })
+
+    # ── Signal 3: Own product out of stock (action) ──
+    for sc in (changes.get("stock_changes") or []):
+        if sc.get("ownership") == "own" and sc.get("new") == "out_of_stock":
+            signals.append({
+                "type": "own_stock_out",
+                "urgency": "action",
+                "title": f"缺货: {sc.get('name', '')} 从有货变为缺货",
+                "detail": f"SKU: {sc.get('sku', '')}",
+            })
+
+    # ── Signal 4: Competitor rating drop >= 0.3 (reference) ──
+    for rc in (changes.get("rating_changes") or []):
+        if rc.get("ownership") != "competitor":
+            continue
+        old_r = rc.get("old") or 0
+        new_r = rc.get("new") or 0
+        if old_r and new_r and (old_r - new_r) >= 0.3:
+            signals.append({
+                "type": "competitor_rating_change",
+                "urgency": "reference",
+                "title": f"竞品: {rc.get('name', '')} 评分 {old_r}→{new_r} ({new_r - old_r:+.1f})",
+                "detail": f"SKU: {rc.get('sku', '')}",
+            })
+
+    # ── Signal 5: Silence good news — negative cluster dormant > 14 days (reference) ──
+    for cluster in cumulative_clusters:
+        last_seen_str = cluster.get("last_seen")
+        if not last_seen_str:
+            continue
+        try:
+            last_seen = date.fromisoformat(last_seen_str[:10])
+        except (ValueError, TypeError):
+            continue
+        if (ref_date - last_seen).days >= 14:
+            signals.append({
+                "type": "silence_good_news",
+                "urgency": "reference",
+                "title": f"静默观察: {cluster.get('label_display', '')} 已 {(ref_date - last_seen).days} 天无新投诉",
+                "detail": f"上次出现: {last_seen_str[:10]}",
+            })
+
+    # Sort: action first, then reference
+    urgency_order = {"action": 0, "reference": 1}
+    signals.sort(key=lambda s: urgency_order.get(s["urgency"], 2))
+    return signals
+
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {
