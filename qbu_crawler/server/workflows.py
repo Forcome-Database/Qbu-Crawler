@@ -119,6 +119,10 @@ def build_daily_trigger_key(logical_date: str) -> str:
     return f"daily:{logical_date}"
 
 
+def build_weekly_trigger_key(logical_date: str) -> str:
+    return f"weekly:{logical_date}"
+
+
 def submit_daily_run(
     submitter: Any,
     source_csv: str,
