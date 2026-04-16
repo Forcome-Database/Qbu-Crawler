@@ -187,18 +187,21 @@
       <div class="briefing-body">
 
         <!-- ── KPI Snapshot ── -->
-        {% set kpis = (previous_analytics or {}).get("kpis", {}) %}
+        {# P008: prefer cumulative_kpis (always computed), fall back to previous_analytics.kpis #}
+        {% set _ckpi = cumulative_kpis if cumulative_kpis is defined and cumulative_kpis else {} %}
+        {% set _pkpi = (previous_analytics or {}).get("kpis", {}) if previous_analytics else {} %}
+        {% set kpis = _ckpi if _ckpi else _pkpi %}
         <div class="briefing-section">
-          <div class="briefing-section-label">当前健康快照 · 上期数据</div>
+          <div class="briefing-section-label">当前健康快照 · 累积数据</div>
           <div class="briefing-kpi-grid">
             <div class="kpi-card">
               <span class="kpi-label">健康指数</span>
-              <strong class="kpi-value" style="color:var(--accent);">{{ kpis.get("health_index", "N/A") }}</strong>
+              <strong class="kpi-value" style="color:var(--accent);">{{ kpis.get("health_index", "—") }}</strong>
               <span class="kpi-delta delta-flat">/ 100</span>
             </div>
             <div class="kpi-card">
               <span class="kpi-label">差评率</span>
-              <strong class="kpi-value">{{ kpis.get("own_negative_review_rate_display", "N/A") }}</strong>
+              <strong class="kpi-value">{{ kpis.get("own_negative_review_rate_display", "—") }}</strong>
             </div>
             <div class="kpi-card">
               <span class="kpi-label">评论样本量</span>

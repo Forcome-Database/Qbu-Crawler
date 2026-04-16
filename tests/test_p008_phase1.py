@@ -194,3 +194,43 @@ def test_freeze_snapshot_enriches_impact_fields(db):
             review.setdefault(_key, _val)
     assert review["impact_category"] == "safety"
     assert review["failure_mode"] == "rust_corrosion"
+
+
+# ── Cumulative KPI always computed (Task 4) ──────────────────────
+
+
+def test_quiet_template_no_na_with_cumulative_kpis():
+    """quiet_day_report template must use cumulative_kpis instead of N/A."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    from pathlib import Path
+
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("quiet_day_report.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    css_text = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+
+    # Provide cumulative_kpis but empty previous_analytics
+    html = template.render(
+        logical_date="2026-04-15",
+        snapshot={"logical_date": "2026-04-15", "products": [], "reviews": []},
+        previous_analytics=None,
+        cumulative_kpis={
+            "health_index": 72.5,
+            "health_confidence": "medium",
+            "own_review_rows": 42,
+            "own_negative_review_rate_display": "12.0%",
+            "high_risk_count": 1,
+        },
+        translate_stats={},
+        last_full_report_path=None,
+        css_text=css_text,
+        threshold=2,
+        changes=None,
+    )
+    assert "N/A" not in html, "Template should not contain N/A when cumulative_kpis provided"
+    assert "72.5" in html, "Health index from cumulative_kpis must appear"

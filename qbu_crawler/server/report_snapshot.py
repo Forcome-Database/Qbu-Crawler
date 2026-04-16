@@ -400,7 +400,7 @@ def _change_report_subject_prefix(changes):
     return "[数据变化]"
 
 
-def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None):
+def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None, cumulative_kpis=None):
     """Render the quiet day or change report HTML using the quiet day template."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -438,6 +438,7 @@ def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None):
         logical_date=snapshot.get("logical_date", ""),
         snapshot=snapshot,
         previous_analytics=prev_analytics,
+        cumulative_kpis=cumulative_kpis,
         translate_stats=translate_stats,
         last_full_report_path=last_full_report_path,
         css_text=css_text,
@@ -572,10 +573,13 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     # Use cumulative analytics when available, fall back to prev_analytics
     effective_analytics = cum_analytics or prev_analytics
 
+    # P008: Extract cumulative KPIs for template (always-available, never N/A)
+    cumulative_kpis = (cum_analytics or {}).get("kpis") or (prev_analytics or {}).get("kpis") or {}
+
     # Render quiet day HTML with change info
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, effective_analytics, changes=changes)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics, changes=changes, cumulative_kpis=cumulative_kpis)
     except Exception:
         _logger.exception("Change report HTML generation failed")
 
@@ -598,6 +602,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         "excel_path": None,
         "analytics_path": analytics_path,
         "cumulative_computed": cumulative_computed,
+        "cumulative_kpis": cumulative_kpis or None,
         "email": email_result,
     }
 
@@ -645,9 +650,12 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     # Use cumulative analytics when available, fall back to prev_analytics
     effective_analytics = cum_analytics or prev_analytics
 
+    # P008: Extract cumulative KPIs for template (always-available, never N/A)
+    cumulative_kpis = (cum_analytics or {}).get("kpis") or (prev_analytics or {}).get("kpis") or {}
+
     html_path = None
     try:
-        html_path = _render_quiet_or_change_html(snapshot, effective_analytics)
+        html_path = _render_quiet_or_change_html(snapshot, effective_analytics, cumulative_kpis=cumulative_kpis)
     except Exception:
         _logger.exception("Quiet report HTML generation failed")
 
@@ -675,6 +683,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "excel_path": None,
         "analytics_path": analytics_path,
         "cumulative_computed": cumulative_computed,
+        "cumulative_kpis": cumulative_kpis or None,
         "email": email_result,
         "email_skipped": not should_send,
         "digest_mode": digest_mode,
