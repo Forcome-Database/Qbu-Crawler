@@ -1210,3 +1210,33 @@ def test_query_cumulative_data_analysis_null_when_missing(cumulative_db):
 def test_report_perspective_config_default():
     """REPORT_PERSPECTIVE defaults to 'dual'."""
     assert config.REPORT_PERSPECTIVE == "dual"
+
+
+def test_query_cumulative_data_no_duplicate_with_multiple_analysis(cumulative_db):
+    """query_cumulative_data should return 1 row per review even with multiple analysis rows."""
+    from qbu_crawler.server.report import query_cumulative_data
+
+    # Add a second analysis row for the first review (different prompt_version)
+    conn = _get_test_conn(cumulative_db)
+    r1_id = conn.execute("SELECT id FROM reviews ORDER BY id LIMIT 1").fetchone()["id"]
+    # Use a far-future timestamp so this row is guaranteed to be the latest
+    conn.execute(
+        """
+        INSERT INTO review_analysis (review_id, sentiment, labels, features,
+                                     insight_cn, insight_en, impact_category,
+                                     failure_mode, prompt_version, analyzed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (r1_id, "mixed", "[]", "[]", "v2 insight", "v2 insight EN",
+         "quality", "none", "v2", "2099-12-31 23:59:59"),
+    )
+    conn.commit()
+    conn.close()
+
+    products, reviews = query_cumulative_data()
+
+    # Count how many rows have the same review id as r1_id
+    r1_rows = [r for r in reviews if r["id"] == r1_id]
+    assert len(r1_rows) == 1, f"Expected 1 row for review {r1_id}, got {len(r1_rows)}"
+    # Should use the latest analysis (v2, analyzed_at is far future so definitively latest)
+    assert r1_rows[0]["sentiment"] == "mixed", "Should use the latest analysis row"

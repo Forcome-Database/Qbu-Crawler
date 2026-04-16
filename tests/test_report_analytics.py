@@ -1193,3 +1193,19 @@ def test_build_dual_risk_products_from_cumulative(analytics_db):
     assert "risk_products" in result["self"]
     # The list may be empty or non-empty, but the key must be present
     assert isinstance(result["self"]["risk_products"], list)
+
+
+def test_build_dual_window_analytics_has_no_delta_keys(analytics_db):
+    """Window analytics (skip_delta=True) should NOT contain _delta keys."""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    _insert_review_record()
+
+    result = build_dual_report_analytics(snapshot)
+
+    window_analytics = result.get("window", {}).get("analytics")
+    if window_analytics:
+        delta_keys = [k for k in window_analytics.get("kpis", {}) if k.endswith("_delta")]
+        assert delta_keys == [], f"Window analytics should have no delta keys, found: {delta_keys}"

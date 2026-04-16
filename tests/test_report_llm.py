@@ -698,3 +698,31 @@ def test_build_insights_prompt_includes_window_summary():
     assert "今日" in prompt, "Prompt should contain '今日' when window data is present"
     assert "12" in prompt, "Prompt should mention window reviews_count (12)"
     assert "今日新增评论" in prompt, "Prompt should contain '今日新增评论' section"
+
+
+def test_build_insights_prompt_small_window_warning_uses_window_count():
+    """Warning should fire based on window count (3), not cumulative total (800)."""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "kpis": {
+            "own_product_count": 5, "competitor_product_count": 3,
+            "ingested_review_rows": 800,  # large cumulative total
+            "negative_review_rows": 10,
+            "own_review_rows": 500, "own_negative_review_rows": 8,
+            "own_negative_review_rate": 0.016, "competitor_review_rows": 300,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+        "window": {
+            "reviews_count": 3,  # small window count
+            "own_reviews_count": 2,
+            "competitor_reviews_count": 1,
+            "new_negative_count": 0,
+        },
+        "perspective": "dual",
+    }
+
+    prompt = _build_insights_prompt(analytics)
+
+    assert "样本极少" in prompt, "Small sample warning should fire for window_count=3"

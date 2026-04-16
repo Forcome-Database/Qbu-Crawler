@@ -580,3 +580,39 @@ def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
 
     assert rows_data.get(2) == "是", f"Review id=2 should be marked '是', got {rows_data.get(2)!r}"
     assert rows_data.get(1) in ("", None), f"Review id=1 should be empty, got {rows_data.get(1)!r}"
+
+
+def test_excel_no_new_column_when_window_ids_absent(tmp_path, monkeypatch):
+    """'本次新增' column should be absent when analytics has no window_review_ids."""
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    reviews = [
+        {
+            "id": 1, "product_name": "Test Product", "product_sku": "TP-1",
+            "author": "Alice", "headline": "Good", "body": "Nice product",
+            "rating": 4, "date_published": "2026-04-15", "images": "[]",
+            "ownership": "own", "headline_cn": "", "body_cn": "",
+            "translate_status": "done", "sentiment": "positive",
+            "analysis_labels": "[]", "analysis_features": "[]",
+            "analysis_insight_cn": "", "impact_category": "", "failure_mode": "",
+        },
+    ]
+    products = [
+        {"name": "Test Product", "sku": "TP-1", "price": 99.99,
+         "stock_status": "in_stock", "rating": 4.0, "review_count": 3,
+         "site": "basspro", "ownership": "own"},
+    ]
+    analytics = {
+        "self": {"risk_products": [], "top_negative_clusters": []},
+        "competitor": {}, "kpis": {}, "_trend_series": [],
+        # NO window_review_ids key
+    }
+
+    output = str(tmp_path / "reports" / "test-no-new.xlsx")
+    path = report.generate_excel(products, reviews, analytics=analytics, output_path=output)
+
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    ws = wb["评论明细"]
+    headers = [cell.value for cell in ws[1]]
+    assert "本次新增" not in headers, f"Column should be absent, got headers: {headers}"
