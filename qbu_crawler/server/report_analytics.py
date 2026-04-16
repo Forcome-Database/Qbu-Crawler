@@ -501,8 +501,6 @@ def detect_report_mode(run_id, logical_date):
             FROM workflow_runs
             WHERE workflow_type = 'daily'
               AND status = 'completed'
-              AND analytics_path IS NOT NULL
-              AND analytics_path != ''
               AND logical_date >= ?
               AND logical_date < ?
               AND id != ?
