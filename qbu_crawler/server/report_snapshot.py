@@ -949,7 +949,13 @@ def generate_full_report_from_snapshot(
         )
 
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
-        html_path = report_html.render_v3_html(snapshot, analytics, output_path=html_output_path)
+        # P008: compute snapshot changes for Tab 2
+        try:
+            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0))
+            _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
+        except Exception:
+            _changes = None
+        html_path = report_html.render_v3_html(snapshot, analytics, output_path=html_output_path, changes=_changes)
     except Exception as exc:
         if isinstance(exc, FullReportGenerationError):
             raise

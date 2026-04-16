@@ -2,7 +2,6 @@
 
 import calendar
 import json
-import json as _json
 import os
 import re
 from datetime import date, datetime, timedelta
@@ -41,8 +40,8 @@ def load_safety_tiers(path: str | None = None) -> dict:
     if path:
         try:
             with open(path, encoding="utf-8") as f:
-                return _json.load(f)
-        except (FileNotFoundError, _json.JSONDecodeError):
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
             pass
     return _BUILTIN_SAFETY_TIERS
 
@@ -50,7 +49,7 @@ def load_safety_tiers(path: str | None = None) -> dict:
 _safety_tiers_cache: dict | None = None
 
 
-def _get_safety_tiers() -> dict:
+def get_safety_tiers() -> dict:
     global _safety_tiers_cache
     if _safety_tiers_cache is None:
         _safety_tiers_cache = load_safety_tiers()
@@ -60,7 +59,7 @@ def _get_safety_tiers() -> dict:
 def detect_safety_level(text: str) -> str | None:
     """Return highest matching safety tier ('critical'/'high'/'moderate') or None."""
     text_lower = text.lower()
-    tiers = _get_safety_tiers()
+    tiers = get_safety_tiers()
     for level in _SAFETY_TIER_ORDER:
         keywords = tiers.get(level, [])
         if any(kw in text_lower for kw in keywords):

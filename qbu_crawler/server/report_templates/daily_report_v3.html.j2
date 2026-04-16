@@ -162,6 +162,67 @@
       {% else %}
       <div class="empty-state">本期无新增评论。</div>
       {% endif %}
+
+      {# P008: Product data changes (price/stock/rating) #}
+      {% set _changes = changes if changes is defined and changes else {} %}
+      {% if _changes and _changes.has_changes is defined and _changes.has_changes %}
+      <h3 style="margin-top:var(--sp-2xl);">产品数据变动</h3>
+
+      {% if _changes.price_changes %}
+      <h4 style="margin-top:var(--sp-md);color:var(--text-secondary);">价格变化（{{ _changes.price_changes|length }}个）</h4>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>产品</th><th style="text-align:center;">原价</th><th style="text-align:center;">现价</th></tr></thead>
+          <tbody>
+          {% for c in _changes.price_changes %}
+          <tr>
+            <td>{{ c.name }}</td>
+            <td style="text-align:center;color:var(--text-muted);text-decoration:line-through;font-family:var(--font-mono);">${{ c.old }}</td>
+            <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if c.new is none %}var(--text-muted){% elif c.new > c.old %}var(--critical){% else %}var(--positive){% endif %};">{% if c.new is not none %}${{ c.new }} {% if c.new > c.old %}▲{% else %}▼{% endif %}{% else %}已下架{% endif %}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if _changes.stock_changes %}
+      <h4 style="margin-top:var(--sp-md);color:var(--text-secondary);">库存变化（{{ _changes.stock_changes|length }}个）</h4>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>产品</th><th style="text-align:center;">原状态</th><th style="text-align:center;">现状态</th></tr></thead>
+          <tbody>
+          {% for c in _changes.stock_changes %}
+          <tr>
+            <td>{{ c.name }}</td>
+            <td style="text-align:center;color:var(--text-muted);">{{ "有货" if c.old == "in_stock" else "缺货" }}</td>
+            <td style="text-align:center;font-weight:700;color:{% if c.new == 'in_stock' %}var(--positive){% else %}var(--critical){% endif %};">{{ "有货" if c.new == "in_stock" else "缺货" }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if _changes.rating_changes %}
+      <h4 style="margin-top:var(--sp-md);color:var(--text-secondary);">评分变化（{{ _changes.rating_changes|length }}个）</h4>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>产品</th><th style="text-align:center;">原评分</th><th style="text-align:center;">现评分</th></tr></thead>
+          <tbody>
+          {% for c in _changes.rating_changes %}
+          <tr>
+            <td>{{ c.name }}</td>
+            <td style="text-align:center;color:var(--text-muted);font-family:var(--font-mono);">{{ c.old if c.old is not none else "—" }}</td>
+            <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if c.new is none %}var(--text-muted){% elif (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new if c.new is not none else "已下架" }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% endif %}
     </section>
     {% endif %}
 

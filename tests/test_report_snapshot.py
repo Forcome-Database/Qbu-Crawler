@@ -154,7 +154,7 @@ def test_fast_and_full_use_same_snapshot_hash(snapshot_db, monkeypatch):
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(snapshot_db["tmp_path"] / "full.html"),
+        lambda snapshot, analytics, output_path=None, **kw: str(snapshot_db["tmp_path"] / "full.html"),
     )
 
     frozen = freeze_report_snapshot(snapshot_db["run"]["id"], now="2026-03-29T12:00:00+08:00")
@@ -282,7 +282,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
 
     captured = {}
@@ -363,7 +363,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_html_paths(tmp
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
 
     snapshot = {
@@ -429,7 +429,7 @@ def test_generate_full_report_from_snapshot_passes_insights_to_html_and_email(tm
 
     monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", fake_generate_report_insights)
 
-    def fake_render_v3_html(snapshot, analytics, output_path=None):
+    def fake_render_v3_html(snapshot, analytics, output_path=None, **kw):
         captured["html_analytics"] = analytics
         return str(html_report_path)
 
@@ -503,7 +503,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_html(monkeypatch, tm
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
 
     captured = {}
@@ -572,7 +572,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
     monkeypatch.setattr(
         report,
@@ -639,7 +639,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
 
     def _raise_send_email(recipients, subject, body_text, body_html=None, attachment_path=None, attachment_paths=None):
@@ -736,7 +736,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     monkeypatch.setattr(
         report_snapshot.report_html,
         "render_v3_html",
-        lambda snapshot, analytics, output_path=None: str(html_report_path),
+        lambda snapshot, analytics, output_path=None, **kw: str(html_report_path),
     )
     monkeypatch.setattr(
         report,

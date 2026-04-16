@@ -18,7 +18,7 @@ from qbu_crawler.server.report_charts import build_chartjs_configs
 logger = logging.getLogger(__name__)
 
 
-def render_v3_html(snapshot, analytics, output_path=None):
+def render_v3_html(snapshot, analytics, output_path=None, changes=None):
     """Render the V3 interactive HTML report.
 
     Returns the file path of the generated HTML file.
@@ -70,6 +70,7 @@ def render_v3_html(snapshot, analytics, output_path=None):
         threshold=config.NEGATIVE_THRESHOLD,
         cumulative_kpis=normalized.get("cumulative_kpis") or normalized.get("kpis", {}),
         window=normalized.get("window", {}),
+        changes=changes,
     )
 
     if output_path is None:

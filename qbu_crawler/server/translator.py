@@ -377,7 +377,7 @@ class TranslationWorker:
                     if safety_level or impact_category == "safety":
                         effective_level = safety_level or "moderate"
                         import json as _json, hashlib as _hashlib
-                        from qbu_crawler.server.report_common import _get_safety_tiers
+                        from qbu_crawler.server.report_common import get_safety_tiers
                         evidence = {
                             "review_id": review["id"],
                             "headline": review.get("headline", ""),
@@ -385,7 +385,8 @@ class TranslationWorker:
                             "rating": review.get("rating"),
                             "product_name": review.get("product_name", ""),
                             "product_sku": review.get("product_sku", ""),
-                            "detected_keywords": [kw for kw in _get_safety_tiers().get(effective_level, []) if kw in review_text.lower()] if safety_level else [],
+                            "images": review.get("images"),
+                            "detected_keywords": [kw for kw in get_safety_tiers().get(effective_level, []) if kw in review_text.lower()] if safety_level else [],
                             "llm_impact_category": impact_category,
                         }
                         evidence_json = _json.dumps(evidence, sort_keys=True, ensure_ascii=False)
