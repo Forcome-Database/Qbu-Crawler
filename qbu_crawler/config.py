@@ -199,6 +199,50 @@ EMAIL_RECIPIENTS = [
 ]
 EMAIL_BCC_MODE = os.getenv("EMAIL_BCC_MODE", "false").lower() == "true"
 
+# ── P008 Phase 2: Recipient channels ──────────────────────
+EMAIL_RECIPIENTS_EXEC = [
+    addr.strip()
+    for addr in os.getenv("EMAIL_RECIPIENTS_EXEC", "").split(",")
+    if addr.strip()
+]
+EMAIL_RECIPIENTS_SAFETY = [
+    addr.strip()
+    for addr in os.getenv("EMAIL_RECIPIENTS_SAFETY", "").split(",")
+    if addr.strip()
+]
+
+# ── P008 Phase 2: Tier configurations ─────────────────────
+TIER_CONFIGS = {
+    "daily": {
+        "window": "24h",
+        "cumulative": True,
+        "dimensions": ["kpi", "clusters", "competitive_gap", "attention_signals"],
+        "template": "daily_briefing.html.j2",
+        "excel": False,
+        "delivery": {"email": "smart", "archive": True},
+    },
+    "weekly": {
+        "window": "7d",
+        "cumulative": True,
+        "dimensions": ["kpi", "clusters", "competitive_gap",
+                        "risk_ranking", "heatmap", "trend_charts"],
+        "template": "weekly_report.html.j2",
+        "excel": True,
+        "delivery": {"email": "always", "archive": True},
+    },
+    "monthly": {
+        "window": "month",
+        "cumulative": True,
+        "dimensions": ["kpi", "clusters", "competitive_gap",
+                        "risk_ranking", "heatmap", "trend_charts",
+                        "category_benchmark", "issue_lifecycle",
+                        "product_scorecard", "executive_summary"],
+        "template": "monthly_report.html.j2",
+        "excel": True,
+        "delivery": {"email": "always", "archive": True},
+    },
+}
+
 # ── Timezone ──────────────────────────────────────────
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
