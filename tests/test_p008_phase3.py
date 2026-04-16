@@ -177,3 +177,112 @@ def test_get_label_anomaly_stats_empty(db):
     stats = models.get_label_anomaly_stats([])
     assert stats["total_flagged"] == 0
     assert stats["total_checked"] == 0
+
+
+# ── Task 5: submit_weekly_run ───────────────────────────────────
+
+
+def test_all_daily_runs_terminal_true_when_all_completed(db):
+    from qbu_crawler.server.workflows import _all_daily_runs_terminal
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'completed', 'full_sent', '2026-04-14',"
+        " 'daily:2026-04-14', 'daily', '2026-04-14T00:00:00+08:00', '2026-04-15T00:00:00+08:00')"
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'completed', 'full_sent', '2026-04-15',"
+        " 'daily:2026-04-15', 'daily', '2026-04-15T00:00:00+08:00', '2026-04-16T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+    assert _all_daily_runs_terminal("2026-04-13T00:00:00+08:00", "2026-04-20T00:00:00+08:00") is True
+
+
+def test_all_daily_runs_terminal_false_when_running(db):
+    from qbu_crawler.server.workflows import _all_daily_runs_terminal
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'running', 'none', '2026-04-14',"
+        " 'daily:2026-04-14', 'daily', '2026-04-14T00:00:00+08:00', '2026-04-15T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+    assert _all_daily_runs_terminal("2026-04-13T00:00:00+08:00", "2026-04-20T00:00:00+08:00") is False
+
+
+def test_submit_weekly_run_creates_reporting_run(db):
+    from qbu_crawler.server.workflows import submit_weekly_run
+    result = submit_weekly_run(logical_date="2026-04-20")
+    assert result["created"] is True
+    assert result["trigger_key"] == "weekly:2026-04-20"
+
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (result["run_id"],)).fetchone()
+    conn.close()
+    assert row["workflow_type"] == "weekly"
+    assert row["report_tier"] == "weekly"
+    assert row["status"] == "reporting"
+    assert row["data_since"] == "2026-04-13T00:00:00+08:00"
+    assert row["data_until"] == "2026-04-20T00:00:00+08:00"
+
+
+def test_submit_weekly_run_idempotent(db):
+    from qbu_crawler.server.workflows import submit_weekly_run
+    r1 = submit_weekly_run(logical_date="2026-04-20")
+    r2 = submit_weekly_run(logical_date="2026-04-20")
+    assert r1["created"] is True
+    assert r2["created"] is False
+
+
+# ── Task 8: Freeze tier awareness + cold start ──────────────────
+
+
+def test_inject_meta_uses_run_tier():
+    from qbu_crawler.server.report_snapshot import _inject_meta
+    snapshot = {"logical_date": "2026-04-20"}
+    enriched = _inject_meta(snapshot, tier="weekly")
+    assert enriched["_meta"]["report_tier"] == "weekly"
+
+
+def test_inject_meta_cold_start():
+    from qbu_crawler.server.report_snapshot import _inject_meta
+    snapshot = {"logical_date": "2026-04-20"}
+    enriched = _inject_meta(snapshot, tier="weekly", expected_days=7, actual_days=4)
+    assert enriched["_meta"]["is_partial"] is True
+    assert enriched["_meta"]["expected_days"] == 7
+    assert enriched["_meta"]["actual_days"] == 4
+
+
+def test_inject_meta_no_partial_when_complete():
+    from qbu_crawler.server.report_snapshot import _inject_meta
+    snapshot = {"logical_date": "2026-04-20"}
+    enriched = _inject_meta(snapshot, tier="weekly", expected_days=7, actual_days=7)
+    assert "is_partial" not in enriched["_meta"]
+
+
+# ── Task 9: Retire weekly_digest ─────────────────────────────────
+
+
+def test_quiet_email_no_weekly_digest(db):
+    """should_send_quiet_email should never return 'weekly_digest' — real weekly report replaces it."""
+    from qbu_crawler.server.report_snapshot import should_send_quiet_email
+    conn = _get_test_conn(db)
+    for i in range(8):
+        conn.execute(
+            "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+            " trigger_key, report_mode)"
+            f" VALUES ('daily', 'completed', 'full_sent', '2026-04-{10+i:02d}',"
+            f" 'daily:2026-04-{10+i:02d}', 'quiet')"
+        )
+    conn.commit()
+    conn.close()
+
+    should, digest_mode, consecutive = should_send_quiet_email(9)
+    assert digest_mode is None or digest_mode != "weekly_digest", \
+        "weekly_digest should be retired — real weekly report replaces it"

@@ -123,6 +123,63 @@ def build_weekly_trigger_key(logical_date: str) -> str:
     return f"weekly:{logical_date}"
 
 
+def _all_daily_runs_terminal(since: str, until: str) -> bool:
+    """Check if all daily runs in the given window are terminal (completed/needs_attention)."""
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM workflow_runs
+            WHERE report_tier = 'daily'
+              AND data_since >= ? AND data_until <= ?
+              AND status NOT IN ('completed', 'needs_attention')
+            """,
+            (since, until),
+        ).fetchone()
+        non_terminal = row["cnt"] if row else 0
+        return non_terminal == 0
+    finally:
+        conn.close()
+
+
+def submit_weekly_run(logical_date: str | None = None) -> dict:
+    """Create a weekly workflow run. No scraping tasks — aggregates daily data.
+
+    The run is created with status='reporting' (skip submitted/running phases).
+    """
+    from qbu_crawler.server.report_common import tier_date_window
+
+    logical_date = logical_date or config.now_shanghai().date().isoformat()
+    trigger_key = build_weekly_trigger_key(logical_date)
+
+    existing = models.get_workflow_run_by_trigger_key(trigger_key)
+    if existing:
+        return {"created": False, "run": existing, "trigger_key": trigger_key, "run_id": existing["id"]}
+
+    data_since, data_until = tier_date_window("weekly", logical_date)
+
+    run = models.create_workflow_run({
+        "workflow_type": "weekly",
+        "status": "reporting",
+        "report_phase": "none",
+        "logical_date": logical_date,
+        "trigger_key": trigger_key,
+        "data_since": data_since,
+        "data_until": data_until,
+        "requested_by": "weekly_scheduler",
+        "service_version": __version__,
+    })
+
+    models.update_workflow_run(run["id"], report_tier="weekly")
+
+    return {
+        "created": True,
+        "run": run,
+        "trigger_key": trigger_key,
+        "run_id": run["id"],
+    }
+
+
 def submit_daily_run(
     submitter: Any,
     source_csv: str,
