@@ -284,7 +284,7 @@
               <td>{{ p.product_name }}</td>
               <td style="font-family: var(--font-mono); font-size: var(--fs-xs);">{{ p.product_sku }}</td>
               <td><span data-rating="{{ p.rating_avg }}" class="quote-stars"></span> {{ p.rating_avg }}</td>
-              <td>{{ (p.negative_rate * 100) | round(0) if p.negative_rate else 'N/A' }}%</td>
+              <td>{{ (p.negative_rate * 100) | round(0) if p.negative_rate is not none and p.negative_rate else '—' }}{% if p.negative_rate is not none and p.negative_rate %}%{% endif %}</td>
               <td>{{ p.negative_review_rows }}</td>
               <td><strong style="font-family: var(--font-mono);">{{ p.risk_score }}</strong></td>
               <td style="font-size: var(--fs-xs); color: var(--text-secondary);">{{ p.top_features_display }}</td>

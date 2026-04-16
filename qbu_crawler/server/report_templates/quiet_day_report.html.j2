@@ -231,7 +231,7 @@
                 <tr>
                   <td>{{ c.name }}</td>
                   <td style="text-align:center;color:var(--text-muted);text-decoration:line-through;font-family:var(--font-mono);font-size:var(--fs-xs);">${{ c.old }}</td>
-                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);font-size:var(--fs-xs);color:{% if c.new > c.old %}var(--critical){% else %}var(--positive){% endif %};">${{ c.new }} {% if c.new > c.old %}▲{% else %}▼{% endif %}</td>
+                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);font-size:var(--fs-xs);color:{% if c.new is none %}var(--text-muted){% elif c.new > c.old %}var(--critical){% else %}var(--positive){% endif %};">{% if c.new is not none %} ${{ c.new }} {% if c.new > c.old %}▲{% else %}▼{% endif %}{% else %}已下架{% endif %}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
@@ -271,7 +271,7 @@
                 <tr>
                   <td>{{ c.name }}</td>
                   <td style="text-align:center;color:var(--text-muted);font-family:var(--font-mono);">{{ c.old if c.old is not none else "—" }}</td>
-                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new if c.new is not none else "—" }}</td>
+                  <td style="text-align:center;font-weight:700;font-family:var(--font-mono);color:{% if c.new is none %}var(--text-muted){% elif (c.new or 0) > (c.old or 0) %}var(--positive){% else %}var(--critical){% endif %};">{{ c.new if c.new is not none else "已下架" }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>

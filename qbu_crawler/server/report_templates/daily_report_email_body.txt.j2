@@ -1,6 +1,6 @@
 {{ snapshot.logical_date }} QBU网评监控{{ "基线建档" if analytics.mode == "baseline" else "智能分析报告" }}
 
-健康指数: {{ analytics.kpis.health_index | default('N/A') }}/100
+健康指数: {{ analytics.kpis.health_index | default('—') }}/100
 差评数: {{ analytics.kpis.negative_review_rows }}{% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %} ({{ analytics.kpis.negative_review_rows_delta_display }}){% endif %}
 
 差评率: {{ analytics.kpis.negative_review_rate_display }}
