@@ -69,6 +69,7 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -220,6 +221,18 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS safety_incidents (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id         INTEGER NOT NULL REFERENCES reviews(id),
+            product_sku       TEXT NOT NULL,
+            safety_level      TEXT NOT NULL,
+            failure_mode      TEXT,
+            evidence_snapshot TEXT NOT NULL,
+            evidence_hash     TEXT NOT NULL,
+            detected_at       TEXT NOT NULL,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     # 兼容旧表：添加缺失的列
     migrations = [
@@ -245,6 +258,7 @@ def init_db():
         "ALTER TABLE workflow_runs ADD COLUMN report_mode TEXT",
         "ALTER TABLE review_analysis ADD COLUMN impact_category TEXT",
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
+        "ALTER TABLE review_analysis ADD COLUMN label_anomaly_flags TEXT",
     ]
     for sql in migrations:
         try:
