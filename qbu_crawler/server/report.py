@@ -17,7 +17,7 @@ from io import BytesIO
 
 import requests
 from jinja2 import Environment, FileSystemLoader
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XlImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -975,14 +975,114 @@ def _generate_analytical_excel(
 
 def _generate_monthly_excel(
     *,
-    products,
-    reviews,
-    analytics,
-    category_benchmark,
-    scorecard,
-):
-    """P008 Phase 4 Task 13 will implement. Stub for Task 12 integration."""
-    return ""
+    products: list[dict],
+    reviews: list[dict],
+    analytics: dict,
+    category_benchmark: dict,
+    scorecard: dict,
+    report_date: datetime | None = None,
+) -> str:
+    """P008 Phase 4: 6-sheet monthly Excel = 4-sheet weekly + 品类对标 + SKU 计分卡.
+
+    Reuses the existing 4-sheet pipeline by calling _generate_analytical_excel(),
+    then opens the produced workbook and appends two extra sheets.
+    """
+    if report_date is None:
+        report_date = config.now_shanghai()
+
+    # 1. Generate the 4-sheet base workbook
+    base_path = _generate_analytical_excel(products, reviews, analytics, report_date)
+    if not base_path:
+        return ""
+
+    # 2. Rename to monthly-* (the 4-sheet writer outputs scrape-report-YYYY-MM-DD.xlsx).
+    # An existing monthly-YYYY-MM.xlsx must not silently clobber — log for traceability.
+    base_p = Path(base_path)
+    monthly_filename = f"monthly-{report_date.strftime('%Y-%m')}.xlsx"
+    monthly_path = base_p.with_name(monthly_filename)
+    if monthly_path.exists():
+        logger.info("monthly Excel already exists at %s, overwriting", monthly_path)
+        monthly_path.unlink()
+    if base_p.exists():
+        base_p.rename(monthly_path)
+
+    # 3. Open and append two new sheets
+    wb = load_workbook(monthly_path)
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    def _write_headers(ws, headers):
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+    # Sheet 5: 品类对标
+    ws_cat = wb.create_sheet("品类对标")
+    if category_benchmark.get("fallback_mode"):
+        _write_headers(ws_cat, ["自有SKU", "自有评分", "竞品SKU", "竞品评分", "评分差", "价差"])
+        for pair in (category_benchmark.get("pairings") or []):
+            ws_cat.append([
+                pair.get("own_name") or pair.get("own_sku"),
+                pair.get("own_rating"),
+                pair.get("competitor_name") or pair.get("competitor_sku"),
+                pair.get("competitor_rating"),
+                pair.get("rating_gap"),
+                pair.get("price_diff"),
+            ])
+    else:
+        _write_headers(ws_cat, ["品类", "状态", "自有SKU数", "自有平均评分", "自有评论总量", "自有平均价",
+                                "竞品SKU数", "竞品平均评分", "竞品评论总量", "竞品平均价", "评分差距"])
+        for cat, data in (category_benchmark.get("categories") or {}).items():
+            if data.get("status") != "ok":
+                ws_cat.append([
+                    cat, "样本不足",
+                    data.get("own_sku_count", 0), None, None, None,
+                    data.get("competitor_sku_count", 0), None, None, None, None,
+                ])
+                continue
+            own = data.get("own") or {}
+            comp = data.get("competitor") or {}
+            ws_cat.append([
+                cat, "正常",
+                own.get("sku_count"), own.get("avg_rating"), own.get("total_reviews"), own.get("avg_price"),
+                comp.get("sku_count"), comp.get("avg_rating"), comp.get("total_reviews"), comp.get("avg_price"),
+                data.get("rating_gap"),
+            ])
+
+    # Sheet 6: SKU 计分卡
+    ws_sc = wb.create_sheet("SKU计分卡")
+    _write_headers(ws_sc, ["灯号", "SKU", "产品名", "评分", "评论数", "风险分", "差评率(%)",
+                            "趋势", "安全标记", "上月风险分"])
+    light_label = {"green": "🟢 绿", "yellow": "🟡 黄", "red": "🔴 红"}
+    trend_label = {"improving": "↘ 改善", "steady": "→ 稳定", "worsening": "↗ 恶化", "new": "新增"}
+    for s in (scorecard.get("scorecards") or []):
+        ws_sc.append([
+            light_label.get(s.get("light"), s.get("light")),
+            s.get("sku"),
+            s.get("name"),
+            s.get("rating"),
+            s.get("review_count"),
+            s.get("risk_score"),
+            round((s.get("negative_rate") or 0) * 100, 2),
+            trend_label.get(s.get("trend"), s.get("trend")),
+            "⚠" if s.get("safety_flag") else "",
+            s.get("previous_risk_score"),
+        ])
+
+    # Auto-width for new sheets
+    for ws in (ws_cat, ws_sc):
+        for col in ws.columns:
+            letter = col[0].column_letter
+            max_len = max((len(str(c.value or "")) for c in col), default=0)
+            ws.column_dimensions[letter].width = min(max(max_len + 2, 10), 60)
+
+    wb.save(monthly_path)
+    logger.info("monthly 6-sheet Excel saved: %s", monthly_path)
+    return str(monthly_path)
 
 
 def _report_ts(value: datetime | str) -> str:

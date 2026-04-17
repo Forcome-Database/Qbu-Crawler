@@ -701,3 +701,51 @@ def test_generate_report_monthly_tier_routes_correctly(db, tmp_path, monkeypatch
     result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
     assert result["mode"] == "monthly_report"
     assert result.get("html_path") is not None
+
+
+# ── Task 13: monthly 6-sheet Excel ──────────────────────────────
+
+
+def test_generate_monthly_excel_has_six_sheets(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    from qbu_crawler.server import report
+
+    products = [
+        {"name": "Grinder", "sku": "SKU1", "ownership": "own", "rating": 4.5,
+         "review_count": 50, "site": "test", "price": 299},
+        {"name": "Slicer", "sku": "C1", "ownership": "competitor", "rating": 4.2,
+         "review_count": 200, "site": "test", "price": 310},
+    ]
+    reviews = [{"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "SKU1",
+                 "headline": "Good", "body": "Works", "sentiment": "positive",
+                 "analysis_labels": "[]", "date_published_parsed": "2026-04-14"}]
+    analytics = {"kpis": {}, "self": {"risk_products": [
+        {"sku": "SKU1", "risk_score": 5, "negative_rate": 0.02, "negative_count": 1, "review_count": 50}
+    ]}}
+    category_benchmark = {
+        "categories": {"grinder": {"status": "ok",
+                                    "own": {"sku_count": 1, "avg_rating": 4.5, "total_reviews": 50, "avg_price": 299},
+                                    "competitor": {"sku_count": 1, "avg_rating": 4.2, "total_reviews": 200, "avg_price": 310},
+                                    "rating_gap": 0.3}},
+        "fallback_mode": False, "unmapped_count": 0, "pairings": [],
+    }
+    scorecard = {
+        "scorecards": [{"sku": "SKU1", "name": "Grinder", "rating": 4.5, "review_count": 50,
+                        "risk_score": 5, "negative_rate": 0.02, "negative_count": 1,
+                        "light": "green", "safety_flag": False, "trend": "new",
+                        "previous_risk_score": None, "previous_light": None}],
+        "summary": {"green": 1, "yellow": 0, "red": 0, "total": 1, "with_safety_flag": 0},
+    }
+
+    path = report._generate_monthly_excel(
+        products=products, reviews=reviews, analytics=analytics,
+        category_benchmark=category_benchmark, scorecard=scorecard,
+    )
+    assert path
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    assert "品类对标" in wb.sheetnames
+    assert "SKU计分卡" in wb.sheetnames
+    # Inherited from 4-sheet base
+    for name in ("评论明细", "产品概览", "问题标签", "趋势数据"):
+        assert name in wb.sheetnames
