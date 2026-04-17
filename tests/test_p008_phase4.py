@@ -533,3 +533,88 @@ def test_executive_summary_stance_categories():
     }
     result_ok = analytics_executive._fallback_executive_summary(ok_inputs)
     assert result_ok["stance"] == "stable"
+
+
+# ── Task 10: monthly_report.html.j2 ─────────────────────────────
+
+
+def test_monthly_template_renders_executive_screen():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("monthly_report.html.j2")
+    html = template.render(
+        logical_date="2026-05-01",
+        month_label="2026年04月",
+        executive={
+            "stance": "needs_attention",
+            "stance_text": "本月需要关注质量稳定性问题",
+            "bullets": ["健康指数 72.3（较上月 -1.5）", "差评率 4.2%", "TOP 问题：质量稳定性 8 条"],
+            "actions": ["核查 #22 Grinder 投诉", "复盘 grinder 类目维护流程"],
+        },
+        kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%", "high_risk_count": 2,
+              "own_review_rows": 200, "ingested_review_rows": 220, "product_count": 41,
+              "own_product_count": 7, "competitor_product_count": 34,
+              "competitor_review_rows": 20, "own_negative_review_rows": 8, "own_positive_review_rows": 180},
+        kpi_delta={"health_index": -1.5, "high_risk_count": +1},
+        category_benchmark={"categories": {}, "fallback_mode": False, "pairings": []},
+        scorecard={"scorecards": [], "summary": {"green": 5, "yellow": 1, "red": 1, "total": 7,
+                                                  "with_safety_flag": 1}},
+        lifecycle_cards=[],
+        lifecycle_insufficient=False, history_days=120,
+        weekly_summaries=["第1周：健康 73", "第2周：健康 72", "第3周：健康 71", "第4周：健康 72"],
+        snapshot={"reviews": [], "cumulative": {"reviews": []}},
+        analytics={"kpis": {}, "self": {"risk_products": [], "top_negative_clusters": [],
+                                          "issue_cards": [], "recommendations": []},
+                   "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                                   "negative_opportunities": []},
+                   "appendix": {"image_reviews": []}},
+        charts={
+            "heatmap": None, "sentiment_own": None, "sentiment_comp": None,
+            "weekly_trend": {"type": "line", "data": {"labels": ["第1周", "第2周", "第3周", "第4周"],
+                                                       "datasets": [{"label": "健康", "data": [73, 72, 71, 72]}]},
+                              "options": {}},
+        },
+        alert_level="yellow", alert_text="",
+        safety_incidents=[],
+        css_text="", js_text="",
+        threshold=2,
+    )
+    assert "需要关注" in html
+    assert "data-chart-config" in html
+    # Light counts
+    assert ">5<" in html or ">5 <" in html  # green count
+
+
+def test_monthly_template_renders_lifecycle_insufficient_notice():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("monthly_report.html.j2")
+    html = template.render(
+        logical_date="2026-05-01", month_label="2026年04月",
+        executive={"stance": "stable", "stance_text": "稳定",
+                    "bullets": [], "actions": []},
+        kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%", "high_risk_count": 0,
+              "own_review_rows": 10, "ingested_review_rows": 10, "product_count": 7,
+              "own_product_count": 7, "competitor_product_count": 0,
+              "competitor_review_rows": 0, "own_negative_review_rows": 0, "own_positive_review_rows": 10},
+        kpi_delta={}, category_benchmark={"categories": {}, "fallback_mode": False, "pairings": []},
+        scorecard={"scorecards": [], "summary": {"green": 0, "yellow": 0, "red": 0, "total": 0,
+                                                  "with_safety_flag": 0}},
+        lifecycle_cards=[], lifecycle_insufficient=True, history_days=12,
+        weekly_summaries=[],
+        snapshot={"reviews": [], "cumulative": {"reviews": []}},
+        analytics={"kpis": {}, "self": {"risk_products": [], "top_negative_clusters": [],
+                                          "issue_cards": [], "recommendations": []},
+                   "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                                   "negative_opportunities": []},
+                   "appendix": {"image_reviews": []}},
+        charts={"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        alert_level="green", alert_text="",
+        safety_incidents=[], css_text="", js_text="", threshold=2,
+    )
+    assert "数据积累中" in html
+    assert "12" in html  # history_days

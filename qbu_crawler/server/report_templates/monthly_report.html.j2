@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>QBU 网评监控 · 月报 {{ month_label }}</title>
+  <style>{{ css_text|safe }}</style>
+  <style>
+    .exec-screen { background:linear-gradient(135deg,#1a365d 0%,#2c5282 100%);
+                   color:#fff; padding:32px 24px; border-radius:12px; margin-bottom:24px; }
+    .exec-stance { font-size:13px; text-transform:uppercase; letter-spacing:1px; opacity:0.75; }
+    .exec-stance.urgent { color:#fed7d7; }
+    .exec-stance.needs_attention { color:#fefcbf; }
+    .exec-stance.stable { color:#c6f6d5; }
+    .exec-headline { font-size:24px; font-weight:700; margin:8px 0 24px; }
+    .exec-kpis { display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
+    .exec-kpi { flex:1; min-width:160px; background:rgba(255,255,255,0.1); padding:16px; border-radius:8px; }
+    .exec-kpi-label { font-size:12px; opacity:0.75; }
+    .exec-kpi-value { font-size:32px; font-weight:700; line-height:1.2; }
+    .exec-kpi-delta { font-size:12px; opacity:0.85; }
+    .exec-bullets { margin:0 0 16px; padding-left:20px; }
+    .exec-bullets li { margin-bottom:6px; }
+    .exec-actions { background:rgba(255,255,255,0.08); padding:12px 16px; border-radius:6px;
+                    border-left:3px solid #fefcbf; }
+    .exec-actions h4 { margin:0 0 8px; font-size:13px; opacity:0.85; }
+    .scorecard-light { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; }
+    .light-green { background:#48bb78; } .light-yellow { background:#ecc94b; } .light-red { background:#e53e3e; }
+    .lifecycle-badge { font-size:11px; padding:2px 8px; border-radius:4px; }
+    .ls-active { background:#fed7d7; color:#c53030; }
+    .ls-receding { background:#fefcbf; color:#975a16; }
+    .ls-dormant { background:#e2e8f0; color:#4a5568; }
+    .ls-recurrent { background:#c53030; color:#fff; }
+    .week-summary { background:#f7fafc; padding:8px 12px; border-radius:6px; margin-bottom:6px;
+                    border-left:3px solid #4299e1; font-size:13px; }
+  </style>
+</head>
+<body>
+<div class="report-container">
+
+  {# ── Sticky KPI bar (shared with daily/weekly) ── #}
+  <div class="sticky-kpi-bar">
+    <span class="brand">QBU 网评监控</span>
+    <span class="kpi-mini">健康 {{ kpis.health_index }}</span>
+    <span class="kpi-mini">差评 {{ kpis.own_negative_review_rate_display }}</span>
+    <span class="kpi-mini">高风险 {{ kpis.high_risk_count }}</span>
+    <span class="kpi-mini" style="margin-left:auto;">月报 · {{ month_label }}</span>
+  </div>
+
+  {# ── Executive screen (first fold) ── #}
+  <section class="exec-screen">
+    <div class="exec-stance {{ executive.stance }}">月度态势 · {{ {"stable":"稳中向好","needs_attention":"需要关注","urgent":"紧急行动"}.get(executive.stance, "") }}</div>
+    <div class="exec-headline">{{ executive.stance_text }}</div>
+
+    <div class="exec-kpis">
+      <div class="exec-kpi">
+        <div class="exec-kpi-label">健康指数</div>
+        <div class="exec-kpi-value">{{ kpis.health_index }}</div>
+        {% if kpi_delta.health_index is defined and kpi_delta.health_index is not none %}
+        <div class="exec-kpi-delta">{{ "+" if kpi_delta.health_index > 0 else "" }}{{ kpi_delta.health_index }} vs 上月</div>
+        {% endif %}
+      </div>
+      <div class="exec-kpi">
+        <div class="exec-kpi-label">差评率</div>
+        <div class="exec-kpi-value">{{ kpis.own_negative_review_rate_display }}</div>
+      </div>
+      <div class="exec-kpi">
+        <div class="exec-kpi-label">高风险产品</div>
+        <div class="exec-kpi-value">{{ kpis.high_risk_count }}</div>
+        {% if kpi_delta.high_risk_count is defined %}
+        <div class="exec-kpi-delta">{{ "+" if kpi_delta.high_risk_count > 0 else "" }}{{ kpi_delta.high_risk_count }} vs 上月</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <ul class="exec-bullets">
+      {% for b in executive.bullets %}<li>{{ b }}</li>{% endfor %}
+    </ul>
+
+    {% if executive.actions %}
+    <div class="exec-actions">
+      <h4>建议行动</h4>
+      <ul style="margin:0;padding-left:20px;">
+        {% for a in executive.actions %}<li>{{ a }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if safety_incidents %}
+    <div style="margin-top:16px;padding:12px 16px;background:rgba(229,62,62,0.2);border-radius:6px;">
+      <strong>⚠ 本月安全事件 {{ safety_incidents|length }} 起</strong>
+      <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;">
+        {% for s in safety_incidents[:5] %}
+        <li>[{{ s.safety_level }}] {{ s.product_sku }} · {{ s.failure_mode or "未分类" }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Tabs ── #}
+  <nav class="tab-nav" role="tablist">
+    <button role="tab" data-tab="tab-overview" class="tab-button active">总览</button>
+    <button role="tab" data-tab="tab-changes" class="tab-button">本月变化</button>
+    <button role="tab" data-tab="tab-issues" class="tab-button">问题诊断</button>
+    <button role="tab" data-tab="tab-categories" class="tab-button">品类对标</button>
+    <button role="tab" data-tab="tab-scorecard" class="tab-button">产品计分卡</button>
+    <button role="tab" data-tab="tab-competitor" class="tab-button">竞品对标</button>
+    <button role="tab" data-tab="tab-panorama" class="tab-button">全景数据</button>
+  </nav>
+
+  {# Tab 1: 总览 — extended metrics (skip the 3 KPIs already on exec screen) + 4-week summary #}
+  <section id="tab-overview" class="tab-panel active" role="tabpanel">
+    <h2 class="section-title">扩展指标</h2>
+    <table class="data-table">
+      <tr><th>评论总量（自有）</th><td>{{ kpis.own_review_rows }}</td></tr>
+      <tr><th>评论总量（竞品）</th><td>{{ kpis.competitor_review_rows }}</td></tr>
+      <tr><th>负面评论数</th><td>{{ kpis.own_negative_review_rows }}</td></tr>
+      <tr><th>正面评论数</th><td>{{ kpis.own_positive_review_rows }}</td></tr>
+      <tr><th>SKU 总数</th><td>{{ kpis.product_count }}（自有 {{ kpis.own_product_count }} · 竞品 {{ kpis.competitor_product_count }}）</td></tr>
+    </table>
+
+    {% if charts.weekly_trend %}
+    <h3 style="margin-top:24px;">4 周趋势</h3>
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.weekly_trend | tojson }}'></canvas>
+    </div>
+    {% endif %}
+
+    {% if weekly_summaries %}
+    <h3 style="margin-top:24px;">本月逐周态势</h3>
+    {% for ws in weekly_summaries %}
+    <div class="week-summary">{{ ws }}</div>
+    {% endfor %}
+    {% endif %}
+  </section>
+
+  {# Tab 2: 本月变化 — same structure as V3 Tab 2 #}
+  <section id="tab-changes" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">本月新增评论</h2>
+    {% set win_reviews = snapshot.reviews if snapshot.reviews is defined else [] %}
+    {% if win_reviews %}
+    <p>本月共新增评论 {{ win_reviews|length }} 条，按时间倒序展示前 30 条：</p>
+    {% for r in win_reviews[:30] %}
+    <div class="quote-block {% if r.rating is defined and r.rating <= 2 %}quote-negative{% elif r.rating is defined and r.rating >= 4 %}quote-positive{% else %}quote-neutral{% endif %}">
+      <div class="quote-cn">{{ r.get("headline_cn") or r.get("headline", "") }}</div>
+      <div class="quote-en">{{ r.get("body", "")[:300] }}{% if r.get("body", "")|length > 300 %}...{% endif %}</div>
+      <div class="quote-meta">
+        <span>{{ "★" * (r.rating|int if r.rating else 0) }}</span>
+        <span>{{ r.get("author", "Anonymous") }}</span>
+        <span>{{ r.get("product_name", r.get("product_sku", "")) }}</span>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state">本月无新增评论。</div>
+    {% endif %}
+  </section>
+
+  {# Tab 3: 问题诊断 — issue cards with full lifecycle states + competitor reference #}
+  <section id="tab-issues" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">问题集群（生命周期视图）</h2>
+    {% if lifecycle_insufficient %}
+    <div class="notice" style="padding:12px 16px;background:#fefcbf;border-left:3px solid #975a16;margin-bottom:16px;">
+      <strong>数据积累中</strong>：当前仅有 {{ history_days }} 天历史数据（生命周期分析需要 ≥ 30 天），下月报告将显示完整状态分析。
+    </div>
+    {% elif lifecycle_cards %}
+    {% for card in lifecycle_cards %}
+    <div class="issue-card" style="margin-bottom:16px;padding:12px 16px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+      <div class="issue-card-header" style="margin-bottom:8px;">
+        <strong>{{ card.label_display }}</strong>
+        <span class="lifecycle-badge ls-{{ card.state }}">{{ {"active":"活跃","receding":"收敛中","dormant":"沉默","recurrent":"复发"}.get(card.state, card.state) }}</span>
+        <span class="meta" style="font-size:12px;color:#718096;margin-left:8px;">
+          {{ card.review_count }} 条 · 首现 {{ card.first_seen or "—" }} · 末现 {{ card.last_seen or "—" }}
+        </span>
+      </div>
+
+      {% if card.history %}
+      <details style="margin-bottom:8px;">
+        <summary style="cursor:pointer;font-size:12px;color:#4a5568;">状态变迁时间线（{{ card.history|length }} 次）</summary>
+        <ul style="margin:6px 0 0;padding-left:20px;font-size:12px;">
+          {% for h in card.history %}<li>{{ h.date }} · {{ h.transition }} · {{ h.reason }}</li>{% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+
+      {% if card.example_reviews %}
+      <div style="margin-top:8px;">
+        <div style="font-size:12px;color:#4a5568;margin-bottom:4px;">自有关键评论（按可信度排序）</div>
+        {% for r in card.example_reviews[:3] %}
+        <div class="quote-mini" style="font-size:12px;padding:4px 8px;background:#f7fafc;border-left:2px solid #e53e3e;margin-bottom:4px;">
+          "{{ r.get('body', '')[:200] }}" — {{ r.get('product_name', '') }}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if card.competitor_reference and card.competitor_reference.review_count > 0 %}
+      <div style="margin-top:8px;padding:8px 12px;background:#edf2f7;border-radius:6px;border-left:2px solid #4299e1;">
+        <div style="font-size:12px;color:#2c5282;margin-bottom:4px;">
+          竞品参照（同一问题标签，共 {{ card.competitor_reference.review_count }} 条竞品负面）
+        </div>
+        {% for r in card.competitor_reference.top_examples[:3] %}
+        <div class="quote-mini" style="font-size:12px;padding:4px 8px;background:#fff;margin-bottom:4px;">
+          "{{ r.get('body', '')[:200] }}" — {{ r.get('product_name', '') }}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state">本月无活跃问题集群。</div>
+    {% endif %}
+  </section>
+
+  {# Tab 4: 品类对标 #}
+  <section id="tab-categories" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">品类对标</h2>
+    {% if category_benchmark.fallback_mode %}
+    <div class="notice">品类映射数据未配置，下方采用直接竞品配对模式。</div>
+    {% if category_benchmark.pairings %}
+    <table class="data-table">
+      <tr><th>自有 SKU</th><th>评分</th><th>最接近竞品</th><th>评分</th><th>差距</th><th>价差</th></tr>
+      {% for pair in category_benchmark.pairings %}
+      <tr>
+        <td>{{ pair.own_name }}</td><td>{{ pair.own_rating }}</td>
+        <td>{{ pair.competitor_name }}</td><td>{{ pair.competitor_rating }}</td>
+        <td>{{ pair.rating_gap }}</td><td>{{ pair.price_diff }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% else %}
+    {% for cat, data in category_benchmark.categories.items() %}
+    <div class="category-card">
+      <h3>{{ cat }}</h3>
+      {% if data.status == "insufficient_samples" %}
+      <div class="notice">样本不足（自有 {{ data.own_sku_count }} · 竞品 {{ data.competitor_sku_count }}，最低需 {{ data.min_required }}）。</div>
+      {% else %}
+      <table class="data-table">
+        <tr><th></th><th>SKU 数</th><th>平均评分</th><th>评论总量</th><th>平均价</th></tr>
+        <tr><td>自有</td><td>{{ data.own.sku_count }}</td><td>{{ data.own.avg_rating }}</td><td>{{ data.own.total_reviews }}</td><td>${{ data.own.avg_price }}</td></tr>
+        <tr><td>竞品</td><td>{{ data.competitor.sku_count }}</td><td>{{ data.competitor.avg_rating }}</td><td>{{ data.competitor.total_reviews }}</td><td>${{ data.competitor.avg_price }}</td></tr>
+      </table>
+      <p>评分差距：<strong>{{ data.rating_gap }}</strong></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% if category_benchmark.get('unmapped_count', 0) > 0 %}
+    <div class="notice">{{ category_benchmark.get('unmapped_count', 0) }} 个 SKU 未映射，未参与品类对标。</div>
+    {% endif %}
+    {% endif %}
+  </section>
+
+  {# Tab 5: 产品计分卡 #}
+  <section id="tab-scorecard" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">SKU 健康计分卡</h2>
+    <p>
+      🟢 <span>{{ scorecard.summary.green }}</span> ·
+      🟡 <span>{{ scorecard.summary.yellow }}</span> ·
+      🔴 <span>{{ scorecard.summary.red }}</span>
+      {% if scorecard.summary.with_safety_flag %} · ⚠ 安全标记 {{ scorecard.summary.with_safety_flag }}{% endif %}
+    </p>
+    <table class="data-table">
+      <tr><th></th><th>产品</th><th>评分</th><th>评论数</th><th>风险分</th><th>差评率</th><th>趋势</th></tr>
+      {% for s in scorecard.scorecards %}
+      <tr>
+        <td><span class="scorecard-light light-{{ s.light }}"></span></td>
+        <td>{{ s.name }} {% if s.safety_flag %}⚠{% endif %}</td>
+        <td>{{ s.rating }}</td>
+        <td>{{ s.review_count }}</td>
+        <td>{{ s.risk_score }}</td>
+        <td>{{ (s.negative_rate * 100)|round(1) }}%</td>
+        <td>{{ {"improving":"↘ 改善","steady":"→ 稳定","worsening":"↗ 恶化","new":"新增"}.get(s.trend, "—") }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  {# Tab 6: 竞品对标 — reuse same content patterns from V3 #}
+  <section id="tab-competitor" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">竞品对标</h2>
+    {% if analytics.competitor.benchmark_examples %}
+    {% for b in analytics.competitor.benchmark_examples %}
+    <div class="bench-card">
+      <strong>{{ b.dimension_display }}</strong>
+      <p>{{ b.description }}</p>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state">本月无新增竞品基准案例。</div>
+    {% endif %}
+  </section>
+
+  {# Tab 7: 全景数据 — Chart.js configs (matches V3 pipeline) #}
+  <section id="tab-panorama" class="tab-panel" role="tabpanel">
+    <h2 class="section-title">全景数据</h2>
+    {% if charts.heatmap and charts.heatmap.y_labels and charts.heatmap.y_labels|length >= 3 %}
+    <table class="heatmap-table">
+      <thead><tr><th></th>{% for x in charts.heatmap.x_labels %}<th>{{ x[:5] }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for y_idx in range(charts.heatmap.y_labels|length) %}
+        <tr>
+          <th>{{ charts.heatmap.y_labels[y_idx][:20] }}</th>
+          {% for x_idx in range(charts.heatmap.x_labels|length) %}
+          {% set val = charts.heatmap.z[y_idx][x_idx] if y_idx < charts.heatmap.z|length and x_idx < charts.heatmap.z[y_idx]|length else 0 %}
+          <td>{{ val }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if charts.sentiment_own %}
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
+    </div>
+    {% endif %}
+    {% if charts.sentiment_comp %}
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
+    </div>
+    {% endif %}
+  </section>
+
+</div>
+<script>{{ js_text|safe }}</script>
+</body>
+</html>
