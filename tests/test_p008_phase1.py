@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -495,8 +496,6 @@ def test_save_safety_incident_is_idempotent(db):
 
 def test_safety_incidents_timestamps_are_shanghai(db):
     """detected_at 和 created_at 必须与其它表对齐使用 Shanghai 时区。"""
-    from datetime import datetime, timedelta
-
     evidence = json.dumps({"x": 1}, sort_keys=True)
     h = hashlib.sha256(evidence.encode()).hexdigest()
     conn = models.get_conn()
@@ -517,9 +516,9 @@ def test_safety_incidents_timestamps_are_shanghai(db):
     ).fetchone()
     conn.close()
 
-    det = datetime.fromisoformat(row["detected_at"])
-    cre = datetime.fromisoformat(row["created_at"])
-    now_utc = datetime.utcnow()
+    det = datetime.fromisoformat(row["detected_at"]).replace(tzinfo=timezone.utc)
+    cre = datetime.fromisoformat(row["created_at"]).replace(tzinfo=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
     # Shanghai 时间应比 UTC 快 ~8h；允许 ±5 分钟
     for name, ts in [("detected_at", det), ("created_at", cre)]:
         delta = ts - now_utc
