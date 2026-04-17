@@ -1,7 +1,7 @@
 import hashlib
 import json as _json
 import sqlite3
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from qbu_crawler.config import DB_PATH, now_shanghai
 from qbu_crawler.server.scope import Scope
@@ -1841,7 +1841,8 @@ def mark_notification_failure(
 
 
 def cleanup_old_notifications(retention_days: int = 30) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    cutoff_dt = now_shanghai() - timedelta(days=retention_days)
+    cutoff = cutoff_dt.isoformat()
     conn = get_conn()
     try:
         cursor = conn.execute(

@@ -148,6 +148,7 @@ class NotifierWorker:
         self._interval = interval
         self._lease_seconds = lease_seconds
         self._max_attempts = max_attempts
+        self._last_cleanup_ts = 0.0
         self._stop_event = Event()
         self._wake_event = Event()
         self._thread = Thread(target=self._run, daemon=True, name="notification-worker")
@@ -216,6 +217,22 @@ class NotifierWorker:
             )
             return True
 
+    def _maybe_cleanup(self):
+        import time as _time
+        now = _time.monotonic()
+        if now - getattr(self, "_last_cleanup_ts", 0.0) < config.NOTIFICATION_CLEANUP_INTERVAL_S:
+            return
+        try:
+            removed = models.cleanup_old_notifications(
+                retention_days=config.NOTIFICATION_RETENTION_DAYS,
+            )
+            if removed > 0:
+                logger.info("NotifierWorker: cleaned %d old notifications", removed)
+        except Exception:
+            logger.exception("NotifierWorker: cleanup failed (non-fatal)")
+        finally:
+            self._last_cleanup_ts = now
+
     def _run(self):
         while not self._stop_event.is_set():
             self._wake_event.clear()
@@ -223,6 +240,7 @@ class NotifierWorker:
             if self._stop_event.is_set():
                 break
             try:
+                self._maybe_cleanup()
                 while self.process_once() and not self._stop_event.is_set():
                     continue
             except Exception:
