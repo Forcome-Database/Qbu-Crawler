@@ -178,25 +178,48 @@ class BaseScraper:
         if HEADLESS and _has_display():
             args.append('--headless=new')
         args.append('--disable-session-crashed-bubble')
-        # 保留 stderr：Chrome 崩溃时回放给用户便于诊断（user_data_dir 被占等场景）
+        # Launch Chrome. Drain stderr continuously in a daemon thread so the
+        # ~64KB pipe buffer cannot block Chrome in write() and mask a hung
+        # startup as a silent 60s timeout.
         proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
+        stderr_buf: list[bytes] = []
+        stderr_buf_lock = threading.Lock()
+
+        def _drain_stderr(pipe, buf, lock):
+            try:
+                for chunk in iter(lambda: pipe.read(4096), b""):
+                    with lock:
+                        buf.append(chunk)
+                        # Cap at 1 MB by dropping oldest chunks
+                        total = sum(len(c) for c in buf)
+                        while total > 1_000_000 and len(buf) > 1:
+                            dropped = buf.pop(0)
+                            total -= len(dropped)
+            except Exception:
+                pass
+
+        drain_thread = threading.Thread(
+            target=_drain_stderr,
+            args=(proc.stderr, stderr_buf, stderr_buf_lock),
+            daemon=True,
+        )
+        drain_thread.start()
+
         for _ in range(60):
             time.sleep(1)
-            # 检查 Chrome 是否提前死了（user_data_dir 锁定 / 磁盘满 / profile 损坏）
             if proc.poll() is not None:
-                try:
-                    stderr = (proc.stderr.read() or b'').decode(
-                        'utf-8', errors='ignore',
-                    )[:500]
-                except Exception:
-                    stderr = ''
+                drain_thread.join(timeout=1)
+                with stderr_buf_lock:
+                    tail = (b"".join(stderr_buf) or b"").decode(
+                        "utf-8", errors="ignore",
+                    )[-500:]
                 raise RuntimeError(
                     f"Chrome exited early (code={proc.returncode}). "
                     f"Likely cause: user_data_dir locked by another Chrome instance. "
                     f"Close all Chrome windows using profile "
-                    f"{CHROME_USER_DATA_PATH!r} and retry. stderr: {stderr}"
+                    f"{CHROME_USER_DATA_PATH!r} and retry. stderr: {tail}"
                 )
             browser = cls._try_connect_chrome(port)
             if browser is not None:

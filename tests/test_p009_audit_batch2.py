@@ -47,3 +47,48 @@ def test_mark_task_lost_writes_real_timestamp_not_sql_literal(fresh_db):
     # Must be a parseable ISO timestamp
     parsed = datetime.fromisoformat(ft)
     assert parsed is not None
+
+
+def test_chrome_stderr_does_not_block_on_64kb_output(tmp_path):
+    """Child process writes >64KB to stderr and sleeps. With a drain thread the parent
+    must not be blocked by the pipe buffer: the child keeps running and stderr is
+    fully readable."""
+    import subprocess
+    import sys
+    import threading
+    import time as _time
+
+    # Child: write 100KB to stderr, then sleep 5s
+    script = (
+        "import sys, time; sys.stderr.write('X' * 102400); "
+        "sys.stderr.flush(); time.sleep(5)"
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    buf: list[bytes] = []
+
+    def _drain():
+        try:
+            for chunk in iter(lambda: proc.stderr.read(4096), b""):
+                buf.append(chunk)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_drain, daemon=True)
+    t.start()
+
+    _time.sleep(1.5)
+    try:
+        assert proc.poll() is None, "child should still be sleeping"
+        assert len(b"".join(buf)) >= 102400, "drain thread must have consumed stderr"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        t.join(timeout=2)
