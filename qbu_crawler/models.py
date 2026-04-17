@@ -246,6 +246,10 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN translate_retries INTEGER DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN reply_to TEXT",
         "ALTER TABLE tasks ADD COLUMN notified_at TIMESTAMP",
+        # P009 I4: populated on every delivery attempt (including terminal failure),
+        # so ops can distinguish "tried and failed" (notified_attempt_at IS NOT NULL,
+        # notified_at IS NULL) from "never attempted" (both NULL).
+        "ALTER TABLE tasks ADD COLUMN notified_attempt_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN last_progress_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN worker_token TEXT",
@@ -1813,7 +1817,7 @@ def mark_notification_failure(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT attempts FROM notification_outbox WHERE id = ?",
+            "SELECT attempts, payload FROM notification_outbox WHERE id = ?",
             (notification_id,),
         ).fetchone()
         attempts = (row["attempts"] if row else 0) + 1
@@ -1834,6 +1838,24 @@ def mark_notification_failure(
             """,
             (next_status, attempts, error_message, http_status, exit_code, failed_at, notification_id),
         )
+        # P009 I4: record the attempt on the linked task so ops can distinguish
+        # "tried and failed" (notified_attempt_at IS NOT NULL, notified_at IS NULL)
+        # from "never attempted" (both NULL). notified_at itself is untouched —
+        # it remains the success-only marker.
+        try:
+            raw_payload = row["payload"] if row else None
+            payload = _json.loads(raw_payload) if raw_payload else {}
+            task_id = payload.get("task_id") if isinstance(payload, dict) else None
+            if task_id:
+                conn.execute(
+                    "UPDATE tasks SET notified_attempt_at = ? WHERE id = ?",
+                    (failed_at, task_id),
+                )
+        except Exception:
+            # Swallow linkage errors (malformed JSON, missing column on an older
+            # DB, etc.) — the outbox row has already been marked failed and
+            # that write must not be lost.
+            pass
         conn.commit()
         return next_status
     finally:

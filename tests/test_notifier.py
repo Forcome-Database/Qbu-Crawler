@@ -979,3 +979,59 @@ def test_notifier_worker_cleanup_failure_is_non_fatal(monkeypatch):
     worker._maybe_cleanup()
     # Timestamp should still have advanced so we don't hammer the broken cleanup.
     assert worker._last_cleanup_ts > 0.0
+
+
+# ---------------------------------------------------------------------------
+# I4: distinguish "failed notify" from "never attempted" via
+# tasks.notified_attempt_at
+# ---------------------------------------------------------------------------
+
+
+def test_mark_notification_failure_sets_task_notified_attempt_at(notifier_db):
+    """Terminal (deadletter) notification failure must set tasks.notified_attempt_at,
+    so ops can distinguish 'tried and failed' from 'never attempted'.
+
+    Note: tasks.notified_at must remain NULL because delivery never succeeded —
+    that column is the success marker, and overloading it would destroy the
+    distinction this migration is meant to create.
+    """
+    from qbu_crawler import config
+
+    # Create a task in a terminal state.
+    models.save_task(
+        {
+            "id": "T-FAIL",
+            "type": "scrape",
+            "status": "completed",
+            "params": {},
+            "created_at": config.now_shanghai().isoformat(),
+        }
+    )
+
+    # Enqueue a notification payload referencing that task.
+    row = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "dingtalk:default",
+            "payload": {"task_id": "T-FAIL"},
+            "dedupe_key": "T-FAIL:done",
+            "payload_hash": "hash-T-FAIL",
+        }
+    )
+    nid = row["id"]
+
+    ts = config.now_shanghai().isoformat()
+    result = models.mark_notification_failure(
+        notification_id=nid,
+        failed_at=ts,
+        error_message="connection refused",
+        retryable=False,
+        max_attempts=3,
+    )
+    assert result == "deadletter"
+
+    t = models.get_task("T-FAIL")
+    assert t["notified_attempt_at"] == ts
+    # notified_at remains None because success never happened.
+    assert t.get("notified_at") in (None, "")
