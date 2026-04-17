@@ -260,6 +260,12 @@ def init_db():
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
         "ALTER TABLE review_analysis ADD COLUMN label_anomaly_flags TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT",
+        """
+    DELETE FROM safety_incidents
+    WHERE id NOT IN (
+        SELECT MIN(id) FROM safety_incidents GROUP BY evidence_hash
+    )
+""",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_incidents_hash ON safety_incidents(evidence_hash)",
     ]
     for sql in migrations:
@@ -2025,10 +2031,10 @@ def save_safety_incident(review_id: int, product_sku: str, safety_level: str,
     conn = get_conn()
     try:
         cur = conn.execute(
-            """INSERT OR IGNORE INTO safety_incidents
+            f"""INSERT OR IGNORE INTO safety_incidents
                (review_id, product_sku, safety_level, failure_mode,
                 evidence_snapshot, evidence_hash, detected_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'))""",
+               VALUES (?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})""",
             (review_id, product_sku, safety_level, failure_mode,
              evidence_snapshot, evidence_hash),
         )
