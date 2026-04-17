@@ -1,6 +1,10 @@
 """Data-construction operations that mutate simulation.db or derive mutations."""
+import hashlib
 import json
 from datetime import date, datetime, timedelta
+from datetime import date as date_cls
+
+from .body_pool import BodyPool
 
 
 # Fraction of reviews that land on the timeline start day (cold-start batch)
@@ -103,3 +107,84 @@ def seed_issue_labels(conn) -> int:
         ],
     )
     return len(to_insert)
+
+
+def _synthetic_hash(base_hash: str, salt: str) -> str:
+    return hashlib.md5((base_hash + "|" + salt).encode()).hexdigest()[:16]
+
+
+def inject_new_reviews(
+    conn,
+    *,
+    pool: BodyPool,
+    product_id: int,
+    logical_date: date_cls,
+    count: int,
+    label_code: str,
+    polarity: str,
+    rating_range: tuple[float, float] = (1.0, 5.0),
+    scraped_time_hhmm: str = "09:15",
+) -> list[int]:
+    """Clone reviews from pool and insert as new rows on `logical_date`.
+    Returns inserted review IDs."""
+    samples = pool.sample(label_code, polarity, count)
+    if not samples:
+        raise RuntimeError(
+            f"BodyPool empty for ({label_code}, {polarity}); "
+            "seed review_issue_labels first"
+        )
+    date_iso = logical_date.strftime("%Y-%m-%d")
+    scraped_at = f"{date_iso}T{scraped_time_hhmm}:00"
+    published = f"{date_iso}T08:00:00"
+
+    inserted_ids = []
+    for idx, s in enumerate(samples):
+        salt = f"sim-{date_iso}-{product_id}-{idx}"
+        body_hash = _synthetic_hash(s["body_hash"] or s["body"][:32], salt)
+        # Choose rating from range based on polarity
+        if polarity == "negative":
+            rating = max(rating_range[0], min(2.0, s["rating"] or 2.0))
+        else:
+            rating = min(rating_range[1], max(4.0, s["rating"] or 4.0))
+        cur = conn.execute(
+            """INSERT INTO reviews
+               (product_id, author, headline, body, body_hash, rating,
+                date_published, date_published_parsed, scraped_at,
+                translate_status, translate_retries, headline_cn, body_cn)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'done', 0, ?, ?)""",
+            (
+                product_id, f"SimUser{idx}", s["headline"], s["body"],
+                body_hash, rating, date_iso, published, scraped_at,
+                # reuse the pool's headline/body as "translation" for determinism
+                (s["headline"] or "")[:200], (s["body"] or "")[:1000],
+            ),
+        )
+        review_id = cur.lastrowid
+        inserted_ids.append(review_id)
+        # Mirror into review_analysis (minimal row)
+        labels_json = (
+            '[{"code":"' + label_code + '","polarity":"' + polarity +
+            '","severity":"medium","confidence":0.8}]'
+        )
+        conn.execute(
+            """INSERT INTO review_analysis
+               (review_id, sentiment, sentiment_score, labels, insight_cn,
+                prompt_version, analyzed_at, impact_category)
+               VALUES (?, ?, ?, ?, ?, 'sim-v1', ?, ?)""",
+            (
+                review_id,
+                "negative" if polarity == "negative" else "positive",
+                -0.7 if polarity == "negative" else 0.7,
+                labels_json, s["body"][:200], scraped_at,
+                "experience",
+            ),
+        )
+        # Mirror into review_issue_labels
+        conn.execute(
+            """INSERT INTO review_issue_labels
+               (review_id, label_code, label_polarity, severity, confidence,
+                source, taxonomy_version, created_at, updated_at)
+               VALUES (?, ?, ?, 'medium', 0.8, 'sim', 'v1', ?, ?)""",
+            (review_id, label_code, polarity, scraped_at, scraped_at),
+        )
+    return inserted_ids
