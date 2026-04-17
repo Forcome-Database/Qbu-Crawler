@@ -272,3 +272,58 @@ C:\Users\leo\Desktop\报告\reports\
 - 不覆盖 FastAPI/MCP HTTP 链路（离线 import）
 - 不改桌面基线 DB
 - 不跑 scrape 爬虫
+
+---
+
+## 9. 真实性与隔离保证（硬性约束）
+
+### 9.1 不入侵业务代码
+
+- `qbu_crawler/**` 在本 feature 下**零改动**；若需要，实现阶段只能通过 env 变量 + freezegun（进程级临时冻结）影响业务代码的运行行为，**严禁 monkeypatch 业务模块内部**
+- 模拟脚本以独立子包形式存在（`scripts/simulate_reports/`），与业务解耦；脚本对业务的依赖只通过 `import` 公开函数
+- 脚本不启动任何业务 worker 线程（`NotifierWorker` / `WorkflowWorker` / `*SchedulerWorker` / `TranslationWorker`）
+- 模拟脚本不通过 CLI 启 `main.py serve`
+
+### 9.2 不污染现实环境
+
+- 桌面基线 DB（`C:\Users\leo\Desktop\报告\data\products.db`）**只读**：prepare 时复制到 `data/sim/simulation.db`，后续所有写操作都作用在工作副本
+- `data/sim/` 加入 `.gitignore`
+- 任何 env 变量（`QBU_DATA_DIR` / `REPORT_DIR` / `DB_PATH`）只在模拟脚本的 Python 进程内 `os.environ` 设置，进程退出即消失；不写 `.env`、不改 shell rc
+- 桌面 `C:\Users\leo\Desktop\报告\reports\` 下的已有产物移动到 `_legacy/` 再写新产物，避免覆盖
+
+### 9.3 报告本体必须生产级真实
+
+以下路径**必须走业务代码本尊**，不可 mock / 绕过：
+
+| 环节 | 约束 |
+|---|---|
+| HTML 渲染 | 使用 `qbu_crawler/server/report_templates/*.html.j2` 原模板 |
+| Excel 生成 | 使用 `qbu_crawler/server/report.py` 中 `_generate_*_excel()` 原函数 |
+| 分析计算 | `analytics_lifecycle` / `analytics_category` / `analytics_scorecard` / `analytics_executive` 全部真实调用 |
+| 报告编排 | `submit_daily_run` / `submit_weekly_run` / `submit_monthly_run` + `advance_workflow` 循环推进 |
+| 月报 LLM 高管摘要 | **真调** `.env` 中配置的 LLM API；失败才走确定性降级 |
+| 邮件 payload | 业务代码写入 `notification_outbox` 的 payload 原样保留；notifier_stub 仅读取、落盘、标记 delivered 状态，**不修改 payload** |
+
+### 9.4 合成数据真实性
+
+注入到 DB 的新增数据必须遵守：
+
+1. **评论文本复用**：新评论 `body` / `headline` 从现有基线评论池按 `label_code` + `polarity` 筛选后克隆，**不得用字符串模板编造**
+2. **时间不变式**：`scraped_at ≥ date_published_parsed`（抓取时间不得早于发布时间）
+3. **body_hash 唯一**：克隆评论时 `body_hash = MD5(body + "|" + synthetic_salt)[:16]`，避免与原评论冲突
+4. **ownership 不变**：新评论关联的 product 继承基线 `ownership` 字段
+5. **review_analysis 配套写入**：每条新评论必须同步写入 `review_analysis`（sentiment / labels / impact_category 等），保持与真实爬取后的状态一致
+6. **review_issue_labels 回填**：从 `review_analysis.labels` JSON 一对多展开，不凭空新增 label
+7. **safety_incidents 参照克隆**：复用现有 99 条的 failure_mode 分布，不新造分类
+
+### 9.5 时间冻结的边界
+
+- `freezegun.freeze_time(date + T09:30)` 仅作用于业务代码调用栈（with 块内）
+- 不冻结模拟脚本自身的数据构造（`data_builder` 里的时间戳由脚本显式计算，不走 `datetime.now()`）
+- 一次报告调用完整结束后 freezegun 退出，线程/进程环境还原
+
+### 9.6 失败模式
+
+任何一项违反上述约束即视为实现 bug，应：
+- 阻断实现并在本文档追加注释说明
+- 优先调整模拟脚本适配业务代码，而非反过来
