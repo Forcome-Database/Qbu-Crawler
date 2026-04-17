@@ -857,3 +857,26 @@ def test_generate_monthly_excel_has_six_sheets(tmp_path, monkeypatch):
     # Inherited from 4-sheet base
     for name in ("评论明细", "产品概览", "问题标签", "趋势数据"):
         assert name in wb.sheetnames
+
+
+# ── Task 2 (P4-B2): neg_rate fraction → percentage in fallback bullet ──
+
+
+def test_fallback_bullet_renders_neg_rate_as_percentage():
+    from qbu_crawler.server.analytics_executive import _fallback_executive_summary
+    inputs = {
+        "kpis": {
+            "health_index": 72.3,
+            "high_risk_count": 1,
+            "own_negative_review_rate": 0.042,
+            "own_review_rows": 150,
+        },
+        "kpi_delta": {"health_index": -1.5, "high_risk_count": 0},
+        "safety_incidents": [],
+        "safety_incidents_count": 0,
+        "top_issues": [],
+    }
+    result = _fallback_executive_summary(inputs)
+    bullets_text = " ".join(result["bullets"])
+    assert "差评率 4.2%" in bullets_text
+    assert "差评率 0.0%" not in bullets_text

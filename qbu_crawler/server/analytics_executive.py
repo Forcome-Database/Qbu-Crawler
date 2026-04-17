@@ -95,7 +95,10 @@ def _fallback_executive_summary(inputs: dict) -> dict:
 
     neg_rate = kpis.get("own_negative_review_rate")
     if neg_rate is not None:
-        bullets.append(f"差评率 {round(float(neg_rate), 1)}% · 本月新增评论 {kpis.get('own_review_rows', 0)} 条")
+        bullets.append(
+            f"差评率 {round(float(neg_rate) * 100, 1)}% · "
+            f"本月新增评论 {kpis.get('own_review_rows', 0)} 条"
+        )
 
     if top_issues:
         first = top_issues[0]
