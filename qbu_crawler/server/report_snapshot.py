@@ -20,8 +20,20 @@ _RECIPIENTS_FILE_PATH = os.path.join(
 
 
 def _inject_meta(snapshot: dict, tier: str = "daily",
-                 expected_days: int | None = None, actual_days: int | None = None) -> dict:
-    """Add version metadata to snapshot for traceability."""
+                 expected_days: int | None = None, actual_days: int | None = None,
+                 window_start_dt: datetime | None = None) -> dict:
+    """Add version metadata to snapshot for traceability.
+
+    is_partial resolution (D015 #5 / F3 — true cold-start detection):
+      1. If `window_start_dt` is provided and the earliest review scraped_at
+         is later than it (or the reviews table is empty), the deployment is
+         younger than the tier window → is_partial = True.
+      2. Otherwise, fall back to the classic `actual_days < expected_days`
+         calendar check.
+
+    `earliest_review_scraped_at` is always recorded in `_meta` so downstream
+    templates can show "data since N" in cold-start notices.
+    """
     from qbu_crawler import __version__
     meta = {
         "schema_version": "3",
@@ -29,10 +41,40 @@ def _inject_meta(snapshot: dict, tier: str = "daily",
         "taxonomy_version": snapshot.get("taxonomy_version", "v1"),
         "report_tier": tier,
     }
+
+    is_partial = False
     if expected_days is not None and actual_days is not None and actual_days < expected_days:
-        meta["is_partial"] = True
+        is_partial = True
         meta["expected_days"] = expected_days
         meta["actual_days"] = actual_days
+
+    # Cold-start detection: compare earliest review against the window start.
+    earliest_review = models.get_earliest_review_scraped_at()
+    if window_start_dt is not None:
+        if earliest_review is None:
+            # No reviews at all — the window is trivially partial.
+            is_partial = True
+        else:
+            try:
+                earliest_dt = datetime.fromisoformat(
+                    str(earliest_review).replace(" ", "T")
+                )
+            except ValueError:
+                earliest_dt = None
+            if earliest_dt is not None:
+                if earliest_dt.tzinfo is None:
+                    # reviews.scraped_at is stored as naive Shanghai-local time.
+                    earliest_dt = earliest_dt.replace(tzinfo=config.SHANGHAI_TZ)
+                if earliest_dt > window_start_dt:
+                    is_partial = True
+
+    meta["earliest_review_scraped_at"] = earliest_review
+    if is_partial:
+        meta["is_partial"] = True
+        # Preserve expected/actual only when the calendar check set them above
+        # (meta already has them). Cold-start without calendar gap leaves them
+        # off — downstream code already treats their absence as "unknown".
+
     snapshot["_meta"] = meta
     return snapshot
 
@@ -375,13 +417,23 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
-    # P008 Phase 3: Pass report_tier from run to _meta; inject is_partial for cold-start
-    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar length
-    # of the previous month (data_since's month), so Feb (28/29d) / Apr (30d) / Jul (31d)
-    # each compute expected correctly.
+    # P008 Phase 3 / D015 #5 (F3): Pass report_tier from run to _meta; inject
+    # is_partial for both calendar gap AND true cold-start (deployment younger
+    # than the tier window, detected via earliest review scraped_at).
+    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar
+    # length of the previous month (data_since's month), so Feb (28/29d) /
+    # Apr (30d) / Jul (31d) each compute expected correctly.
     run_tier = run.get("report_tier", "daily")
     _expected: int | None = None
     _actual: int | None = None
+    _window_start_dt: datetime | None = None
+    if run.get("data_since"):
+        try:
+            _window_start_dt = datetime.fromisoformat(run["data_since"])
+            if _window_start_dt.tzinfo is None:
+                _window_start_dt = _window_start_dt.replace(tzinfo=config.SHANGHAI_TZ)
+        except (TypeError, ValueError):
+            _window_start_dt = None
     if run_tier in ("weekly", "monthly") and run.get("data_since") and run.get("data_until"):
         try:
             _since_d = datetime.fromisoformat(run["data_since"]).date()
@@ -400,10 +452,13 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
             _expected = None
             _actual = None
 
-    if _expected is not None and _actual is not None:
-        _inject_meta(snapshot, tier=run_tier, expected_days=_expected, actual_days=_actual)
-    else:
-        _inject_meta(snapshot, tier=run_tier)
+    _inject_meta(
+        snapshot,
+        tier=run_tier,
+        expected_days=_expected,
+        actual_days=_actual,
+        window_start_dt=_window_start_dt,
+    )
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     snapshot_path = os.path.join(

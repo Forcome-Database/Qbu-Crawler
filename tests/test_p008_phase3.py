@@ -789,7 +789,12 @@ def test_freeze_snapshot_sets_is_partial_on_short_weekly(db, tmp_path, monkeypat
 
 
 def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
-    """满 7 天的 weekly run 不应带 is_partial。"""
+    """满 7 天的 weekly run 不应带 is_partial。
+
+    D015 #5 / F3 update: cold-start detection treats "no reviews at all" as
+    partial. Seed one pre-window review so the deployment predates the window
+    and only the calendar check applies (which passes cleanly at 7/7).
+    """
     import json as _json
     from qbu_crawler.server import report_snapshot
 
@@ -801,6 +806,19 @@ def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
         " trigger_key, report_tier, data_since, data_until)"
         " VALUES (2, 'weekly', 'reporting', 'none', '2026-04-20',"
         " 'weekly:2026-04-20', 'weekly', '2026-04-13T00:00:00+08:00', '2026-04-20T00:00:00+08:00')"
+    )
+    # Seed a product + pre-window review so earliest_review predates window_start.
+    cur = conn.execute(
+        "INSERT INTO products (site, url, name, sku)"
+        " VALUES ('test', 'http://t/p-prewindow', 'PreWindow', 'SKU-PW')"
+    )
+    _pw_pid = cur.lastrowid
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, body_hash,"
+        " rating, scraped_at)"
+        " VALUES (?, 'seed', 'h', 'b', 'prewindow-hash-01', 5,"
+        " '2026-01-01 00:00:00')",
+        (_pw_pid,),
     )
     conn.commit()
     conn.close()
@@ -888,7 +906,11 @@ def test_v3_html_no_cold_notice_when_window_has_reviews(tmp_path):
 
 
 def test_freeze_snapshot_monthly_february_not_partial(db, tmp_path, monkeypatch):
-    """February 完整月（28 天）不应被误标 is_partial。"""
+    """February 完整月（28 天）不应被误标 is_partial。
+
+    D015 #5 / F3: seed a pre-window review so cold-start detection does not
+    flag the empty reviews table as partial.
+    """
     import json as _json
     from qbu_crawler.server import report_snapshot
 
@@ -900,6 +922,18 @@ def test_freeze_snapshot_monthly_february_not_partial(db, tmp_path, monkeypatch)
         " trigger_key, report_tier, data_since, data_until)"
         " VALUES (10, 'monthly', 'reporting', 'none', '2026-03-01',"
         " 'monthly:2026-03-01', 'monthly', '2026-02-01T00:00:00+08:00', '2026-03-01T00:00:00+08:00')"
+    )
+    cur = conn.execute(
+        "INSERT INTO products (site, url, name, sku)"
+        " VALUES ('test', 'http://t/p-feb-seed', 'FebSeed', 'SKU-FEB')"
+    )
+    _seed_pid = cur.lastrowid
+    conn.execute(
+        "INSERT INTO reviews (product_id, author, headline, body, body_hash,"
+        " rating, scraped_at)"
+        " VALUES (?, 'seed', 'h', 'b', 'febseed-hash-01', 5,"
+        " '2026-01-01 00:00:00')",
+        (_seed_pid,),
     )
     conn.commit()
     conn.close()

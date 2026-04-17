@@ -496,3 +496,182 @@ def test_report_tier_priority_explicit_over_meta(monkeypatch, caplog):
             report_snapshot._render_full_email_html(snap3, {})
     assert captured["report_tier"] == "daily"
     assert any("report_tier missing" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# F3 / D015 #5 — True cold-start detection via earliest_review_scraped_at
+# ---------------------------------------------------------------------------
+
+
+def _insert_product_raw(conn, site="basspro", sku="SKU-X", name="Test",
+                        url="http://example.com/x"):
+    cursor = conn.execute(
+        """
+        INSERT INTO products (site, url, name, sku)
+        VALUES (?, ?, ?, ?)
+        """,
+        (site, url, name, sku),
+    )
+    return cursor.lastrowid
+
+
+def _insert_review_raw(conn, product_id, author, headline, body, scraped_at):
+    """Insert a review directly (bypassing save_reviews which ignores scraped_at)."""
+    import hashlib as _h
+    body_hash = _h.md5((body or "").encode("utf-8")).hexdigest()[:16]
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (product_id, author, headline, body, body_hash, 3, scraped_at),
+    )
+
+
+def test_get_earliest_review_scraped_at_returns_none_when_empty(fresh_db):
+    """No reviews → None."""
+    assert models.get_earliest_review_scraped_at() is None
+
+
+def test_get_earliest_review_scraped_at_returns_min(fresh_db):
+    """Returns the earliest scraped_at from reviews."""
+    conn = models.get_conn()
+    try:
+        pid = _insert_product_raw(conn)
+        for i, ts in enumerate([
+            "2026-03-15 10:00:00",
+            "2026-03-01 10:00:00",
+            "2026-04-01 10:00:00",
+        ]):
+            _insert_review_raw(conn, pid, f"u{i}", f"h{i}", f"b{i}", ts)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert models.get_earliest_review_scraped_at() == "2026-03-01 10:00:00"
+
+
+def test_inject_meta_is_partial_true_when_earliest_review_after_window_start(
+    fresh_db, monkeypatch,
+):
+    """Cold-start: earliest review scraped_at > window_start → is_partial=True,
+    even when the calendar window is fully elapsed (actual_days == expected_days)."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-04-15T00:00:00+08:00",
+    )
+
+    # Window is a full 7-day calendar week (no calendar gap), yet the deployment
+    # (earliest review 2026-04-15) is younger than the window start (2026-04-10).
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["earliest_review_scraped_at"] == "2026-04-15T00:00:00+08:00"
+
+
+def test_inject_meta_is_partial_true_when_reviews_table_empty(
+    fresh_db, monkeypatch,
+):
+    """Empty reviews table + a window → is_partial = True (nothing to show)."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: None,
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="monthly",
+        expected_days=30,
+        actual_days=30,
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["earliest_review_scraped_at"] is None
+
+
+def test_inject_meta_not_partial_when_earliest_review_predates_window(
+    fresh_db, monkeypatch,
+):
+    """Deployment predates window + full calendar coverage → is_partial not set."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-01-01T00:00:00+08:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    assert "is_partial" not in snap["_meta"]
+    assert snap["_meta"]["earliest_review_scraped_at"] == "2026-01-01T00:00:00+08:00"
+
+
+def test_inject_meta_calendar_gap_still_triggers_partial(
+    fresh_db, monkeypatch,
+):
+    """Backward-compat: the classic actual_days < expected_days check
+    still fires even when cold-start is not in play."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-01-01T00:00:00+08:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="monthly",
+        expected_days=30,
+        actual_days=20,  # calendar gap — partial regardless of cold-start
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["expected_days"] == 30
+    assert snap["_meta"]["actual_days"] == 20
+
+
+def test_inject_meta_handles_naive_scraped_at_from_db(fresh_db, monkeypatch):
+    """reviews.scraped_at in the DB is naive Shanghai-local 'YYYY-MM-DD HH:MM:SS'.
+    The comparison against an aware window_start_dt must not raise TypeError."""
+    from qbu_crawler.server import report_snapshot
+
+    # Simulate the real DB format: naive, space-separated.
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-04-15 08:30:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    # 2026-04-15 (Shanghai-local) is after 2026-04-10 → partial
+    assert snap["_meta"]["is_partial"] is True

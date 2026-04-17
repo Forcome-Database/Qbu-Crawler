@@ -1296,6 +1296,25 @@ def get_time_axis_semantics() -> dict:
         conn.close()
 
 
+def get_earliest_review_scraped_at() -> str | None:
+    """Return the earliest scraped_at across all reviews, or None if empty.
+
+    Used by report_snapshot to detect true cold-start (deployment younger
+    than the tier window) for an accurate is_partial flag.
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MIN(scraped_at) AS earliest FROM reviews"
+        ).fetchone()
+        if row is None:
+            return None
+        earliest = row["earliest"]
+        return earliest if earliest else None
+    finally:
+        conn.close()
+
+
 def preview_scope_counts(scope: Scope) -> dict:
     """Return matched product/review counts for a normalized scope."""
     conn = get_conn()
