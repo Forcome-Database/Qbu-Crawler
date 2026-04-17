@@ -1053,6 +1053,483 @@ def _send_weekly_email(snapshot, full_result, logical_date):
     return {"success": True, "error": None, "recipients": recipients}
 
 
+def _generate_monthly_report(snapshot, send_email=True):
+    """P008 Phase 4: Generate monthly report — V3-style HTML + 6-sheet Excel + executive email.
+
+    Reuses generate_full_report_from_snapshot for V3 pipeline, then enriches with:
+    - category benchmark (analytics_category)
+    - SKU scorecard (analytics_scorecard)
+    - issue lifecycle (analytics_lifecycle, full state machine)
+    - executive summary (analytics_executive, LLM with fallback)
+    Renders monthly_report.html.j2 and sends email_monthly.html.j2.
+    """
+    from datetime import date as _date
+
+    from qbu_crawler.server import (
+        analytics_category, analytics_executive, analytics_lifecycle, analytics_scorecard,
+    )
+    from qbu_crawler.server.report_common import load_category_map
+
+    run_id = snapshot.get("run_id", 0)
+    logical_date = snapshot.get("logical_date", "")
+
+    # Generate full V3 report (reuse for charts, KPIs, Excel data)
+    try:
+        full_result = generate_full_report_from_snapshot(snapshot, send_email=False)
+    except Exception:
+        _logger.exception("Monthly report: full generation failed for run %d", run_id)
+        raise
+
+    # Note: no "completed_no_change" early-return here (unlike weekly). Monthly
+    # must always produce a report because executive summary, category benchmark,
+    # and scorecard are derived from cumulative data, which is never empty after
+    # the first daily run.
+
+    analytics_path = full_result.get("analytics_path")
+    analytics = {}
+    if analytics_path and os.path.isfile(analytics_path):
+        analytics = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+
+    cumulative = snapshot.get("cumulative") or {}
+    cum_products = cumulative.get("products") or []
+    cum_reviews = cumulative.get("reviews") or []
+
+    # ── Module 1: category benchmark ──
+    category_map = load_category_map()
+    category_benchmark = analytics_category.derive_category_benchmark(cum_products, category_map)
+
+    # ── Module 2: SKU scorecard ──
+    risk_products = (analytics.get("self") or {}).get("risk_products") or []
+    safety_incidents = _load_safety_incidents_for_window(
+        snapshot.get("data_since"), snapshot.get("data_until"),
+    )
+    previous_scorecards = _load_previous_scorecards(run_id)
+    scorecard = analytics_scorecard.derive_product_scorecard(
+        cum_products, risk_products, safety_incidents, previous_scorecards,
+    )
+
+    # ── Module 3: full lifecycle state machine (cold-start guarded) ──
+    try:
+        window_end = _date.fromisoformat(logical_date[:10])
+    except (ValueError, TypeError):
+        window_end = _date.today()
+
+    history_days = _compute_history_span_days(cum_reviews, window_end)
+    lifecycle_insufficient = history_days < 30
+    if lifecycle_insufficient:
+        lifecycle_results = {}
+        lifecycle_cards = []
+        _logger.info(
+            "Monthly report: lifecycle suppressed, only %d days of history (<30)",
+            history_days,
+        )
+    else:
+        lifecycle_results = analytics_lifecycle.derive_all_lifecycles(
+            cum_reviews, window_end=window_end,
+        )
+        lifecycle_cards = _build_lifecycle_cards(lifecycle_results, cum_reviews)
+
+    # ── Module 4: LLM executive summary ──
+    kpis = analytics.get("kpis") or {}
+    prev_analytics, _ = load_previous_report_context(run_id, report_tier="monthly")
+    prev_kpis = (prev_analytics or {}).get("kpis") or {}
+    kpi_delta = {
+        "health_index": _safe_delta(kpis.get("health_index"), prev_kpis.get("health_index")),
+        "high_risk_count": _safe_delta(kpis.get("high_risk_count"), prev_kpis.get("high_risk_count")),
+    }
+    top_issues = ((analytics.get("self") or {}).get("top_negative_clusters") or [])[:3]
+    executive_inputs = {
+        "kpis": kpis,
+        "kpi_delta": kpi_delta,
+        "top_issues": top_issues,
+        "category_benchmark": category_benchmark,
+        "safety_incidents_count": len(safety_incidents),
+        "safety_incidents": safety_incidents[:10],
+    }
+    executive = analytics_executive.generate_executive_summary(executive_inputs)
+
+    # ── Weekly summaries (4-week recap) + Chart.js trend config ──
+    weekly_summaries, weekly_trend_config = _build_weekly_recap(
+        snapshot.get("data_since"), snapshot.get("data_until"),
+    )
+
+    # Persist enriched analytics
+    if analytics_path:
+        analytics["category_benchmark"] = category_benchmark
+        analytics["scorecard"] = scorecard
+        analytics["lifecycle"] = {
+            f"{code}::{ownership}": data
+            for (code, ownership), data in lifecycle_results.items()
+        }
+        analytics["executive"] = executive
+        analytics["kpi_delta_monthly"] = kpi_delta
+        Path(analytics_path).write_text(
+            json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+    # Render monthly HTML
+    html_path = _render_monthly_html(
+        snapshot, analytics, executive, kpi_delta, category_benchmark,
+        scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+        weekly_summaries, weekly_trend_config, safety_incidents, full_result,
+    )
+
+    # Generate 6-sheet monthly Excel (Task 13 will replace stub)
+    from qbu_crawler.server import report as report_mod
+    monthly_excel_path = report_mod._generate_monthly_excel(
+        products=cum_products,
+        reviews=cum_reviews,
+        analytics=analytics,
+        category_benchmark=category_benchmark,
+        scorecard=scorecard,
+    )
+
+    # Send email
+    email_result = None
+    if send_email:
+        try:
+            email_result = _send_monthly_email(
+                snapshot, executive, kpi_delta, safety_incidents,
+                html_path, monthly_excel_path,
+            )
+        except Exception as e:
+            email_result = {"success": False, "error": str(e), "recipients": []}
+
+    try:
+        models.update_workflow_run(
+            run_id, report_mode="standard", analytics_path=analytics_path,
+        )
+    except Exception:
+        pass
+
+    return {
+        "mode": "monthly_report",
+        "status": "completed",
+        "run_id": run_id,
+        "snapshot_hash": snapshot.get("snapshot_hash", ""),
+        "products_count": full_result.get("products_count", 0),
+        "reviews_count": full_result.get("reviews_count", 0),
+        "html_path": html_path,
+        "excel_path": monthly_excel_path,
+        "analytics_path": analytics_path,
+        "email": email_result,
+    }
+
+
+def _safe_delta(current, previous):
+    try:
+        if current is None or previous is None:
+            return None
+        return round(float(current) - float(previous), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_history_span_days(reviews, window_end):
+    """Days from earliest review scraped_at / date_published_parsed to window_end."""
+    from datetime import date as _date, datetime as _dt
+    earliest = None
+    for r in reviews or []:
+        for key in ("scraped_at", "date_published_parsed", "date_published"):
+            val = r.get(key)
+            if not val:
+                continue
+            if isinstance(val, (_date, _dt)):
+                d = val.date() if isinstance(val, _dt) else val
+            else:
+                try:
+                    d = _date.fromisoformat(str(val)[:10])
+                except (ValueError, TypeError):
+                    continue
+            if earliest is None or d < earliest:
+                earliest = d
+            break
+    if earliest is None:
+        return 0
+    return max(0, (window_end - earliest).days)
+
+
+def _load_safety_incidents_for_window(data_since, data_until):
+    if not data_since or not data_until:
+        return []
+    try:
+        conn = models.get_conn()
+        rows = conn.execute(
+            "SELECT * FROM safety_incidents WHERE detected_at >= ? AND detected_at < ?"
+            " ORDER BY detected_at DESC",
+            (data_since, data_until),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        _logger.debug("safety_incidents query failed", exc_info=True)
+        return []
+
+
+def _load_previous_scorecards(current_run_id):
+    """Load scorecards from the previous monthly run (for trend computation)."""
+    prev_run = models.get_previous_completed_run(current_run_id, report_tier="monthly")
+    if not prev_run or not prev_run.get("analytics_path"):
+        return {}
+    try:
+        prev_analytics = json.loads(Path(prev_run["analytics_path"]).read_text(encoding="utf-8"))
+        prev_cards = (prev_analytics.get("scorecard") or {}).get("scorecards") or []
+        return {
+            c["sku"]: {"risk_score": c.get("risk_score"), "light": c.get("light")}
+            for c in prev_cards if c.get("sku")
+        }
+    except Exception:
+        return {}
+
+
+def _build_lifecycle_cards(lifecycle_results, all_reviews):
+    """Convert lifecycle state-machine output into renderable issue cards (own only).
+
+    Each card also attaches a ``competitor_reference`` block — negative reviews
+    from competitors for the same label_code — so the monthly report can show
+    cross-ownership context.
+    """
+    from datetime import date as _date
+    from qbu_crawler.server.report_common import credibility_weight, _label_display
+
+    cards = []
+    today = _date.today()
+
+    def _reviews_matching(label_code, ownership):
+        out = []
+        for r in all_reviews:
+            if r.get("ownership") != ownership:
+                continue
+            raw = r.get("analysis_labels") or "[]"
+            try:
+                labels = json.loads(raw) if isinstance(raw, str) else raw
+            except (json.JSONDecodeError, TypeError):
+                labels = []
+            if any(lb.get("code") == label_code and lb.get("polarity") == "negative" for lb in labels):
+                out.append(r)
+        out.sort(key=lambda r: credibility_weight(r, today=today), reverse=True)
+        return out
+
+    for (label_code, ownership), data in lifecycle_results.items():
+        if ownership != "own":
+            continue
+
+        own_examples = _reviews_matching(label_code, "own")
+        comp_examples = _reviews_matching(label_code, "competitor")
+
+        cards.append({
+            "label_code": label_code,
+            "label_display": _label_display(label_code),
+            "state": data["state"],
+            "history": data["history"],
+            "review_count": data["review_count"],
+            "first_seen": data["first_seen"],
+            "last_seen": data["last_seen"],
+            "example_reviews": own_examples[:3],
+            "competitor_reference": {
+                "review_count": len(comp_examples),
+                "top_examples": comp_examples[:3],
+            },
+        })
+
+    state_priority = {"recurrent": 0, "active": 1, "receding": 2, "dormant": 3}
+    cards.sort(key=lambda c: (state_priority.get(c["state"], 9), -c["review_count"]))
+    return cards
+
+
+def _build_weekly_recap(data_since, data_until):
+    """Return (summaries, Chart.js line-config) for completed weekly runs in the window.
+
+    Uses partial-overlap SQL filter so weeks straddling month boundaries are included.
+    """
+    if not data_since or not data_until:
+        return [], None
+    try:
+        conn = models.get_conn()
+        rows = conn.execute(
+            "SELECT logical_date, analytics_path FROM workflow_runs"
+            " WHERE report_tier = 'weekly' AND status = 'completed'"
+            "   AND data_since < ? AND data_until > ?"
+            " ORDER BY logical_date ASC",
+            (data_until, data_since),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return [], None
+
+    summaries = []
+    labels = []
+    health_series = []
+    neg_series = []
+    for idx, row in enumerate(rows, start=1):
+        week_label = f"第{idx}周"
+        labels.append(week_label)
+        try:
+            wkly = json.loads(Path(row["analytics_path"]).read_text(encoding="utf-8"))
+            kpis = wkly.get("kpis") or {}
+            health = kpis.get("health_index")
+            neg_rate_display = kpis.get("own_negative_review_rate_display") or "—"
+            health_series.append(float(health) if health is not None else None)
+            neg = kpis.get("own_negative_review_rate")
+            neg_series.append(float(neg) if neg is not None else None)
+            summaries.append(
+                f"{week_label}（{row['logical_date']}）：健康 {health if health is not None else '—'} · "
+                f"差评率 {neg_rate_display} · 高风险 {kpis.get('high_risk_count', 0)}"
+            )
+        except Exception:
+            summaries.append(f"{week_label}（{row['logical_date']}）：数据缺失")
+            health_series.append(None)
+            neg_series.append(None)
+
+    if not labels or all(v is None for v in health_series):
+        return summaries, None
+
+    trend_config = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "健康指数",
+                    "data": health_series,
+                    "borderColor": "#93543f",
+                    "backgroundColor": "rgba(147,84,63,0.12)",
+                    "tension": 0.3,
+                    "fill": True,
+                    "spanGaps": True,
+                    "yAxisID": "y",
+                },
+                {
+                    "label": "差评率 (%)",
+                    "data": neg_series,
+                    "borderColor": "#b7633f",
+                    "backgroundColor": "transparent",
+                    "tension": 0.3,
+                    "spanGaps": True,
+                    "yAxisID": "y1",
+                },
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "scales": {
+                "y":  {"type": "linear", "position": "left",  "title": {"display": True, "text": "健康指数"}},
+                "y1": {"type": "linear", "position": "right", "grid": {"drawOnChartArea": False},
+                        "title": {"display": True, "text": "差评率 (%)"}},
+            },
+            "plugins": {"legend": {"position": "bottom"}},
+        },
+    }
+    return summaries, trend_config
+
+
+def _render_monthly_html(snapshot, analytics, executive, kpi_delta, category_benchmark,
+                         scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+                         weekly_summaries, weekly_trend_config, safety_incidents,
+                         full_result):
+    """Render monthly_report.html.j2 to disk, return path."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("monthly_report.html.j2")
+
+    css_path = template_dir / "daily_report_v3.css"
+    js_path = template_dir / "daily_report_v3.js"
+
+    from datetime import date as _date, timedelta as _td
+    logical_date = snapshot.get("logical_date", "")
+    # Month label like "2026年04月" — month-1st logical_date refers to previous month
+    try:
+        ld = _date.fromisoformat(logical_date[:10])
+        prev_month = ld.replace(day=1) - _td(days=1)  # last day of previous month
+        month_label = prev_month.strftime("%Y年%m月")
+    except (ValueError, TypeError):
+        month_label = logical_date[:7]
+
+    charts = dict(analytics.get("charts") or {})
+    if weekly_trend_config is not None:
+        charts["weekly_trend"] = weekly_trend_config
+
+    html = template.render(
+        logical_date=logical_date,
+        month_label=month_label,
+        executive=executive,
+        kpis=analytics.get("kpis") or {},
+        kpi_delta=kpi_delta,
+        category_benchmark=category_benchmark,
+        scorecard=scorecard,
+        lifecycle_cards=lifecycle_cards,
+        lifecycle_insufficient=lifecycle_insufficient,
+        history_days=history_days,
+        weekly_summaries=weekly_summaries,
+        snapshot=snapshot,
+        analytics=analytics,
+        charts=charts,
+        alert_level=analytics.get("alert_level") or "green",
+        alert_text=analytics.get("alert_text") or "",
+        safety_incidents=safety_incidents,
+        css_text=css_path.read_text(encoding="utf-8") if css_path.exists() else "",
+        js_text=js_path.read_text(encoding="utf-8") if js_path.exists() else "",
+        threshold=config.NEGATIVE_THRESHOLD,
+    )
+
+    out_path = Path(config.REPORT_DIR) / f"monthly-{month_label.replace('年', '-').replace('月', '')}.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+    return str(out_path)
+
+
+def _send_monthly_email(snapshot, executive, kpi_delta, safety_incidents, html_path, excel_path):
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("email_monthly.html.j2")
+
+    logical_date = snapshot.get("logical_date", "")
+    try:
+        from datetime import date as _date, timedelta as _td
+        ld = _date.fromisoformat(logical_date[:10])
+        prev_month = ld - _td(days=1)
+        month_label = prev_month.strftime("%Y年%m月")
+    except (ValueError, TypeError):
+        month_label = logical_date[:7]
+
+    report_url = ""
+    if config.REPORT_HTML_PUBLIC_URL and html_path:
+        report_url = f"{config.REPORT_HTML_PUBLIC_URL}/{Path(html_path).name}"
+
+    body_html = template.render(
+        month_label=month_label,
+        executive=executive,
+        kpis=snapshot.get("cumulative_kpis") or {},
+        kpi_delta=kpi_delta,
+        safety_incidents=safety_incidents,
+        report_url=report_url,
+    )
+
+    recipients = config.EMAIL_RECIPIENTS_EXEC or _get_email_recipients()
+    if not recipients:
+        return {"success": True, "error": "No recipients configured", "recipients": []}
+
+    subject = f"产品评论月报 {month_label}"
+    attachments = []
+    if html_path and os.path.isfile(html_path):
+        attachments.append(html_path)
+    if excel_path and os.path.isfile(excel_path):
+        attachments.append(excel_path)
+
+    report.send_email(
+        recipients=recipients,
+        subject=subject,
+        body_text=f"QBU 月报 {month_label}",
+        body_html=body_html,
+        attachment_paths=attachments if attachments else None,
+    )
+    return {"success": True, "error": None, "recipients": recipients}
+
+
 def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     """Generate report for any mode (full/change/quiet).
 
@@ -1082,6 +1559,8 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         return _generate_daily_briefing(snapshot, send_email)
     elif run_tier == "weekly":
         return _generate_weekly_report(snapshot, send_email)
+    elif run_tier == "monthly":
+        return _generate_monthly_report(snapshot, send_email)
 
     # Load previous context
     prev_analytics, prev_snapshot = load_previous_report_context(run_id)

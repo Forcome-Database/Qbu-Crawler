@@ -65,7 +65,7 @@
       <div class="exec-kpi">
         <div class="exec-kpi-label">高风险产品</div>
         <div class="exec-kpi-value">{{ kpis.high_risk_count }}</div>
-        {% if kpi_delta.high_risk_count is defined %}
+        {% if kpi_delta.high_risk_count is defined and kpi_delta.high_risk_count is not none %}
         <div class="exec-kpi-delta">{{ "+" if kpi_delta.high_risk_count > 0 else "" }}{{ kpi_delta.high_risk_count }} vs 上月</div>
         {% endif %}
       </div>

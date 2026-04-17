@@ -973,6 +973,18 @@ def _generate_analytical_excel(
     return filepath
 
 
+def _generate_monthly_excel(
+    *,
+    products,
+    reviews,
+    analytics,
+    category_benchmark,
+    scorecard,
+):
+    """P008 Phase 4 Task 13 will implement. Stub for Task 12 integration."""
+    return ""
+
+
 def _report_ts(value: datetime | str) -> str:
     """Normalize report cutoffs to the naive timestamp format stored in SQLite."""
     if isinstance(value, str):

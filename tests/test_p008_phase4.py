@@ -645,3 +645,59 @@ def test_email_monthly_template_renders():
     assert "需要关注" in html
     assert "72.3" in html
     assert "查看完整月报" in html
+
+
+# ── Task 12: _generate_monthly_report routing ───────────────────
+
+
+def test_generate_report_monthly_tier_routes_correctly(db, tmp_path, monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
+    # Disable LLM so we use deterministic fallback
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (1, 'monthly', 'reporting', 'full_pending', '2026-05-01',"
+        " 'monthly:2026-05-01', 'monthly')"
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-05-01",
+        "data_since": "2026-04-01T00:00:00+08:00",
+        "data_until": "2026-05-01T00:00:00+08:00",
+        "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                      "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+        "reviews": [{"id": 1, "headline": "Good", "body": "Works well", "rating": 4.0,
+                     "product_sku": "SKU1", "product_name": "Grinder", "ownership": "own",
+                     "images": [], "author": "A", "date_published": "2026-04-14",
+                     "date_published_parsed": "2026-04-14"}],
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 0,
+        "untranslated_count": 1,
+        "snapshot_hash": "testhash",
+        "cumulative": {
+            "products": [{"name": "Grinder", "sku": "SKU1", "ownership": "own",
+                          "rating": 4.5, "review_count": 50, "site": "test", "price": 299}],
+            "reviews": [{"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "SKU1",
+                         "headline": "Good", "body": "Works well", "sentiment": "positive",
+                         "analysis_labels": "[]", "date_published_parsed": "2026-04-14"}],
+            "products_count": 1,
+            "reviews_count": 1,
+            "translated_count": 0,
+            "untranslated_count": 1,
+        },
+    }
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+    assert result["mode"] == "monthly_report"
+    assert result.get("html_path") is not None
