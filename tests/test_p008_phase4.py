@@ -517,7 +517,7 @@ def test_executive_summary_stance_categories():
     from qbu_crawler.server import analytics_executive
 
     bad_inputs = {
-        "kpis": {"health_index": 35.0, "own_negative_review_rate": 12.0, "high_risk_count": 5,
+        "kpis": {"health_index": 35.0, "own_negative_review_rate": 0.12, "high_risk_count": 5,
                  "own_review_rows": 300},
         "kpi_delta": {"health_index": -10.0, "high_risk_count": +3},
         "top_issues": [], "category_benchmark": {"categories": {}}, "safety_incidents_count": 3,
@@ -526,13 +526,44 @@ def test_executive_summary_stance_categories():
     assert result_bad["stance"] == "urgent"
 
     ok_inputs = {
-        "kpis": {"health_index": 78.0, "own_negative_review_rate": 2.5, "high_risk_count": 0,
+        "kpis": {"health_index": 78.0, "own_negative_review_rate": 0.025, "high_risk_count": 0,
                  "own_review_rows": 300},
         "kpi_delta": {"health_index": +1.0, "high_risk_count": 0},
         "top_issues": [], "category_benchmark": {"categories": {}}, "safety_incidents_count": 0,
     }
     result_ok = analytics_executive._fallback_executive_summary(ok_inputs)
     assert result_ok["stance"] == "stable"
+
+
+def test_classify_stance_needs_attention_on_fraction_neg_rate():
+    """neg_rate is a fraction (0.0-1.0), not percentage. 6% should trigger needs_attention."""
+    from qbu_crawler.server.analytics_executive import _classify_stance
+    inputs = {
+        "kpis": {
+            "health_index": 75.0,
+            "high_risk_count": 1,
+            "own_negative_review_rate": 0.06,  # 6% 分数形式
+        },
+        "kpi_delta": {"health_index": -1.0, "high_risk_count": 0},
+        "safety_incidents": [],
+        "safety_incidents_count": 0,
+    }
+    assert _classify_stance(inputs) == "needs_attention"
+
+
+def test_classify_stance_stable_below_threshold():
+    from qbu_crawler.server.analytics_executive import _classify_stance
+    inputs = {
+        "kpis": {
+            "health_index": 80.0,
+            "high_risk_count": 1,
+            "own_negative_review_rate": 0.04,  # 4% 低于 5% 阈值
+        },
+        "kpi_delta": {"health_index": -1.0, "high_risk_count": 0},
+        "safety_incidents": [],
+        "safety_incidents_count": 0,
+    }
+    assert _classify_stance(inputs) == "stable"
 
 
 # ── Task 10: monthly_report.html.j2 ─────────────────────────────

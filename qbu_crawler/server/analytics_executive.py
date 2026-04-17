@@ -65,7 +65,7 @@ def _classify_stance(inputs: dict) -> str:
         return "urgent"
     if health < 50 or high_risk >= 3:
         return "urgent"
-    if health_delta < -5 or risk_delta > 0 or neg_rate > 5:
+    if health_delta < -5 or risk_delta > 0 or neg_rate > 0.05:
         return "needs_attention"
     return "stable"
 
