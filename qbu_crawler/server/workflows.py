@@ -185,6 +185,44 @@ def submit_weekly_run(logical_date: str | None = None) -> dict:
     }
 
 
+def submit_monthly_run(logical_date: str | None = None) -> dict:
+    """Create a monthly workflow run. No scraping tasks — aggregates monthly data.
+
+    The run is created with status='reporting' (skip submitted/running phases).
+    """
+    from qbu_crawler.server.report_common import tier_date_window
+
+    logical_date = logical_date or config.now_shanghai().date().isoformat()
+    trigger_key = build_monthly_trigger_key(logical_date)
+
+    existing = models.get_workflow_run_by_trigger_key(trigger_key)
+    if existing:
+        return {"created": False, "run": existing, "trigger_key": trigger_key, "run_id": existing["id"]}
+
+    data_since, data_until = tier_date_window("monthly", logical_date)
+
+    run = models.create_workflow_run({
+        "workflow_type": "monthly",
+        "status": "reporting",
+        "report_phase": "none",
+        "logical_date": logical_date,
+        "trigger_key": trigger_key,
+        "data_since": data_since,
+        "data_until": data_until,
+        "requested_by": "monthly_scheduler",
+        "service_version": __version__,
+    })
+
+    models.update_workflow_run(run["id"], report_tier="monthly")
+
+    return {
+        "created": True,
+        "run": run,
+        "trigger_key": trigger_key,
+        "run_id": run["id"],
+    }
+
+
 def submit_daily_run(
     submitter: Any,
     source_csv: str,

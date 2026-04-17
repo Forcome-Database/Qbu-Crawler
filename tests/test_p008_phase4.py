@@ -45,3 +45,41 @@ def test_build_monthly_trigger_key():
     from qbu_crawler.server.workflows import build_monthly_trigger_key
     key = build_monthly_trigger_key("2026-05-01")
     assert key == "monthly:2026-05-01"
+
+
+# ── Task 2: submit_monthly_run ──────────────────────────────────
+
+
+def test_submit_monthly_run_creates_reporting_run(db):
+    from qbu_crawler.server.workflows import submit_monthly_run
+    result = submit_monthly_run(logical_date="2026-05-01")
+    assert result["created"] is True
+    assert result["trigger_key"] == "monthly:2026-05-01"
+
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (result["run_id"],)).fetchone()
+    conn.close()
+    assert row["workflow_type"] == "monthly"
+    assert row["report_tier"] == "monthly"
+    assert row["status"] == "reporting"
+    assert row["data_since"] == "2026-04-01T00:00:00+08:00"
+    assert row["data_until"] == "2026-05-01T00:00:00+08:00"
+
+
+def test_submit_monthly_run_idempotent(db):
+    from qbu_crawler.server.workflows import submit_monthly_run
+    r1 = submit_monthly_run(logical_date="2026-05-01")
+    r2 = submit_monthly_run(logical_date="2026-05-01")
+    assert r1["created"] is True
+    assert r2["created"] is False
+
+
+def test_submit_monthly_run_january_wraps_to_december(db):
+    """Window for 2026-01-01 must be [2025-12-01, 2026-01-01)."""
+    from qbu_crawler.server.workflows import submit_monthly_run
+    result = submit_monthly_run(logical_date="2026-01-01")
+    conn = _get_test_conn(db)
+    row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (result["run_id"],)).fetchone()
+    conn.close()
+    assert row["data_since"] == "2025-12-01T00:00:00+08:00"
+    assert row["data_until"] == "2026-01-01T00:00:00+08:00"
