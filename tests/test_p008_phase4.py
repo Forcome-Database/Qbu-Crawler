@@ -461,3 +461,28 @@ def test_derive_all_lifecycles_pre_groups_efficiently():
     keys = list(result.keys())
     # Two distinct labels for own ownership = 2 entries
     assert len(keys) == 2
+
+
+def test_lifecycle_recurrent_then_long_silence_then_new_negative():
+    """After dormant→recurrent, if another long silence passes and a new negative arrives,
+    the state machine should cycle through dormant again (R5 says recurrent behaves like active).
+
+    Uses a 73-day gap between events 1→2 and a 78-day gap between events 2→3.
+    silence_window = clamp(mean([73,78])*2, 14, 60) = 60.
+    Both gaps exceed 60 days → R3 fires twice → two dormant transitions.
+    """
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    body = "This product has significant quality issues that I experienced after regular use."
+    reviews = [
+        _make_review(1, "2026-01-01", 1.0, body=body),   # credible → active
+        _make_review(2, "2026-03-15", 1.0, body=body),   # 73d gap > 60 → R3→dormant, R4→recurrent
+        _make_review(3, "2026-06-01", 1.0, body=body),   # 78d gap > 60 → R3 on recurrent → dormant, R4→recurrent
+    ]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 6, 15),
+    )
+    # Final state after recurrent→dormant→recurrent cycle
+    assert state == "recurrent"
+    # History should contain two "→dormant" events and two dormant→recurrent events
+    dormant_events = [h for h in history if "dormant" in h.get("transition", "")]
+    assert len(dormant_events) >= 2, f"Expected ≥2 dormant transitions, got: {history}"

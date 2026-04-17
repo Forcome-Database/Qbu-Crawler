@@ -184,7 +184,8 @@ def derive_issue_lifecycle(
         # R3: silence_window check — runs only when a negative event arrives.
         # Positive reviews between two negatives are NOT evidence of silence;
         # checking R3 on positives would prematurely mark the issue dormant.
-        if event["is_negative"] and state in ("active", "receding") and last_negative_date is not None:
+        # R5: recurrent behaves like active, so R3 applies to recurrent too.
+        if event["is_negative"] and state in ("active", "receding", "recurrent") and last_negative_date is not None:
             silent_days = (ev_date - last_negative_date).days
             if silent_days >= silence_window:
                 state = "dormant"
