@@ -1035,3 +1035,44 @@ def test_mark_notification_failure_sets_task_notified_attempt_at(notifier_db):
     assert t["notified_attempt_at"] == ts
     # notified_at remains None because success never happened.
     assert t.get("notified_at") in (None, "")
+
+
+def test_mark_notification_failure_sets_attempt_at_on_retryable_path(notifier_db):
+    """Retryable failure (attempts < max_attempts, status='failed') must still
+    update tasks.notified_attempt_at so ops can see the last attempt even for
+    runs that are still being retried."""
+    from qbu_crawler import config
+
+    models.save_task(
+        {
+            "id": "T-RETRY",
+            "type": "scrape",
+            "status": "completed",
+            "params": {},
+            "created_at": config.now_shanghai().isoformat(),
+        }
+    )
+    row = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "dingtalk:default",
+            "payload": {"task_id": "T-RETRY"},
+            "dedupe_key": "T-RETRY:done",
+            "payload_hash": "hash-T-RETRY",
+        }
+    )
+
+    ts = config.now_shanghai().isoformat()
+    result = models.mark_notification_failure(
+        notification_id=row["id"],
+        failed_at=ts,
+        error_message="timeout",
+        retryable=True,
+        max_attempts=3,  # attempts=1 < 3 → status='failed', not deadletter
+    )
+    assert result == "failed"
+
+    t = models.get_task("T-RETRY")
+    assert t["notified_attempt_at"] == ts
+    assert t.get("notified_at") in (None, "")
