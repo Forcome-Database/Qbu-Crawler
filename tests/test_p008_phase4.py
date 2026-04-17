@@ -703,6 +703,83 @@ def test_generate_report_monthly_tier_routes_correctly(db, tmp_path, monkeypatch
     assert result.get("html_path") is not None
 
 
+# ── Task 14: Integration test ────────────────────────────────────
+
+
+def test_p008_phase4_integration(db, tmp_path, monkeypatch):
+    """End-to-end: monthly scheduler → submit → routing → report → analytics enrichment."""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.workflows import (
+        MonthlySchedulerWorker, build_monthly_trigger_key, submit_monthly_run,
+    )
+    from qbu_crawler.server.report_common import tier_date_window
+    from qbu_crawler.server import analytics_category, analytics_lifecycle, analytics_scorecard
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
+
+    # 1. tier_date_window monthly correctness
+    since, until = tier_date_window("monthly", "2026-05-01")
+    assert since == "2026-04-01T00:00:00+08:00"
+    assert until == "2026-05-01T00:00:00+08:00"
+
+    # 2. trigger_key + submit
+    assert build_monthly_trigger_key("2026-05-01") == "monthly:2026-05-01"
+    result = submit_monthly_run(logical_date="2026-05-01")
+    assert result["created"] is True
+
+    # 3. Schedule worker — already submitted in step 2 → idempotent → False
+    now = datetime(2026, 5, 1, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False
+
+    # 4. Each analytics module callable in isolation
+    products = [{"name": "G", "sku": "O1", "ownership": "own", "rating": 4.5, "review_count": 30, "price": 299}]
+    cat_result = analytics_category.derive_category_benchmark(products, category_map={})
+    assert cat_result["fallback_mode"] is True
+
+    sc_result = analytics_scorecard.derive_product_scorecard(
+        products=products,
+        risk_products=[{"sku": "O1", "risk_score": 5, "negative_rate": 0.02,
+                         "negative_count": 1, "review_count": 30}],
+        safety_incidents=[],
+    )
+    assert sc_result["summary"]["green"] == 1
+
+    lc_result = analytics_lifecycle.derive_all_lifecycles([], window_end=date(2026, 4, 30))
+    assert lc_result == {}
+
+    # 5. Routing → _generate_monthly_report via generate_report_from_snapshot
+    # Use the same snapshot shape as test_generate_report_monthly_tier_routes_correctly —
+    # must include products_count, reviews_count, translated_count, untranslated_count
+    # per build_dual_report_analytics contract.
+    snapshot = {
+        "run_id": result["run_id"],
+        "logical_date": "2026-05-01",
+        "data_since": since, "data_until": until,
+        "products": products,
+        "reviews": [],
+        "products_count": 1,
+        "reviews_count": 0,
+        "translated_count": 0,
+        "untranslated_count": 0,
+        "snapshot_hash": "integration_test_hash",
+        "cumulative": {
+            "products": products,
+            "reviews": [],
+            "products_count": 1,
+            "reviews_count": 0,
+            "translated_count": 0,
+            "untranslated_count": 0,
+        },
+    }
+    report_result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+    assert report_result["mode"] == "monthly_report"
+    assert report_result.get("html_path") is not None
+
+
 # ── Task 13: monthly 6-sheet Excel ──────────────────────────────
 
 
