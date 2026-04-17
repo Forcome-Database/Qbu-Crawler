@@ -589,3 +589,78 @@ def test_p008_phase3_integration(db, tmp_path, monkeypatch):
     report_result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
     assert report_result["mode"] == "weekly_report"
     assert report_result.get("html_path") is not None
+
+
+# ── Task 3 (P4-B3): neg_series unit fix ─────────────────────────
+
+
+def test_weekly_recap_neg_series_is_percentage(db, tmp_path, monkeypatch):
+    """neg_series 必须为百分比值（0-100），与 Y 轴标签 '差评率 (%)' 对齐。
+
+    own_negative_review_rate 存储为分数（0.0-1.0），_build_weekly_recap 在
+    填充 neg_series 时必须乘以 100，否则图表数值是真实值的 1/100。
+    """
+    from qbu_crawler.server.report_snapshot import _build_weekly_recap
+
+    # Write fake analytics JSON files that _build_weekly_recap reads
+    analytics1 = {
+        "kpis": {
+            "health_index": 70.0,
+            "own_negative_review_rate": 0.04,          # 4 % stored as fraction
+            "own_negative_review_rate_display": "4.0%",
+            "high_risk_count": 2,
+        }
+    }
+    analytics2 = {
+        "kpis": {
+            "health_index": 68.0,
+            "own_negative_review_rate": 0.06,          # 6 % stored as fraction
+            "own_negative_review_rate_display": "6.0%",
+            "high_risk_count": 3,
+        }
+    }
+    path1 = tmp_path / "weekly_analytics_w1.json"
+    path2 = tmp_path / "weekly_analytics_w2.json"
+    path1.write_text(json.dumps(analytics1), encoding="utf-8")
+    path2.write_text(json.dumps(analytics2), encoding="utf-8")
+
+    # Insert completed weekly workflow_runs whose analytics_path points to the temp files
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until, analytics_path)"
+        " VALUES ('weekly', 'completed', 'full_sent', '2026-04-07',"
+        " 'weekly:2026-04-07', 'weekly',"
+        " '2026-03-31T00:00:00+08:00', '2026-04-07T00:00:00+08:00', ?)",
+        (str(path1),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until, analytics_path)"
+        " VALUES ('weekly', 'completed', 'full_sent', '2026-04-14',"
+        " 'weekly:2026-04-14', 'weekly',"
+        " '2026-04-07T00:00:00+08:00', '2026-04-14T00:00:00+08:00', ?)",
+        (str(path2),),
+    )
+    conn.commit()
+    conn.close()
+
+    # Call _build_weekly_recap with a window that overlaps both runs
+    summaries, trend_config = _build_weekly_recap(
+        "2026-03-31T00:00:00+08:00",
+        "2026-04-30T00:00:00+08:00",
+    )
+
+    assert trend_config is not None, "trend_config should not be None with valid data"
+    neg_dataset = next(
+        d for d in trend_config["data"]["datasets"] if "差评率" in d.get("label", "")
+    )
+    data = neg_dataset["data"]
+
+    # Values must be in percentage space: 4.0 and 6.0, not 0.04 and 0.06
+    assert any(v is not None and 3.5 <= v <= 4.5 for v in data), (
+        f"neg_series[0] should be ~4.0 (percentage), got {data}"
+    )
+    assert any(v is not None and 5.5 <= v <= 6.5 for v in data), (
+        f"neg_series[1] should be ~6.0 (percentage), got {data}"
+    )

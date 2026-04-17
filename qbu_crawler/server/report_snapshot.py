@@ -1378,7 +1378,7 @@ def _build_weekly_recap(data_since, data_until):
             neg_rate_display = kpis.get("own_negative_review_rate_display") or "—"
             health_series.append(float(health) if health is not None else None)
             neg = kpis.get("own_negative_review_rate")
-            neg_series.append(float(neg) if neg is not None else None)
+            neg_series.append(float(neg) * 100 if neg is not None else None)
             summaries.append(
                 f"{week_label}（{row['logical_date']}）：健康 {health if health is not None else '—'} · "
                 f"差评率 {neg_rate_display} · 高风险 {kpis.get('high_risk_count', 0)}"
