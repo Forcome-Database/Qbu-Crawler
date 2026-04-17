@@ -202,3 +202,72 @@ def test_load_category_map_uses_default_path(monkeypatch, tmp_path):
     from qbu_crawler.server.report_common import load_category_map
     mapping = load_category_map()  # no arg → use config
     assert "SKU1" in mapping
+
+
+# ── Task 6: derive_category_benchmark ───────────────────────────
+
+
+def test_derive_category_benchmark_basic():
+    from qbu_crawler.server.analytics_category import derive_category_benchmark
+    products = [
+        {"sku": "O1", "ownership": "own", "rating": 4.5, "review_count": 50, "price": 299},
+        {"sku": "O2", "ownership": "own", "rating": 4.3, "review_count": 30, "price": 350},
+        {"sku": "O3", "ownership": "own", "rating": 4.7, "review_count": 80, "price": 320},
+        {"sku": "C1", "ownership": "competitor", "rating": 4.2, "review_count": 200, "price": 310},
+        {"sku": "C2", "ownership": "competitor", "rating": 4.6, "review_count": 150, "price": 340},
+        {"sku": "C3", "ownership": "competitor", "rating": 4.4, "review_count": 100, "price": 320},
+    ]
+    category_map = {
+        "O1": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "O2": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "O3": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "C1": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "C2": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "C3": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+    }
+    result = derive_category_benchmark(products, category_map)
+    assert "grinder" in result["categories"]
+    g = result["categories"]["grinder"]
+    assert g["status"] == "ok"  # 3 own + 3 competitor passes ≥3 SKU threshold
+    assert "own" in g and "competitor" in g
+    assert g["own"]["sku_count"] == 3
+    assert g["competitor"]["sku_count"] == 3
+    assert g["own"]["avg_rating"] == pytest.approx(4.5, rel=0.01)
+    assert g["competitor"]["avg_rating"] == pytest.approx(4.4, rel=0.01)
+
+
+def test_derive_category_benchmark_insufficient_samples():
+    """When a category has < 3 SKUs (own OR competitor), mark insufficient."""
+    from qbu_crawler.server.analytics_category import derive_category_benchmark
+    products = [
+        {"sku": "O1", "ownership": "own", "rating": 4.5, "review_count": 50, "price": 299},
+        {"sku": "C1", "ownership": "competitor", "rating": 4.2, "review_count": 200, "price": 310},
+    ]
+    category_map = {
+        "O1": {"category": "slicer", "sub_category": "", "price_band_override": ""},
+        "C1": {"category": "slicer", "sub_category": "", "price_band_override": ""},
+    }
+    result = derive_category_benchmark(products, category_map)
+    assert result["categories"]["slicer"]["status"] == "insufficient_samples"
+
+
+def test_derive_category_benchmark_unmapped_skus():
+    """SKUs not in category_map go into the 'unmapped' bucket and don't break analysis."""
+    from qbu_crawler.server.analytics_category import derive_category_benchmark
+    products = [
+        {"sku": "X1", "ownership": "own", "rating": 4.0, "review_count": 5, "price": 100},
+    ]
+    result = derive_category_benchmark(products, category_map={})
+    assert result["unmapped_count"] == 1
+
+
+def test_derive_category_benchmark_fallback_pairing():
+    """Empty category map → fallback to direct competitor pairing report."""
+    from qbu_crawler.server.analytics_category import derive_category_benchmark
+    products = [
+        {"sku": "O1", "ownership": "own", "rating": 4.5, "review_count": 50, "price": 299},
+        {"sku": "C1", "ownership": "competitor", "rating": 4.2, "review_count": 200, "price": 310},
+    ]
+    result = derive_category_benchmark(products, category_map={})
+    assert result["fallback_mode"] is True
+    assert result["pairings"]  # at least one own-vs-competitor pair surfaced
