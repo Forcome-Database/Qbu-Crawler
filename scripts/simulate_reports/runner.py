@@ -114,7 +114,6 @@ def call_daily(logical_date: date) -> int:
 
     run = biz.models.create_workflow_run({
         "workflow_type": "daily",
-        "report_tier": "daily",
         "status": "running",          # bypass submitted; advance flips to reporting
         "report_phase": "none",
         "logical_date": logical_date.isoformat(),
@@ -126,6 +125,8 @@ def call_daily(logical_date: date) -> int:
         "started_at": now_iso,
     })
     run_id = run["id"]
+    # create_workflow_run() does not accept report_tier; set via update.
+    biz.models.update_workflow_run(run_id, report_tier="daily")
 
     _ensure_daily_task_link(run_id, logical_date)
 
