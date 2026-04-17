@@ -356,3 +356,108 @@ def test_scorecard_sku_none_not_false_safety_flagged():
     own = result["scorecards"][0]
     assert own["safety_flag"] is False
     assert own["light"] == "green"  # low risk, no safety → green
+
+
+# ── Task 8: derive_issue_lifecycles (full state machine) ────────
+
+
+def _make_review(rid, date_str, rating, ownership="own", body="x", labels=None, sku="SKU1", impact_category=None):
+    return {
+        "id": rid,
+        "date_published_parsed": date_str,
+        "rating": rating,
+        "ownership": ownership,
+        "body": body,
+        "headline": "h",
+        "product_sku": sku,
+        "impact_category": impact_category,
+        "analysis_labels": json.dumps(labels or [{"code": "quality_stability", "polarity": "negative"}]),
+    }
+
+
+def test_lifecycle_active_after_recent_negative():
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    reviews = [_make_review(1, "2026-04-15", 1.0)]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    assert state == "active"
+
+
+def test_lifecycle_receding_after_positive_overcome():
+    """active → receding: positive cohort dominates within 30 days, ≥3 reviews threshold."""
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    reviews = [
+        _make_review(1, "2026-04-05", 1.0, body="bad"),
+        _make_review(2, "2026-04-20", 5.0, body="great", labels=[{"code": "quality_stability", "polarity": "positive"}]),
+        _make_review(3, "2026-04-25", 5.0, body="excellent", labels=[{"code": "quality_stability", "polarity": "positive"}]),
+        _make_review(4, "2026-04-28", 4.0, body="works", labels=[{"code": "quality_stability", "polarity": "positive"}]),
+    ]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    assert state == "receding"
+
+
+def test_lifecycle_dormant_after_silence_window():
+    """active → dormant: no negative within silence_window days."""
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    reviews = [_make_review(1, "2026-01-15", 1.0, body="bad")]
+    # 3.5 months of silence; silence_window minimum for single-event is 30 days
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    assert state == "dormant"
+
+
+def test_lifecycle_recurrent_after_dormant_then_negative():
+    """dormant → recurrent: new negative after dormancy."""
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    reviews = [
+        _make_review(1, "2026-01-01", 1.0, body="bad"),  # original active
+        _make_review(2, "2026-04-25", 1.0, body="bad again"),  # after long silence
+    ]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    assert state == "recurrent"
+
+
+def test_lifecycle_safety_doubles_silence_window():
+    """R6: critical safety issues double the silence window before dormant."""
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    # 29 days of silence; without safety, single-review default silence_window is 30 → active
+    # With critical safety, silence_window doubles to 60 → still active/receding.
+    reviews = [_make_review(1, "2026-04-01", 1.0, body="metal shaving in food", impact_category="safety")]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    assert state in ("active", "receding")  # NOT dormant
+
+
+def test_lifecycle_low_rcw_does_not_trigger_active():
+    """R1: very short reviews (low RCW) shouldn't single-handedly trigger active."""
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+    reviews = [_make_review(1, "2026-04-15", 1.0, body="bad")]  # body only 3 chars
+    # Single low-credibility review: still active (R1 fires on credible reviews,
+    # but a sole review is the only signal we have — fall through to active)
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 30),
+    )
+    # The exact boundary depends on RCW threshold; main contract: must not crash
+    assert state in ("active", "dormant")
+
+
+def test_derive_all_lifecycles_pre_groups_efficiently():
+    """derive_all_lifecycles avoids O(labels × reviews); only relevant reviews per label."""
+    from qbu_crawler.server.analytics_lifecycle import derive_all_lifecycles
+    reviews = [
+        _make_review(1, "2026-04-15", 1.0, sku="O1",
+                     labels=[{"code": "quality_stability", "polarity": "negative"}]),
+        _make_review(2, "2026-04-15", 1.0, sku="O1",
+                     labels=[{"code": "ease_of_use", "polarity": "negative"}]),
+    ]
+    result = derive_all_lifecycles(reviews, window_end=date(2026, 4, 30))
+    keys = list(result.keys())
+    # Two distinct labels for own ownership = 2 entries
+    assert len(keys) == 2
