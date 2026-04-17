@@ -393,3 +393,40 @@ def test_logical_date_window_returns_tzinfo_aware_datetimes():
     assert (until - since) == timedelta(days=1)
     # Start at midnight
     assert since.time().hour == 0 and since.time().minute == 0
+
+
+def test_workflow_worker_inner_loop_has_min_sleep():
+    """Simulate process_once returning True forever — the inner loop must
+    self-throttle via stop_event.wait(0.05) so CPU doesn't peg."""
+    from qbu_crawler.server import workflows
+    import threading
+    import time as _time
+
+    worker = workflows.WorkflowWorker.__new__(workflows.WorkflowWorker)
+    worker._stop_event = threading.Event()
+    worker._wake_event = threading.Event()
+    # Pre-set wake so the outer wait returns immediately and we enter the
+    # inner loop right away. Use a near-zero outer interval as a backup.
+    worker._wake_event.set()
+    worker._interval = 0
+
+    calls = {"n": 0}
+
+    def _fake_process_once(now=None):
+        calls["n"] += 1
+        return True  # keep work coming
+
+    worker.process_once = _fake_process_once
+
+    thread = threading.Thread(target=worker._run, daemon=True)
+    thread.start()
+    _time.sleep(0.6)
+    worker._stop_event.set()
+    worker._wake_event.set()
+    thread.join(timeout=2)
+
+    # With 50ms min sleep: 0.6s / 0.05s ≈ 12 iterations max.
+    # Without: tens of thousands.
+    assert calls["n"] <= 20, f"CPU-pegging: {calls['n']} iterations in 0.6s"
+    # But there MUST be some iterations — not just zero
+    assert calls["n"] >= 5, f"Over-throttled: only {calls['n']} iterations in 0.6s"

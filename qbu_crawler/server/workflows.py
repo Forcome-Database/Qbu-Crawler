@@ -886,8 +886,14 @@ class WorkflowWorker:
             if self._stop_event.is_set():
                 break
             try:
-                while self.process_once() and not self._stop_event.is_set():
-                    continue
+                while not self._stop_event.is_set():
+                    if not self.process_once():
+                        break
+                    # Min sleep between inner iterations to prevent CPU pegging
+                    # when process_once() repeatedly returns True. Interruptible
+                    # via _stop_event.wait() for clean shutdown.
+                    if self._stop_event.wait(0.05):
+                        break
             except Exception:
                 logger.exception("WorkflowWorker: unexpected error")
 
