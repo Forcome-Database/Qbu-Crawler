@@ -155,6 +155,8 @@ def infer_categories(
                 i, i + len(batch),
             )
             # Deliberately continue — partial results are better than none.
+            # Failed-batch SKUs are absent from by_sku; the validation loop
+            # below maps them to 'other' via the ALLOWED_CATEGORIES check.
 
     out: list[CategoryResult] = []
     for p in products:
