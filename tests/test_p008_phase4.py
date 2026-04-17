@@ -463,6 +463,76 @@ def test_derive_all_lifecycles_pre_groups_efficiently():
     assert len(keys) == 2
 
 
+def test_lifecycle_R2_recurrent_to_receding():
+    """R2: An issue in 'recurrent' state transitions to 'receding' when the
+    30-day cohort around the latest event has a dominant positive signal
+    (pos ≥ 1, ≥3 reviews in window, neg ≤ pos).
+
+    Event sequence:
+      1. 2026-01-01 — credible negative → active (R1).
+      2. 2026-03-20 — credible negative after 78-day silence → dormant then
+         recurrent (R3 + R4).
+      3. 2026-04-05 — positive within 30d of event 2.
+      4. 2026-04-15 — positive within 30d (recent cohort now 1 neg + 2 pos,
+         size 3) → recurrent → receding (R2).
+    """
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+
+    body = "This product exhibits quality issues I experienced over weeks of regular use."
+    reviews = [
+        _make_review(1, "2026-01-01", 1.0, body=body),
+        _make_review(2, "2026-03-20", 1.0, body=body),
+        _make_review(
+            3, "2026-04-05", 5.0, body="Rock solid build and holds up beautifully every day.",
+            labels=[{"code": "quality_stability", "polarity": "positive"}],
+        ),
+        _make_review(
+            4, "2026-04-15", 5.0, body="Excellent grinder — still performing perfectly after weeks.",
+            labels=[{"code": "quality_stability", "polarity": "positive"}],
+        ),
+    ]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 4, 20),
+    )
+    assert state == "receding"
+    # Verify the R2 transition actually fired from recurrent
+    r2_transitions = [h for h in history if h.get("reason") == "R2"]
+    assert len(r2_transitions) >= 1, f"Expected R2 transition, got: {history}"
+
+
+def test_lifecycle_R3_recurrent_to_dormant():
+    """R3: An issue in 'recurrent' state becomes 'dormant' when no new
+    negative activity arrives within silence_window days of the last negative.
+
+    Event sequence:
+      1. 2026-01-01 — credible negative → active (R1).
+      2. 2026-03-20 — credible negative after 78-day silence → dormant then
+         recurrent (R3 + R4). silence_window = clamp(78*2, 14, 60) = 60.
+      3. window_end 2026-06-01 is 73 days after event 2 > 60-day silence_window
+         → R3 final check fires → dormant.
+    """
+    from qbu_crawler.server.analytics_lifecycle import derive_issue_lifecycle
+
+    body = "This product exhibits quality issues I experienced over weeks of regular use."
+    reviews = [
+        _make_review(1, "2026-01-01", 1.0, body=body),
+        _make_review(2, "2026-03-20", 1.0, body=body),
+    ]
+    state, history = derive_issue_lifecycle(
+        "quality_stability", "own", reviews, window_end=date(2026, 6, 1),
+    )
+    assert state == "dormant"
+    # Verify the machine did enter recurrent before going dormant (not just
+    # straight active→dormant — that would be R3-from-active, a different path).
+    recurrent_transitions = [h for h in history if "recurrent" in h.get("transition", "")]
+    assert len(recurrent_transitions) >= 1, (
+        f"Expected recurrent transition before dormant, got: {history}"
+    )
+    # And verify R3 fired at window_end to close the recurrent→dormant path
+    r3_transitions = [h for h in history if h.get("reason", "").startswith("R3")]
+    assert len(r3_transitions) >= 1, f"Expected R3 transition, got: {history}"
+
+
 def test_lifecycle_recurrent_then_long_silence_then_new_negative():
     """After dormant→recurrent, if another long silence passes and a new negative arrives,
     the state machine should cycle through dormant again (R5 says recurrent behaves like active).
