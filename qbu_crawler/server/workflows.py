@@ -302,7 +302,9 @@ def submit_daily_run(
             "summary": bundle.summary,
         }
 
-    data_since, data_until = _logical_date_window(logical_date)
+    since_dt, until_dt = _logical_date_window(logical_date)
+    data_since = since_dt.isoformat()
+    data_until = until_dt.isoformat()
     run = models.create_workflow_run(
         {
             "workflow_type": "daily",
@@ -387,10 +389,16 @@ def submit_daily_run(
     }
 
 
-def _logical_date_window(logical_date: str) -> tuple[str, str]:
-    start = datetime.fromisoformat(logical_date)
+def _logical_date_window(logical_date: str) -> tuple[datetime, datetime]:
+    """Return (since, until) as tz-aware ``datetime`` objects (Shanghai, UTC+8).
+
+    The window covers the full logical day: ``[midnight, midnight+24h)``.
+    Callers that need ISO strings must call ``.isoformat()`` at the use site.
+    """
+    d = datetime.strptime(logical_date, "%Y-%m-%d").date()
+    start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=config.SHANGHAI_TZ)
     end = start + timedelta(days=1)
-    return (f"{start.date().isoformat()}T00:00:00+08:00", f"{end.date().isoformat()}T00:00:00+08:00")
+    return start, end
 
 
 def _count_pending_translations_for_window(since: str, until: str) -> int:

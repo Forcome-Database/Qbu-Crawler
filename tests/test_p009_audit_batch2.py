@@ -368,3 +368,28 @@ def test_append_csv_releases_lock_on_exception(tmp_path, monkeypatch):
 
     # Lock file must be gone even though the write failed
     assert not (tmp_path / "cat.csv.lock").exists()
+
+
+# ---------------------------------------------------------------------------
+# I5 — _logical_date_window returns tz-aware datetime objects
+# ---------------------------------------------------------------------------
+
+
+def test_logical_date_window_returns_tzinfo_aware_datetimes():
+    """The helper must return tz-aware datetime objects, not ISO strings,
+    so callers never accidentally mix naive and aware datetimes."""
+    from datetime import datetime, timedelta
+    from qbu_crawler.server.workflows import _logical_date_window
+
+    since, until = _logical_date_window("2026-04-17")
+    assert isinstance(since, datetime)
+    assert isinstance(until, datetime)
+    assert since.tzinfo is not None
+    assert until.tzinfo is not None
+    # Shanghai = UTC+8
+    assert since.utcoffset() == timedelta(hours=8)
+    assert until.utcoffset() == timedelta(hours=8)
+    # Sanity: window is exactly 24 hours for daily
+    assert (until - since) == timedelta(days=1)
+    # Start at midnight
+    assert since.time().hour == 0 and since.time().minute == 0
