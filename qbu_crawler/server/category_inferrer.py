@@ -147,7 +147,14 @@ def infer_categories(
     for i in range(0, len(products), _BATCH_SIZE):
         batch = products[i:i + _BATCH_SIZE]
         logger.info("Inferring batch %d-%d (size=%d)", i, i + len(batch), len(batch))
-        by_sku.update(_infer_one_batch(batch, client))
+        try:
+            by_sku.update(_infer_one_batch(batch, client))
+        except Exception:
+            logger.exception(
+                "Batch %d-%d LLM call failed; items will fall back to 'other'",
+                i, i + len(batch),
+            )
+            # Deliberately continue — partial results are better than none.
 
     out: list[CategoryResult] = []
     for p in products:

@@ -261,3 +261,49 @@ def test_sync_new_skus_still_sets_flag_when_inner_raises(fresh_db, monkeypatch):
 
     refreshed = models.get_workflow_run(run["id"])
     assert refreshed["category_synced"] == 1
+
+
+def test_infer_categories_isolates_failed_batches(monkeypatch):
+    """One batch raising must not kill other batches; failed items fall back to 'other'."""
+    from qbu_crawler.server import category_inferrer
+
+    # Force one product per batch so each product is its own batch.
+    monkeypatch.setattr(category_inferrer, "_BATCH_SIZE", 1)
+
+    calls = {"n": 0}
+
+    class _FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls["n"] += 1
+                    # First batch: fail. Second: success.
+                    if calls["n"] == 1:
+                        raise RuntimeError("simulated LLM timeout")
+
+                    class _R:
+                        choices = [
+                            type("C", (), {
+                                "finish_reason": "stop",
+                                "message": type("M", (), {
+                                    "content": '{"results":[{"sku":"X","category":"grinder","sub_category":"","confidence":0.95}]}',
+                                })(),
+                            })(),
+                        ]
+                    return _R()
+
+    products = [
+        {"sku": "A", "name": "Kitchen Grinder #22", "url": ""},
+        {"sku": "X", "name": "Meat Grinder", "url": ""},
+    ]
+    results = category_inferrer.infer_categories(products, client=_FakeClient())
+
+    assert len(results) == 2
+    by_sku = {r["sku"]: r for r in results}
+    # A was in the failed batch → fallback to 'other' (confidence 0 < 0.7 → 'other')
+    assert by_sku["A"]["category"] == "other"
+    # X's batch succeeded
+    assert by_sku["X"]["category"] == "grinder"
+    # Exactly 2 LLM calls were attempted (one per batch)
+    assert calls["n"] == 2
