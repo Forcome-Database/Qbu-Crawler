@@ -568,7 +568,7 @@ def mark_task_lost(
     """Mark a stale running task as failed so it can be reconciled."""
     conn = get_conn()
     try:
-        finished_at = finished_at or _NOW_SHANGHAI
+        finished_at = finished_at or now_shanghai().isoformat()
         cursor = conn.execute(
             """
             UPDATE tasks
