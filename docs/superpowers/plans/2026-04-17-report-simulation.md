@@ -21,7 +21,7 @@ scripts/simulate_reports/
 ├── config.py                    # 路径、时间轴常量、SID 列表
 ├── env_bootstrap.py             # set_env() + delayed_import()
 ├── clock.py                     # freeze_time wrapper
-├── db.py                        # simulation.db 直连 helpers（不依赖业务 models）
+├── db.py                        # products.db 直连 helpers（不依赖业务 models）
 ├── body_pool.py                 # 评论文本复用池
 ├── data_builder.py              # 数据事件注入 ops
 ├── runner.py                    # call_daily / call_weekly / call_monthly
@@ -96,7 +96,8 @@ BASELINE_DB = Path(r"C:\Users\leo\Desktop\报告\data\products.db")
 
 # Working DB (writable, in project)
 SIM_DATA_DIR = PROJECT_ROOT / "data" / "sim"
-SIM_DB = SIM_DATA_DIR / "simulation.db"
+# NOTE: filename must match qbu_crawler hardcoded DB_PATH ("products.db")
+SIM_DB = SIM_DATA_DIR / "products.db"
 CHECKPOINT_DIR = SIM_DATA_DIR / "checkpoints"
 
 # Report outputs (on desktop)
@@ -205,7 +206,7 @@ git commit -m "feat(sim): skeleton + freezegun dep + gitignore"
 3. 保证业务模块在整个进程生命周期内只 import 一次
 """
 import os
-from pathlib import Path
+from types import SimpleNamespace
 from . import config
 
 
@@ -221,9 +222,6 @@ def set_env():
     # QBU_DATA_DIR drives DB_PATH resolution in qbu_crawler/config.py
     os.environ["QBU_DATA_DIR"] = str(config.SIM_DATA_DIR)
     os.environ["REPORT_DIR"] = str(config.REPORT_WORK_DIR)
-
-    # Ensure DB file exists at expected path before business imports
-    # (qbu_crawler may create its own if missing, which we don't want here)
 
 
 def load_business():
@@ -244,12 +242,18 @@ def load_business():
             "env_bootstrap must run before any qbu_crawler import."
         )
 
-    _LOADED = type("Business", (), {
-        "config": qbu_config,
-        "models": models,
-        "workflows": workflows,
-        "report_snapshot": report_snapshot,
-    })
+    if not config.SIM_DB.exists():
+        raise RuntimeError(
+            f"Simulation DB not found at {config.SIM_DB}. "
+            "Run `python -m scripts.simulate_reports prepare` first."
+        )
+
+    _LOADED = SimpleNamespace(
+        config=qbu_config,
+        models=models,
+        workflows=workflows,
+        report_snapshot=report_snapshot,
+    )
     return _LOADED
 ```
 
@@ -265,7 +269,7 @@ def load_business():
 - [ ] **Step 1: 写 `db.py`**
 
 ```python
-"""Simple sqlite3 adapter for simulation.db.
+"""Simple sqlite3 adapter for products.db (simulation working copy).
 Used by prepare/data_builder which run BEFORE business modules import.
 """
 import sqlite3
@@ -394,7 +398,7 @@ def run(argv):
 ```bash
 uv run python -m scripts.simulate_reports prepare
 ```
-预期：`data/sim/simulation.db` 出现；无错误。
+预期：`data/sim/products.db` 出现；无错误。
 
 - [ ] **Step 3: Commit**
 
@@ -462,7 +466,7 @@ uv run pytest tests/simulate_reports/test_scraped_at_redistribute.py -v
 - [ ] **Step 3: 实现 `scripts/simulate_reports/data_builder.py`**
 
 ```python
-"""Data-construction operations that mutate simulation.db or derive mutations."""
+"""Data-construction operations that mutate products.db (sim copy) or derive mutations."""
 from datetime import date, datetime, timedelta
 from typing import Iterable
 
@@ -547,7 +551,7 @@ def _apply_scraped_at_redistribution(conn):
 
 ```bash
 uv run python -m scripts.simulate_reports prepare
-uv run python -c "import sqlite3; c=sqlite3.connect('data/sim/simulation.db'); print(c.execute('SELECT MIN(scraped_at), MAX(scraped_at) FROM reviews').fetchone())"
+uv run python -c "import sqlite3; c=sqlite3.connect('data/sim/products.db'); print(c.execute('SELECT MIN(scraped_at), MAX(scraped_at) FROM reviews').fetchone())"
 ```
 预期：min≈`2026-03-20T09:00:00`，max 散落在 4 月中下旬。
 
@@ -684,7 +688,7 @@ print(f"Seeded review_issue_labels: {n} rows")
 
 ```bash
 uv run python -m scripts.simulate_reports prepare
-uv run python -c "import sqlite3; c=sqlite3.connect('data/sim/simulation.db'); print('labels:', c.execute('SELECT COUNT(*) FROM review_issue_labels').fetchone()[0])"
+uv run python -c "import sqlite3; c=sqlite3.connect('data/sim/products.db'); print('labels:', c.execute('SELECT COUNT(*) FROM review_issue_labels').fetchone()[0])"
 ```
 预期：labels 数量 >0（基于 review_analysis 的 labels JSON 展开数）。
 
@@ -1286,7 +1290,7 @@ def test_name_roundtrip():
 - [ ] **Step 2: 失败 → 实现 `checkpoint.py`**
 
 ```python
-"""Per-day snapshot of simulation.db for fast single-scenario replay."""
+"""Per-day snapshot of products.db (sim copy) for fast single-scenario replay."""
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -2336,7 +2340,7 @@ def run(argv):
 
 ```python
 """python -m scripts.simulate_reports rerun-after-fix
-Re-run full timeline but skip prepare (keep data/sim/simulation.db)."""
+Re-run full timeline but skip prepare (keep data/sim/products.db)."""
 from .. import config
 import shutil
 
@@ -2743,7 +2747,7 @@ uv run python -m scripts.simulate_reports reset
 
 见 spec `docs/superpowers/specs/2026-04-17-report-simulation-design.md` 第 9 节。核心：
 - `qbu_crawler/` 业务代码零改动
-- 工作 DB 在 `data/sim/simulation.db`（已 gitignore）
+- 工作 DB 在 `data/sim/products.db`（已 gitignore）
 - 桌面基线 DB 只读
 - 不启任何业务后台线程
 ```

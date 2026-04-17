@@ -34,7 +34,7 @@ Qbu-Crawler 报告系统有多维分支：
 
 - **离线、同步、单进程**：直接 `import` 业务模块（`qbu_crawler.server.report`、`qbu_crawler.server.workflows` 等），**不启 FastAPI / FastMCP / NotifierWorker / WorkflowWorker / DailySchedulerWorker / WeeklySchedulerWorker / MonthlySchedulerWorker 线程**
 - **时间冻结**：`freezegun.freeze_time()` 包住每次报告调用，让业务代码所有 `datetime.now()` / `date.today()` 返回模拟的当日
-- **DB 隔离**：项目内 `data/sim/simulation.db` 作为工作副本，桌面基线 `C:\Users\leo\Desktop\报告\data\products.db` 仅 prepare 阶段读取、永不写入
+- **DB 隔离**：项目内 `data/sim/products.db` 作为工作副本，桌面基线 `C:\Users\leo\Desktop\报告\data\products.db` 仅 prepare 阶段读取、永不写入
 - **产物隔离**：所有产物落到 `C:\Users\leo\Desktop\报告\reports\scenarios/` 下独立子目录，顶层 `reports/index.html` 汇总卡片导航
 
 ### 2.2 脚本结构
@@ -61,7 +61,7 @@ scripts/simulate_reports/
 
 ```
 prepare 阶段（一次性）:
-  1. 复制桌面基线 DB → data/sim/simulation.db
+  1. 复制桌面基线 DB → data/sim/products.db
   2. 重分布评论 scraped_at（下面 3.2 节详述）
   3. 从 review_analysis.labels JSON 回填 review_issue_labels 表
   4. 清空 workflow_runs / notification_outbox（留白从头开始）
@@ -70,7 +70,7 @@ run 阶段（顺序执行）:
   for date in TIMELINE (2026-03-20 → 2026-05-01, 42 天):
       events = TIMELINE[date]  # 当天的所有数据注入事件
       for evt in events:
-          evt.apply(simulation.db)  # 插入/更新评论、产品、labels、safety_incidents
+          evt.apply(products.db)  # 插入/更新评论、产品、labels、safety_incidents
       with freeze_time(date + 09:30):
           if is_monday(date):
               run_id = runner.call_weekly(date)
@@ -178,7 +178,7 @@ index 阶段:
 |---|---|
 | 触发方式 | 纯离线 `import` 业务模块 |
 | 时间冻结 | `freezegun.freeze_time(date + 09:30)` 包住每次报告调用 |
-| DB 工作副本 | `data/sim/simulation.db`（项目内，不污染桌面） |
+| DB 工作副本 | `data/sim/products.db`（项目内，不污染桌面） |
 | Scheduler 线程 | 不启；`runner.py` 手动串联 `submit_*_run()` + `advance_workflow()` |
 | Notifier 线程 | 不启；`notifier_stub.drain_outbox_to_files()` 抽 payload 写 `emails/*.html` + 标 delivered |
 | 产物位置 | `C:\Users\leo\Desktop\报告\reports\scenarios/<SID>/` + 顶层 `index.html` |
@@ -250,7 +250,7 @@ C:\Users\leo\Desktop\报告\reports\
 
 ## 7. 验收标准
 
-- [ ] `python -m scripts.simulate_reports prepare` 成功生成 `data/sim/simulation.db` 且 `review_issue_labels` 已回填
+- [ ] `python -m scripts.simulate_reports prepare` 成功生成 `data/sim/products.db` 且 `review_issue_labels` 已回填
 - [ ] `python -m scripts.simulate_reports run` 无异常跑完 42 天，生成 ≥20 个 daily + ≥4 个 weekly + 1 个 monthly 产物
 - [ ] 每场景目录含 `manifest.json` + `*.html` + （Full/Weekly/Monthly 场景）`*.xlsx`
 - [ ] S01 产物含 `is_partial=true` 标记
@@ -286,7 +286,7 @@ C:\Users\leo\Desktop\报告\reports\
 
 ### 9.2 不污染现实环境
 
-- 桌面基线 DB（`C:\Users\leo\Desktop\报告\data\products.db`）**只读**：prepare 时复制到 `data/sim/simulation.db`，后续所有写操作都作用在工作副本
+- 桌面基线 DB（`C:\Users\leo\Desktop\报告\data\products.db`）**只读**：prepare 时复制到 `data/sim/products.db`，后续所有写操作都作用在工作副本
 - `data/sim/` 加入 `.gitignore`
 - 任何 env 变量（`QBU_DATA_DIR` / `REPORT_DIR` / `DB_PATH`）只在模拟脚本的 Python 进程内 `os.environ` 设置，进程退出即消失；不写 `.env`、不改 shell rc
 - 桌面 `C:\Users\leo\Desktop\报告\reports\` 下的已有产物移动到 `_legacy/` 再写新产物，避免覆盖
@@ -425,8 +425,8 @@ C:\Users\leo\Desktop\报告\reports\
 
 ### 10.5 Checkpoint 机制
 
-- `run` 过程中每完成一天末尾：拷贝 `data/sim/simulation.db` → `data/sim/checkpoints/<YYYY-MM-DD>.db`
-- `run-one <SID>` 逻辑：查出该场景对应日期 D、上一天 D-1；若 `checkpoints/D-1.db` 存在，直接复制为 `simulation.db`，应用当天事件后跑报告；否则从最近可用 checkpoint 顺推到 D-1
+- `run` 过程中每完成一天末尾：拷贝 `data/sim/products.db` → `data/sim/checkpoints/<YYYY-MM-DD>.db`
+- `run-one <SID>` 逻辑：查出该场景对应日期 D、上一天 D-1；若 `checkpoints/D-1.db` 存在，直接复制为 `products.db`，应用当天事件后跑报告；否则从最近可用 checkpoint 顺推到 D-1
 - 单场景迭代成本从全量跑（分钟级）压到秒级
 
 ### 10.6 `reports/issues.md` 自动生成

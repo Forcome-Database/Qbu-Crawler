@@ -9,7 +9,8 @@ BASELINE_DB = Path(r"C:\Users\leo\Desktop\报告\data\products.db")
 
 # Working DB (writable, in project)
 SIM_DATA_DIR = PROJECT_ROOT / "data" / "sim"
-SIM_DB = SIM_DATA_DIR / "simulation.db"
+# NOTE: filename must match qbu_crawler hardcoded DB_PATH ("products.db")
+SIM_DB = SIM_DATA_DIR / "products.db"
 CHECKPOINT_DIR = SIM_DATA_DIR / "checkpoints"
 
 # Report outputs (on desktop)

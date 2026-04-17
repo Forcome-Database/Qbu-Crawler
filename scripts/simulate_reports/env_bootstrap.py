@@ -5,7 +5,7 @@
 3. 保证业务模块在整个进程生命周期内只 import 一次
 """
 import os
-from pathlib import Path
+from types import SimpleNamespace
 from . import config
 
 
@@ -21,9 +21,6 @@ def set_env():
     # QBU_DATA_DIR drives DB_PATH resolution in qbu_crawler/config.py
     os.environ["QBU_DATA_DIR"] = str(config.SIM_DATA_DIR)
     os.environ["REPORT_DIR"] = str(config.REPORT_WORK_DIR)
-
-    # Ensure DB file exists at expected path before business imports
-    # (qbu_crawler may create its own if missing, which we don't want here)
 
 
 def load_business():
@@ -44,10 +41,16 @@ def load_business():
             "env_bootstrap must run before any qbu_crawler import."
         )
 
-    _LOADED = type("Business", (), {
-        "config": qbu_config,
-        "models": models,
-        "workflows": workflows,
-        "report_snapshot": report_snapshot,
-    })
+    if not config.SIM_DB.exists():
+        raise RuntimeError(
+            f"Simulation DB not found at {config.SIM_DB}. "
+            "Run `python -m scripts.simulate_reports prepare` first."
+        )
+
+    _LOADED = SimpleNamespace(
+        config=qbu_config,
+        models=models,
+        workflows=workflows,
+        report_snapshot=report_snapshot,
+    )
     return _LOADED
