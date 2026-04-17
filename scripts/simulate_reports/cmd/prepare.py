@@ -20,4 +20,19 @@ def run(argv):
         conn.execute("DELETE FROM workflow_run_tasks")
         conn.execute("DELETE FROM notification_outbox")
         print("Cleared workflow_runs / workflow_run_tasks / notification_outbox")
+        _apply_scraped_at_redistribution(conn)
     return 0
+
+
+def _apply_scraped_at_redistribution(conn):
+    from ..data_builder import redistribute_scraped_at
+    from datetime import date
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, date_published_parsed, scraped_at FROM reviews"
+    ).fetchall()]
+    new_rows = redistribute_scraped_at(rows, timeline_start=date(2026, 3, 20))
+    conn.executemany(
+        "UPDATE reviews SET scraped_at=? WHERE id=?",
+        [(r["scraped_at"], r["id"]) for r in new_rows],
+    )
+    print(f"Redistributed scraped_at for {len(new_rows)} reviews")
