@@ -363,6 +363,25 @@ class MonthlySchedulerWorker:
         if models.get_workflow_run_by_trigger_key(trigger_key):
             return False  # idempotent
 
+        # P008 Section 2.5: serialize daily → weekly → monthly. When month-1st is
+        # also a Monday, all three schedulers fire at the same HH:MM. Wait until
+        # all daily AND weekly runs in the month window are terminal before
+        # submitting the monthly run.
+        from qbu_crawler.server.report_common import tier_date_window
+        since, until = tier_date_window("monthly", logical_date)
+        if not _all_daily_runs_terminal(since, until):
+            logger.debug(
+                "MonthlySchedulerWorker: waiting for daily runs in [%s, %s) to complete",
+                since, until,
+            )
+            return False
+        if not _all_weekly_runs_terminal(since, until):
+            logger.debug(
+                "MonthlySchedulerWorker: waiting for weekly runs in [%s, %s) to complete",
+                since, until,
+            )
+            return False
+
         result = submit_monthly_run(logical_date=logical_date)
         if result.get("created"):
             logger.info(
@@ -373,7 +392,59 @@ class MonthlySchedulerWorker:
         return False
 ```
 
-> **Note:** Unlike `WeeklySchedulerWorker`, monthly does **not** wait for daily runs to be terminal (D-3 of design doc Section 2.5 mentions serialization, but month-1st may be after the last daily of the month is already done). If we ever observe contention, add `_all_daily_runs_terminal(since, until)` check matching the weekly pattern.
+Add `_all_weekly_runs_terminal()` right above `_all_daily_runs_terminal()` in `qbu_crawler/server/workflows.py` (mirror the existing helper):
+
+```python
+def _all_weekly_runs_terminal(since: str, until: str) -> bool:
+    """Check if all weekly runs overlapping the given window are terminal.
+
+    Uses partial-overlap semantics (``data_since < until AND data_until > since``)
+    because a weekly window may straddle the month boundary.
+    """
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM workflow_runs
+            WHERE report_tier = 'weekly'
+              AND data_since < ? AND data_until > ?
+              AND status NOT IN ('completed', 'needs_attention')
+            """,
+            (until, since),
+        ).fetchone()
+        return (row["cnt"] if row else 0) == 0
+    finally:
+        conn.close()
+```
+
+**Additional test for this behavior** — append to Task 3 test section:
+
+```python
+def test_monthly_scheduler_waits_for_weekly_runs(db, monkeypatch):
+    """Monthly must wait until all weekly runs overlapping the month window are terminal."""
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 5, 1, 10, 0, tzinfo=config.SHANGHAI_TZ)
+
+    # Seed a completed daily run + a running weekly run
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'completed', 'full_sent', '2026-04-30',"
+        " 'daily:2026-04-30', 'daily', '2026-04-30T00:00:00+08:00', '2026-05-01T00:00:00+08:00')"
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('weekly', 'reporting', 'full_pending', '2026-04-27',"
+        " 'weekly:2026-04-27', 'weekly', '2026-04-20T00:00:00+08:00', '2026-04-27T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False  # blocked on weekly
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1284,6 +1355,7 @@ _NEG_POS_RECEDING_RATIO = 1.0
 _RECEDING_MIN_REVIEWS = 3
 _SILENCE_MIN = 14
 _SILENCE_MAX = 60
+_SILENCE_DEFAULT_INSUFFICIENT = 30  # When <2 events: avoid premature dormant
 _RECEDING_WINDOW_DAYS = 30
 
 
@@ -1339,9 +1411,14 @@ def _has_safety_critical(review: dict) -> bool:
 
 
 def _silence_window_days(timeline: list[dict], has_safety: bool) -> int:
-    """Average inter-review interval × 2, clamped to [14, 60]; doubled for safety."""
+    """Average inter-review interval × 2, clamped to [14, 60]; doubled for safety.
+
+    When fewer than 2 events exist the average interval is undefined. Use a
+    conservative 30-day default so a single recent review never triggers
+    premature dormant (would happen with the 14-day floor).
+    """
     if len(timeline) < 2:
-        base = _SILENCE_MIN
+        base = _SILENCE_DEFAULT_INSUFFICIENT  # 30 — see module-level constant
     else:
         sorted_dates = sorted(t["date"] for t in timeline if t.get("date"))
         intervals = [
@@ -1684,7 +1761,11 @@ def _fallback_executive_summary(inputs: dict) -> dict:
         actions.append("逐个 review 高风险产品的差评样本，识别共性问题")
     if top_issues:
         actions.append(f"针对「{top_issues[0].get('label_display', '')}」制定短期改进计划")
-    if not actions:
+
+    # Design says 2-3 建议行动. Ensure at least 2, even for stable stance.
+    if len(actions) < 2:
+        actions.append("复盘本月 TOP 3 正面评论主题，沉淀可复用营销卖点")
+    if len(actions) < 2:
         actions.append("维持当前节奏，下月继续监控关键指标")
     actions = actions[:3]
 
@@ -1786,6 +1867,7 @@ def test_monthly_template_renders_executive_screen():
         scorecard={"scorecards": [], "summary": {"green": 5, "yellow": 1, "red": 1, "total": 7,
                                                   "with_safety_flag": 1}},
         lifecycle_cards=[],
+        lifecycle_insufficient=False, history_days=120,
         weekly_summaries=["第1周：健康 73", "第2周：健康 72", "第3周：健康 71", "第4周：健康 72"],
         snapshot={"reviews": [], "cumulative": {"reviews": []}},
         analytics={"kpis": {}, "self": {"risk_products": [], "top_negative_clusters": [],
@@ -1793,7 +1875,12 @@ def test_monthly_template_renders_executive_screen():
                    "competitor": {"top_positive_themes": [], "benchmark_examples": [],
                                    "negative_opportunities": []},
                    "appendix": {"image_reviews": []}},
-        charts={"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        charts={
+            "heatmap": None, "sentiment_own": None, "sentiment_comp": None,
+            "weekly_trend": {"type": "line", "data": {"labels": ["第1周", "第2周", "第3周", "第4周"],
+                                                       "datasets": [{"label": "健康", "data": [73, 72, 71, 72]}]},
+                              "options": {}},
+        },
         alert_level="yellow", alert_text="",
         safety_incidents=[],
         css_text="", js_text="",
@@ -1801,10 +1888,44 @@ def test_monthly_template_renders_executive_screen():
     )
     # Executive screen markers
     assert "需要关注" in html
-    # 4 weekly summaries
-    assert "第1周" in html
+    # 4-week trend canvas renders weekly_trend config as JSON
+    assert "weekly_trend" in html.lower() or "第1周" in html
+    assert "data-chart-config" in html
     # Light counts
     assert ">5<" in html or ">5 <" in html  # green count
+
+
+def test_monthly_template_renders_lifecycle_insufficient_notice():
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    template_dir = Path(__file__).resolve().parent.parent / "qbu_crawler" / "server" / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
+    template = env.get_template("monthly_report.html.j2")
+    html = template.render(
+        logical_date="2026-05-01", month_label="2026年04月",
+        executive={"stance": "stable", "stance_text": "稳定",
+                    "bullets": [], "actions": []},
+        kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%", "high_risk_count": 0,
+              "own_review_rows": 10, "ingested_review_rows": 10, "product_count": 7,
+              "own_product_count": 7, "competitor_product_count": 0,
+              "competitor_review_rows": 0, "own_negative_review_rows": 0, "own_positive_review_rows": 10},
+        kpi_delta={}, category_benchmark={"categories": {}, "fallback_mode": False, "pairings": []},
+        scorecard={"scorecards": [], "summary": {"green": 0, "yellow": 0, "red": 0, "total": 0,
+                                                  "with_safety_flag": 0}},
+        lifecycle_cards=[], lifecycle_insufficient=True, history_days=12,
+        weekly_summaries=[],
+        snapshot={"reviews": [], "cumulative": {"reviews": []}},
+        analytics={"kpis": {}, "self": {"risk_products": [], "top_negative_clusters": [],
+                                          "issue_cards": [], "recommendations": []},
+                   "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                                   "negative_opportunities": []},
+                   "appendix": {"image_reviews": []}},
+        charts={"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        alert_level="green", alert_text="",
+        safety_incidents=[], css_text="", js_text="", threshold=2,
+    )
+    assert "数据积累中" in html
+    assert "12" in html  # history_days
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1937,6 +2058,13 @@ Create `qbu_crawler/server/report_templates/monthly_report.html.j2`. Structure m
       <tr><th>SKU 总数</th><td>{{ kpis.product_count }}（自有 {{ kpis.own_product_count }} · 竞品 {{ kpis.competitor_product_count }}）</td></tr>
     </table>
 
+    {% if charts.weekly_trend %}
+    <h3 style="margin-top:24px;">4 周趋势</h3>
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.weekly_trend | tojson }}'></canvas>
+    </div>
+    {% endif %}
+
     {% if weekly_summaries %}
     <h3 style="margin-top:24px;">本月逐周态势</h3>
     {% for ws in weekly_summaries %}
@@ -1967,29 +2095,55 @@ Create `qbu_crawler/server/report_templates/monthly_report.html.j2`. Structure m
     {% endif %}
   </section>
 
-  {# Tab 3: 问题诊断 — issue cards with full lifecycle states #}
+  {# Tab 3: 问题诊断 — issue cards with full lifecycle states + competitor reference #}
   <section id="tab-issues" class="tab-panel" role="tabpanel">
     <h2 class="section-title">问题集群（生命周期视图）</h2>
-    {% if lifecycle_cards %}
+    {% if lifecycle_insufficient %}
+    <div class="notice" style="padding:12px 16px;background:#fefcbf;border-left:3px solid #975a16;margin-bottom:16px;">
+      <strong>数据积累中</strong>：当前仅有 {{ history_days }} 天历史数据（生命周期分析需要 ≥ 30 天），下月报告将显示完整状态分析。
+    </div>
+    {% elif lifecycle_cards %}
     {% for card in lifecycle_cards %}
-    <div class="issue-card">
-      <div class="issue-card-header">
+    <div class="issue-card" style="margin-bottom:16px;padding:12px 16px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+      <div class="issue-card-header" style="margin-bottom:8px;">
         <strong>{{ card.label_display }}</strong>
         <span class="lifecycle-badge ls-{{ card.state }}">{{ {"active":"活跃","receding":"收敛中","dormant":"沉默","recurrent":"复发"}.get(card.state, card.state) }}</span>
-        <span class="meta">{{ card.review_count }} 条 · 首现 {{ card.first_seen or "—" }} · 末现 {{ card.last_seen or "—" }}</span>
+        <span class="meta" style="font-size:12px;color:#718096;margin-left:8px;">
+          {{ card.review_count }} 条 · 首现 {{ card.first_seen or "—" }} · 末现 {{ card.last_seen or "—" }}
+        </span>
       </div>
+
       {% if card.history %}
-      <details>
-        <summary>状态变迁（{{ card.history|length }} 次）</summary>
-        <ul>
+      <details style="margin-bottom:8px;">
+        <summary style="cursor:pointer;font-size:12px;color:#4a5568;">状态变迁时间线（{{ card.history|length }} 次）</summary>
+        <ul style="margin:6px 0 0;padding-left:20px;font-size:12px;">
           {% for h in card.history %}<li>{{ h.date }} · {{ h.transition }} · {{ h.reason }}</li>{% endfor %}
         </ul>
       </details>
       {% endif %}
+
       {% if card.example_reviews %}
-      {% for r in card.example_reviews[:3] %}
-      <div class="quote-mini">"{{ r.get('body', '')[:200] }}" — {{ r.get('product_name', '') }}</div>
-      {% endfor %}
+      <div style="margin-top:8px;">
+        <div style="font-size:12px;color:#4a5568;margin-bottom:4px;">自有关键评论（按可信度排序）</div>
+        {% for r in card.example_reviews[:3] %}
+        <div class="quote-mini" style="font-size:12px;padding:4px 8px;background:#f7fafc;border-left:2px solid #e53e3e;margin-bottom:4px;">
+          "{{ r.get('body', '')[:200] }}" — {{ r.get('product_name', '') }}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if card.competitor_reference and card.competitor_reference.review_count > 0 %}
+      <div style="margin-top:8px;padding:8px 12px;background:#edf2f7;border-radius:6px;border-left:2px solid #4299e1;">
+        <div style="font-size:12px;color:#2c5282;margin-bottom:4px;">
+          竞品参照（同一问题标签，共 {{ card.competitor_reference.review_count }} 条竞品负面）
+        </div>
+        {% for r in card.competitor_reference.top_examples[:3] %}
+        <div class="quote-mini" style="font-size:12px;padding:4px 8px;background:#fff;margin-bottom:4px;">
+          "{{ r.get('body', '')[:200] }}" — {{ r.get('product_name', '') }}
+        </div>
+        {% endfor %}
+      </div>
       {% endif %}
     </div>
     {% endfor %}
@@ -2077,11 +2231,35 @@ Create `qbu_crawler/server/report_templates/monthly_report.html.j2`. Structure m
     {% endif %}
   </section>
 
-  {# Tab 7: 全景数据 — same as V3 panorama tab #}
+  {# Tab 7: 全景数据 — Chart.js configs (matches V3 pipeline) #}
   <section id="tab-panorama" class="tab-panel" role="tabpanel">
     <h2 class="section-title">全景数据</h2>
-    {% if charts.heatmap %}<img src="data:image/png;base64,{{ charts.heatmap }}" alt="热力图" style="max-width:100%;">{% endif %}
-    {% if charts.sentiment_own %}<img src="data:image/png;base64,{{ charts.sentiment_own }}" alt="自有情感分布" style="max-width:100%;">{% endif %}
+    {% if charts.heatmap and charts.heatmap.y_labels and charts.heatmap.y_labels|length >= 3 %}
+    <table class="heatmap-table">
+      <thead><tr><th></th>{% for x in charts.heatmap.x_labels %}<th>{{ x[:5] }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for y_idx in range(charts.heatmap.y_labels|length) %}
+        <tr>
+          <th>{{ charts.heatmap.y_labels[y_idx][:20] }}</th>
+          {% for x_idx in range(charts.heatmap.x_labels|length) %}
+          {% set val = charts.heatmap.z[y_idx][x_idx] if y_idx < charts.heatmap.z|length and x_idx < charts.heatmap.z[y_idx]|length else 0 %}
+          <td>{{ val }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if charts.sentiment_own %}
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
+    </div>
+    {% endif %}
+    {% if charts.sentiment_comp %}
+    <div class="chart-wrapper" style="height:240px;position:relative;">
+      <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
+    </div>
+    {% endif %}
   </section>
 
 </div>
@@ -2349,15 +2527,11 @@ def _generate_monthly_report(snapshot, send_email=True):
         _logger.exception("Monthly report: full generation failed for run %d", run_id)
         raise
 
-    # Empty month guard
-    if full_result.get("status") == "completed_no_change" and not full_result.get("html_path"):
-        _logger.info("Monthly report: no data for run %d, skipping", run_id)
-        return {
-            "mode": "monthly_report", "status": "completed_no_change", "run_id": run_id,
-            "snapshot_hash": snapshot.get("snapshot_hash", ""),
-            "products_count": 0, "reviews_count": 0,
-            "html_path": None, "excel_path": None, "analytics_path": None, "email": None,
-        }
+    # Note: no "completed_no_change" early-return here (unlike weekly). Monthly
+    # must always produce a report because executive summary, category benchmark,
+    # and scorecard are derived from cumulative data, which is never empty after
+    # the first daily run. An empty window simply means "no new activity this
+    # month" — the report still has value.
 
     analytics_path = full_result.get("analytics_path")
     analytics = {}
@@ -2387,8 +2561,23 @@ def _generate_monthly_report(snapshot, send_email=True):
         window_end = _date.fromisoformat(logical_date[:10])
     except (ValueError, TypeError):
         window_end = _date.today()
-    lifecycle_results = analytics_lifecycle.derive_all_lifecycles(cum_reviews, window_end=window_end)
-    lifecycle_cards = _build_lifecycle_cards(lifecycle_results, cum_reviews)
+
+    # P008 Section 5.6: lifecycle needs ≥30 days of history; otherwise show
+    # "数据积累中" rather than potentially misleading active/dormant labels.
+    history_days = _compute_history_span_days(cum_reviews, window_end)
+    lifecycle_insufficient = history_days < 30
+    if lifecycle_insufficient:
+        lifecycle_results = {}
+        lifecycle_cards = []
+        _logger.info(
+            "Monthly report: lifecycle suppressed, only %d days of history (<30)",
+            history_days,
+        )
+    else:
+        lifecycle_results = analytics_lifecycle.derive_all_lifecycles(
+            cum_reviews, window_end=window_end,
+        )
+        lifecycle_cards = _build_lifecycle_cards(lifecycle_results, cum_reviews)
 
     # ── Module 4: LLM executive summary ──
     kpis = analytics.get("kpis") or {}
@@ -2409,8 +2598,10 @@ def _generate_monthly_report(snapshot, send_email=True):
     }
     executive = analytics_executive.generate_executive_summary(executive_inputs)
 
-    # ── Weekly summaries (4-week recap) ──
-    weekly_summaries = _build_weekly_recap(snapshot.get("data_since"), snapshot.get("data_until"))
+    # ── Weekly summaries (4-week recap) + Chart.js trend config ──
+    weekly_summaries, weekly_trend_config = _build_weekly_recap(
+        snapshot.get("data_since"), snapshot.get("data_until"),
+    )
 
     # Persist enriched analytics
     if analytics_path:
@@ -2430,7 +2621,8 @@ def _generate_monthly_report(snapshot, send_email=True):
     # Render monthly HTML
     html_path = _render_monthly_html(
         snapshot, analytics, executive, kpi_delta, category_benchmark,
-        scorecard, lifecycle_cards, weekly_summaries, safety_incidents, full_result,
+        scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+        weekly_summaries, weekly_trend_config, safety_incidents, full_result,
     )
 
     # Generate 6-sheet monthly Excel (extends the 4-sheet pipeline)
@@ -2479,6 +2671,34 @@ def _safe_delta(current, previous):
         return None
 
 
+def _compute_history_span_days(reviews: list[dict], window_end) -> int:
+    """Days from earliest review scraped_at / date_published_parsed to window_end.
+
+    Used to decide whether lifecycle state machine has enough history to produce
+    meaningful active/dormant labels (Section 5.6 rule: ≥30 days required).
+    """
+    from datetime import date as _date, datetime as _dt
+    earliest = None
+    for r in reviews or []:
+        for key in ("scraped_at", "date_published_parsed", "date_published"):
+            val = r.get(key)
+            if not val:
+                continue
+            if isinstance(val, (_date, _dt)):
+                d = val.date() if isinstance(val, _dt) else val
+            else:
+                try:
+                    d = _date.fromisoformat(str(val)[:10])
+                except (ValueError, TypeError):
+                    continue
+            if earliest is None or d < earliest:
+                earliest = d
+            break
+    if earliest is None:
+        return 0
+    return max(0, (window_end - earliest).days)
+
+
 def _load_safety_incidents_for_window(data_since: str | None, data_until: str | None) -> list[dict]:
     if not data_since or not data_until:
         return []
@@ -2513,35 +2733,53 @@ def _load_previous_scorecards(current_run_id: int) -> dict[str, dict]:
 
 
 def _build_lifecycle_cards(lifecycle_results: dict, all_reviews: list[dict]) -> list[dict]:
-    """Convert lifecycle state-machine output into renderable issue cards (own only)."""
+    """Convert lifecycle state-machine output into renderable issue cards (own only).
+
+    Each card also attaches a ``competitor_reference`` block — negative reviews
+    from competitors for the same label_code — so the monthly report can show
+    cross-ownership context (design doc Section 10 validation item).
+    """
+    from datetime import date as _date
+    from qbu_crawler.server.report_common import credibility_weight, _label_display
+
     cards = []
-    for (label_code, ownership), data in lifecycle_results.items():
-        if ownership != "own":
-            continue
-        # Find example reviews matching label_code (top 3 by RCW)
-        from qbu_crawler.server.report_common import credibility_weight
-        from datetime import date as _date
-        today = _date.today()
-        relevant = []
+    today = _date.today()
+
+    def _reviews_matching(label_code: str, ownership: str) -> list[dict]:
+        out = []
         for r in all_reviews:
+            if r.get("ownership") != ownership:
+                continue
             raw = r.get("analysis_labels") or "[]"
             try:
                 labels = json.loads(raw) if isinstance(raw, str) else raw
             except (json.JSONDecodeError, TypeError):
                 labels = []
             if any(lb.get("code") == label_code and lb.get("polarity") == "negative" for lb in labels):
-                relevant.append(r)
-        relevant.sort(key=lambda r: credibility_weight(r, today=today), reverse=True)
+                out.append(r)
+        out.sort(key=lambda r: credibility_weight(r, today=today), reverse=True)
+        return out
+
+    for (label_code, ownership), data in lifecycle_results.items():
+        if ownership != "own":
+            continue
+
+        own_examples = _reviews_matching(label_code, "own")
+        comp_examples = _reviews_matching(label_code, "competitor")
 
         cards.append({
             "label_code": label_code,
-            "label_display": label_code.replace("_", " ").title(),  # caller may override with display map
+            "label_display": _label_display(label_code),  # Uses report_common._LABEL_DISPLAY map
             "state": data["state"],
             "history": data["history"],
             "review_count": data["review_count"],
             "first_seen": data["first_seen"],
             "last_seen": data["last_seen"],
-            "example_reviews": relevant[:3],
+            "example_reviews": own_examples[:3],
+            "competitor_reference": {
+                "review_count": len(comp_examples),
+                "top_examples": comp_examples[:3],
+            },
         })
 
     state_priority = {"recurrent": 0, "active": 1, "receding": 2, "dormant": 3}
@@ -2549,40 +2787,105 @@ def _build_lifecycle_cards(lifecycle_results: dict, all_reviews: list[dict]) -> 
     return cards
 
 
-def _build_weekly_recap(data_since: str | None, data_until: str | None) -> list[str]:
-    """Produce one-line summaries per week from completed weekly runs in the window."""
+def _build_weekly_recap(
+    data_since: str | None,
+    data_until: str | None,
+) -> tuple[list[str], dict | None]:
+    """Produce (text summaries, Chart.js line-config) for weekly runs in the window.
+
+    M3-A: Tab 1 of the monthly report must show a 4-week trend line (design doc
+    Section 6.2). This returns both the one-line summaries AND a Chart.js config
+    consumable by ``<canvas data-chart-config='{{ config | tojson }}'>``.
+
+    Partial-overlap SQL filter: a weekly window straddling the month boundary
+    still counts (e.g. [3-30, 4-6) for an April monthly report).
+    """
     if not data_since or not data_until:
-        return []
+        return [], None
     try:
         conn = models.get_conn()
         rows = conn.execute(
             "SELECT logical_date, analytics_path FROM workflow_runs"
             " WHERE report_tier = 'weekly' AND status = 'completed'"
-            "   AND data_since >= ? AND data_until <= ?"
+            "   AND data_since < ? AND data_until > ?"
             " ORDER BY logical_date ASC",
-            (data_since, data_until),
+            (data_until, data_since),
         ).fetchall()
         conn.close()
     except Exception:
-        return []
+        return [], None
 
-    summaries = []
+    summaries: list[str] = []
+    labels: list[str] = []
+    health_series: list[float] = []
+    neg_series: list[float] = []
     for idx, row in enumerate(rows, start=1):
+        week_label = f"第{idx}周"
+        labels.append(week_label)
         try:
             wkly = json.loads(Path(row["analytics_path"]).read_text(encoding="utf-8"))
             kpis = wkly.get("kpis") or {}
+            health = kpis.get("health_index")
+            neg_rate_display = kpis.get("own_negative_review_rate_display") or "—"
+            health_series.append(float(health) if health is not None else None)
+            neg = kpis.get("own_negative_review_rate")
+            neg_series.append(float(neg) if neg is not None else None)
             summaries.append(
-                f"第{idx}周（{row['logical_date']}）：健康 {kpis.get('health_index', '—')} · "
-                f"差评率 {kpis.get('own_negative_review_rate_display', '—')} · "
-                f"高风险 {kpis.get('high_risk_count', 0)}"
+                f"{week_label}（{row['logical_date']}）：健康 {health if health is not None else '—'} · "
+                f"差评率 {neg_rate_display} · 高风险 {kpis.get('high_risk_count', 0)}"
             )
         except Exception:
-            summaries.append(f"第{idx}周（{row['logical_date']}）：数据缺失")
-    return summaries
+            summaries.append(f"{week_label}（{row['logical_date']}）：数据缺失")
+            health_series.append(None)
+            neg_series.append(None)
+
+    if not labels or all(v is None for v in health_series):
+        return summaries, None
+
+    # Chart.js v3/v4 line-chart config consumable by daily_report_v3.js handler
+    trend_config = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "健康指数",
+                    "data": health_series,
+                    "borderColor": "#93543f",
+                    "backgroundColor": "rgba(147,84,63,0.12)",
+                    "tension": 0.3,
+                    "fill": True,
+                    "spanGaps": True,
+                    "yAxisID": "y",
+                },
+                {
+                    "label": "差评率 (%)",
+                    "data": neg_series,
+                    "borderColor": "#b7633f",
+                    "backgroundColor": "transparent",
+                    "tension": 0.3,
+                    "spanGaps": True,
+                    "yAxisID": "y1",
+                },
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "scales": {
+                "y":  {"type": "linear", "position": "left",  "title": {"display": True, "text": "健康指数"}},
+                "y1": {"type": "linear", "position": "right", "grid": {"drawOnChartArea": False},
+                        "title": {"display": True, "text": "差评率 (%)"}},
+            },
+            "plugins": {"legend": {"position": "bottom"}},
+        },
+    }
+    return summaries, trend_config
 
 
 def _render_monthly_html(snapshot, analytics, executive, kpi_delta, category_benchmark,
-                         scorecard, lifecycle_cards, weekly_summaries, safety_incidents,
+                         scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+                         weekly_summaries, weekly_trend_config, safety_incidents,
                          full_result):
     """Render monthly_report.html.j2 to disk, return path."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -2603,6 +2906,13 @@ def _render_monthly_html(snapshot, analytics, executive, kpi_delta, category_ben
     except (ValueError, TypeError):
         month_label = logical_date[:7]
 
+    # V3 HTML uses Chart.js configs, not base64 images. Pull the fragments that
+    # `generate_full_report_from_snapshot` already built into analytics, then
+    # inject the monthly-specific weekly_trend chart.
+    charts = dict(analytics.get("charts") or {})
+    if weekly_trend_config is not None:
+        charts["weekly_trend"] = weekly_trend_config
+
     html = template.render(
         logical_date=logical_date,
         month_label=month_label,
@@ -2612,10 +2922,12 @@ def _render_monthly_html(snapshot, analytics, executive, kpi_delta, category_ben
         category_benchmark=category_benchmark,
         scorecard=scorecard,
         lifecycle_cards=lifecycle_cards,
+        lifecycle_insufficient=lifecycle_insufficient,
+        history_days=history_days,
         weekly_summaries=weekly_summaries,
         snapshot=snapshot,
         analytics=analytics,
-        charts=analytics.get("charts") or {"heatmap": None, "sentiment_own": None, "sentiment_comp": None},
+        charts=charts,
         alert_level=analytics.get("alert_level") or "green",
         alert_text=analytics.get("alert_text") or "",
         safety_incidents=safety_incidents,
@@ -2814,10 +3126,17 @@ def _generate_monthly_excel(
     if not base_path:
         return ""
 
-    # 2. Rename to monthly-* (the 4-sheet writer outputs scrape-report-YYYY-MM-DD.xlsx)
+    # 2. Rename to monthly-* (the 4-sheet writer outputs scrape-report-YYYY-MM-DD.xlsx).
+    # Mi1: an existing monthly-YYYY-MM.xlsx must not silently clobber — the 4-sheet
+    # writer already wrote to scrape-report-YYYY-MM-DD.xlsx, so a rename conflict
+    # indicates a prior monthly output for the same month. Overwrite is acceptable
+    # because the new output supersedes the old, but log for traceability.
     base_p = Path(base_path)
     monthly_filename = f"monthly-{report_date.strftime('%Y-%m')}.xlsx"
     monthly_path = base_p.with_name(monthly_filename)
+    if monthly_path.exists():
+        logger.info("monthly Excel already exists at %s, overwriting", monthly_path)
+        monthly_path.unlink()
     if base_p.exists():
         base_p.rename(monthly_path)
 
@@ -3085,6 +3404,10 @@ git commit -m "docs(p008-phase4): update CLAUDE.md + add D014 devlog"
 - [ ] 月报 HTML 第 1 屏含 stance + 3 KPI 卡片 + 3 bullet + 行动建议
 - [ ] 月报 7 个 Tab 全部渲染（总览/本月变化/问题诊断/品类对标/产品计分卡/竞品对标/全景数据）
 - [ ] 问题诊断 Tab 展示 active/receding/dormant/recurrent 四态
+- [ ] 问题卡片含竞品参照区块（同 label_code 的竞品负面评论 top 3）
+- [ ] 部署不满 30 天时 Tab 3 显示"数据积累中"，不展示状态标签
+- [ ] Tab 1 展示 4 周趋势线（Chart.js canvas，双 Y 轴：健康指数 + 差评率）
+- [ ] 月初恰逢周一时，MonthlySchedulerWorker 等到当日 daily + 覆盖本月的 weekly 全部终态才提交
 - [ ] 品类对标显示按 grinder/slicer/mixer 等分组；样本不足品类显示"样本不足"
 - [ ] 品类映射缺失时 Tab 自动降级为直接竞品配对模式
 - [ ] SKU 计分卡展示红黄绿灯 + 趋势方向（improving/steady/worsening/new）
@@ -3103,8 +3426,44 @@ git commit -m "docs(p008-phase4): update CLAUDE.md + add D014 devlog"
 |------|------|
 | 月报 HTML 模板独立成 `monthly_report.html.j2`（而非沿用 V3 复用模式） | 高管首屏 + 4 个新 Tab（品类对标 / 计分卡 / 完整生命周期 / 月度逐周回顾）显著超出 V3 的 6-Tab 结构，独立模板比条件渲染清晰；继续共享 `daily_report_v3.css` / `.js`，保持视觉一致性 |
 | `analytics_lifecycle.derive_issue_lifecycle()` 内部把 R3（silence_window）放在每个事件循环开头检查 | 状态机走时间线时，每条新评论事件之前都需要先评估累计沉默时长是否触发 R3，否则会在已 dormant 的状态上误触 R1；设计稿 R1-R6 顺序未明示 R3 优先级，按工程实践显式排序 |
-| `MonthlySchedulerWorker` 不等 daily run 终态 | 月初触发时上月最后一天的 daily 已经是终态，且 monthly 仅消费 cumulative 数据；如果未来发现并发问题再加 `_all_daily_runs_terminal` 检查 |
+| 生命周期状态机信息不足（<2 事件）时使用 30 天默认沉默窗口，而非 clamp 下限 14 天 | 14 天对单条评论+轻微沉默场景过于激进，会误将 active 判为 dormant；30 天符合"仅靠单条评论无法判断是否收敛"的直觉。Safety 仍按 R6 翻倍到 60 天 |
 | `_generate_monthly_excel` 通过加载 4-sheet 基础 workbook 后 `create_sheet` 追加，而非重写整个 Excel 生成函数 | 复用 `_generate_analytical_excel` 的 4-sheet 逻辑（评论明细 / 产品概览 / 问题标签 / 趋势数据），仅新增 2 sheet；DRY 原则 |
+| 月报 `_generate_monthly_report` 移除 `completed_no_change` 早退分支 | 月报必须始终出报——高管摘要/品类对标/计分卡都基于累积数据；"无窗口变化 ≠ 无报告价值"。与 Phase 3 周报语义差异已在注释中说明 |
+| `_all_weekly_runs_terminal` 使用部分重叠 SQL（`data_since < until AND data_until > since`） | 周窗口常跨月边界（如 [3-30, 4-6)），`>=/<=` 全包含会漏过，导致 monthly 在周报未完成时提前触发 |
+| `charts.weekly_trend` 内嵌 Chart.js 配置，而非 plotly HTML 片段 | V3 模板已基于 Chart.js（`daily_report_v3.html.j2:380` 起），沿用同机制避免双引擎；`report_charts._build_trend_line()`（plotly）仅用于 PDF 路径，与 V3 HTML 路径分离 |
+
+---
+
+## Phase 1-3 代码基线对齐（2026-04-17 审计）
+
+本计划基于以下已合并 commit 的 API 签名，若实施前基线已变动需重新验证：
+
+| API | 文件:行 | 签名 |
+|-----|---------|------|
+| `models.get_previous_completed_run` | `models.py:787` | `(current_run_id: int, report_tier: str\|None=None)` |
+| `models.save_safety_incident` | `models.py:2020` | `(review_id, product_sku, safety_level, failure_mode, evidence_snapshot, evidence_hash)` |
+| `models.create_workflow_run` | `models.py:584` | `(run_dict: dict) -> dict` ON CONFLICT(trigger_key) DO NOTHING |
+| `models.update_workflow_run` 白名单 | `models.py:688-689` | 已含 `report_mode` + `report_tier` |
+| `report_snapshot._inject_meta` | `report_snapshot.py:22` | `(snapshot, tier="daily", expected_days=None, actual_days=None)` |
+| `report_snapshot.freeze_report_snapshot` | `report_snapshot.py:302,380` | 已在 line 380 调用 `_inject_meta(snapshot, tier=run_tier)` ✓ 月报自动生效 |
+| `report_snapshot.load_previous_report_context` | `report_snapshot.py:103` | `(run_id, report_tier=None)` |
+| `report_snapshot._get_email_recipients` | `report_snapshot.py:40` | `() -> list[str]`（fallback: EMAIL_RECIPIENTS env → openclaw file） |
+| `report.send_email` | `report.py:424` | 月报调用路径一致 |
+| `report._generate_analytical_excel` | `report.py:699` | `(products, reviews, analytics=None, report_date=None)` |
+| `workflows._all_daily_runs_terminal` | `workflows.py:127` | `(since, until) -> bool` ✓ monthly precheck 直接复用 |
+| `workflows.build_weekly_trigger_key` | `workflows.py:123` | `build_monthly_trigger_key` 紧随其后定义 |
+| `report_common._label_display` | `report_common.py:435` | `(label_code)` 返回中文显示名（私有但跨模块已用） |
+| `report_common.credibility_weight` | `report_common.py` | Phase 3 已定义，月报 `_build_lifecycle_cards` 直接复用 |
+| `report_common.compute_dispersion` | `report_common.py` | Phase 3 已定义，本计划未新增 dispersion，仅通过 `_generate_weekly_report` 已注入 analytics 消费 |
+| `report_common.tier_date_window` | `report_common.py:103` | 已支持 `daily/weekly/monthly` 三档 |
+| `report_charts.build_chartjs_configs` | `report_charts.py:571` | V3 HTML 生成 Chart.js config 的唯一路径。月报趋势图遵循同模式（`data-chart-config` + `tojson`） |
+
+**Phase 3 已就绪、月报直接复用的基础设施**：
+- `_advance_periodic_run()` 在 `workflows.py:691` 起，已通过 `run_tier in ("weekly", "monthly")` 判断路由（Phase 3 Task 7）
+- `models.get_label_anomaly_stats()` 可用于月报标签质量统计展示（可选）
+- `should_send_quiet_email()` 已退役 `weekly_digest` 分支（`report_snapshot.py:87`），月报不受影响
+
+**月报独有的新建/改造**：完全隔离，不影响日报/周报既有路径。
 
 ---
 
