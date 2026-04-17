@@ -1175,7 +1175,7 @@ def _generate_monthly_report(snapshot, send_email=True):
         weekly_summaries, weekly_trend_config, safety_incidents, full_result,
     )
 
-    # Generate 6-sheet monthly Excel (Task 13 will replace stub)
+    # Generate 6-sheet monthly Excel (evaluates category benchmark + scorecard into sheets 5+6)
     from qbu_crawler.server import report as report_mod
     monthly_excel_path = report_mod._generate_monthly_excel(
         products=cum_products,
@@ -1253,6 +1253,7 @@ def _compute_history_span_days(reviews, window_end):
 def _load_safety_incidents_for_window(data_since, data_until):
     if not data_since or not data_until:
         return []
+    conn = None
     try:
         conn = models.get_conn()
         rows = conn.execute(
@@ -1260,11 +1261,13 @@ def _load_safety_incidents_for_window(data_since, data_until):
             " ORDER BY detected_at DESC",
             (data_since, data_until),
         ).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
     except Exception:
         _logger.debug("safety_incidents query failed", exc_info=True)
         return []
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _load_previous_scorecards(current_run_id):
@@ -1345,6 +1348,7 @@ def _build_weekly_recap(data_since, data_until):
     """
     if not data_since or not data_until:
         return [], None
+    conn = None
     try:
         conn = models.get_conn()
         rows = conn.execute(
@@ -1354,9 +1358,11 @@ def _build_weekly_recap(data_since, data_until):
             " ORDER BY logical_date ASC",
             (data_until, data_since),
         ).fetchall()
-        conn.close()
     except Exception:
         return [], None
+    finally:
+        if conn is not None:
+            conn.close()
 
     summaries = []
     labels = []
@@ -1547,13 +1553,16 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     # P008 Phase 2: Check report_tier — new daily runs use three-block pipeline
     run_tier = None
     if run_id:
+        conn = None
         try:
             conn = models.get_conn()
             row = conn.execute("SELECT report_tier FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
-            conn.close()
             run_tier = row["report_tier"] if row else None
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     if run_tier == "daily":
         return _generate_daily_briefing(snapshot, send_email)

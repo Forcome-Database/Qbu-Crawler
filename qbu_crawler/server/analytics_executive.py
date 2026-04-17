@@ -145,6 +145,7 @@ def generate_executive_summary(inputs: dict) -> dict:
         response = client.chat.completions.create(
             model=config.LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
+            timeout=60.0,  # seconds; prevents indefinite hang if LLM endpoint stalls
         )
         raw = (response.choices[0].message.content or "").strip()
         from qbu_crawler.server.report_llm import _parse_llm_response
