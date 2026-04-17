@@ -188,3 +188,107 @@ def inject_new_reviews(
             (review_id, label_code, polarity, scraped_at, scraped_at),
         )
     return inserted_ids
+
+
+def mutate_product(
+    conn,
+    *,
+    product_id: int,
+    logical_date: date_cls,
+    price_delta_pct: float | None = None,
+    stock_status: str | None = None,
+    rating_delta: float | None = None,
+) -> None:
+    """Update products + append product_snapshots row on logical_date."""
+    row = conn.execute(
+        "SELECT price, stock_status, rating, review_count FROM products WHERE id=?",
+        (product_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"product {product_id} not found")
+    price, stock, rating, rc = row
+    new_price = price * (1 + price_delta_pct) if price_delta_pct else price
+    new_stock = stock_status or stock
+    new_rating = (rating or 0) + (rating_delta or 0) if rating_delta else rating
+    scraped_at = logical_date.strftime("%Y-%m-%dT09:15:00")
+    conn.execute(
+        """UPDATE products SET price=?, stock_status=?, rating=?, scraped_at=?
+           WHERE id=?""",
+        (new_price, new_stock, new_rating, scraped_at, product_id),
+    )
+    conn.execute(
+        """INSERT INTO product_snapshots
+           (product_id, price, stock_status, review_count, rating, scraped_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (product_id, new_price, new_stock, rc, new_rating, scraped_at),
+    )
+
+
+def inject_safety_incidents(
+    conn,
+    *,
+    review_ids: list[int],
+    safety_level: str = "critical",
+    failure_mode: str = "foreign_object",
+) -> None:
+    for rid in review_ids:
+        rsku = conn.execute(
+            "SELECT p.sku FROM reviews r JOIN products p ON p.id=r.product_id WHERE r.id=?",
+            (rid,),
+        ).fetchone()
+        sku = rsku[0] if rsku else None
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        conn.execute(
+            """INSERT INTO safety_incidents
+               (review_id, product_sku, safety_level, failure_mode,
+                evidence_snapshot, evidence_hash, detected_at, created_at)
+               VALUES (?, ?, ?, ?, 'sim-evidence', 'sim-hash', ?, ?)""",
+            (rid, sku, safety_level, failure_mode, ts, ts),
+        )
+
+
+def force_translation_stall(
+    conn,
+    *,
+    logical_date: date_cls,
+    pending_fraction: float = 0.3,
+) -> int:
+    """Mark `pending_fraction` of reviews scraped on this date as stalled."""
+    date_prefix = logical_date.strftime("%Y-%m-%d")
+    rows = conn.execute(
+        "SELECT id FROM reviews WHERE scraped_at LIKE ? || '%'",
+        (date_prefix,),
+    ).fetchall()
+    if not rows:
+        return 0
+    n = max(1, int(len(rows) * pending_fraction))
+    ids = [r[0] for r in rows[:n]]
+    conn.execute(
+        f"""UPDATE reviews SET translate_status='pending', translate_retries=3
+            WHERE id IN ({','.join('?'*len(ids))})""",
+        ids,
+    )
+    return len(ids)
+
+
+def seed_historical_pattern(
+    conn,
+    *,
+    pool: BodyPool,
+    product_id: int,
+    label_code: str,
+    polarity: str,
+    dates: list[date_cls],
+    count_per_date: int = 1,
+) -> list[int]:
+    """Inject N reviews per date for a label, establishing history
+    so that avg_interval and silence_window make sense for R3/R4 triggers."""
+    all_ids = []
+    for d in dates:
+        ids = inject_new_reviews(
+            conn, pool=pool, product_id=product_id,
+            logical_date=d, count=count_per_date,
+            label_code=label_code, polarity=polarity,
+        )
+        all_ids.extend(ids)
+    return all_ids
