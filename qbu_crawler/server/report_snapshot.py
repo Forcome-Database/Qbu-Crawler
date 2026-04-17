@@ -1642,7 +1642,12 @@ def _render_full_email_html(snapshot, analytics):
     prev_analytics_ctx = None
     prev_snapshot = None
     run_id = snapshot.get("run_id", 0)
-    _email_tier = snapshot.get("_meta", {}).get("report_tier") or "daily"
+    _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
+    if not _snap_meta_tier:
+        _logger.warning(
+            "snapshot missing _meta.report_tier, defaulting to 'daily'"
+        )
+    _email_tier = _snap_meta_tier or "daily"
     if run_id:
         prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=_email_tier)
     changes = detect_snapshot_changes(snapshot, prev_snapshot)
@@ -1805,7 +1810,12 @@ def generate_full_report_from_snapshot(
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         # P008: compute snapshot changes for Tab 2
         try:
-            _snap_tier = snapshot.get("_meta", {}).get("report_tier") or "daily"
+            _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
+            if not _snap_meta_tier:
+                _logger.warning(
+                    "snapshot missing _meta.report_tier, defaulting to 'daily'"
+                )
+            _snap_tier = _snap_meta_tier or "daily"
             _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0), report_tier=_snap_tier)
             _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
         except Exception:
