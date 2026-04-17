@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -218,9 +219,14 @@ class NotifierWorker:
             return True
 
     def _maybe_cleanup(self):
-        import time as _time
-        now = _time.monotonic()
-        if now - getattr(self, "_last_cleanup_ts", 0.0) < config.NOTIFICATION_CLEANUP_INTERVAL_S:
+        """Run cleanup_old_notifications at most once per NOTIFICATION_CLEANUP_INTERVAL_S.
+
+        Non-fatal: cleanup failures are logged but never propagate. Advances
+        `_last_cleanup_ts` even on failure so a broken DB path does not cause
+        per-tick hammering; recovery happens on the next interval.
+        """
+        now = time.monotonic()
+        if now - self._last_cleanup_ts < config.NOTIFICATION_CLEANUP_INTERVAL_S:
             return
         try:
             removed = models.cleanup_old_notifications(
