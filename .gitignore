@@ -14,6 +14,9 @@ data/
 # Seed/config CSVs are intentionally tracked
 !data/category_map.csv
 
+# Simulation working data
+data/sim/
+
 # Environment variables
 .env
 .env.*
