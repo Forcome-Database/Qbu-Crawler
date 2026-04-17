@@ -12,7 +12,13 @@ from qbu_crawler.server.notifier import (
 )
 from qbu_crawler.server.task_manager import TaskManager
 from qbu_crawler.server.translator import TranslationWorker
-from qbu_crawler.server.workflows import DailySchedulerWorker, InProcessTaskSubmitter, WorkflowWorker
+from qbu_crawler.server.workflows import (
+    DailySchedulerWorker,
+    InProcessTaskSubmitter,
+    MonthlySchedulerWorker,
+    WeeklySchedulerWorker,
+    WorkflowWorker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +41,16 @@ class ServerRuntime:
         notifier: NotifierWorker | None = None,
         workflow_worker: WorkflowWorker | None = None,
         daily_scheduler: DailySchedulerWorker | None = None,
+        weekly_scheduler: WeeklySchedulerWorker | None = None,
+        monthly_scheduler: MonthlySchedulerWorker | None = None,
     ):
         self.translator = translator
         self.task_manager = task_manager
         self.notifier = notifier
         self.workflow_worker = workflow_worker
         self.daily_scheduler = daily_scheduler
+        self.weekly_scheduler = weekly_scheduler
+        self.monthly_scheduler = monthly_scheduler
         self._started = False
 
     def start(self):
@@ -53,11 +63,19 @@ class ServerRuntime:
             self.workflow_worker.start()
         if self.daily_scheduler is not None:
             self.daily_scheduler.start()
+        if self.weekly_scheduler is not None:
+            self.weekly_scheduler.start()
+        if self.monthly_scheduler is not None:
+            self.monthly_scheduler.start()
         self._started = True
 
     def stop(self):
         if not self._started:
             return
+        if self.monthly_scheduler is not None:
+            self.monthly_scheduler.stop()
+        if self.weekly_scheduler is not None:
+            self.weekly_scheduler.stop()
         if self.daily_scheduler is not None:
             self.daily_scheduler.stop()
         if self.workflow_worker is not None:
@@ -113,12 +131,17 @@ def build_runtime() -> ServerRuntime:
             notification_target=config.WORKFLOW_NOTIFICATION_TARGET,
         )
 
+    weekly_scheduler = WeeklySchedulerWorker()
+    monthly_scheduler = MonthlySchedulerWorker()
+
     return ServerRuntime(
         translator=translator,
         task_manager=task_manager,
         notifier=notifier,
         workflow_worker=workflow_worker,
         daily_scheduler=daily_scheduler,
+        weekly_scheduler=weekly_scheduler,
+        monthly_scheduler=monthly_scheduler,
     )
 
 
@@ -137,3 +160,5 @@ task_manager = runtime.task_manager
 notifier = runtime.notifier
 workflow_worker = runtime.workflow_worker
 daily_scheduler = runtime.daily_scheduler
+weekly_scheduler = runtime.weekly_scheduler
+monthly_scheduler = runtime.monthly_scheduler

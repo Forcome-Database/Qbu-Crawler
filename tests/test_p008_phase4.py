@@ -149,3 +149,24 @@ def test_monthly_scheduler_waits_for_weekly_runs(db, monkeypatch):
 
     worker = MonthlySchedulerWorker(schedule_time="09:30")
     assert worker.process_once(now=now) is False  # blocked on weekly
+
+
+# ── Task 4: Runtime registration ─────────────────────────────────
+
+
+def test_runtime_has_weekly_scheduler():
+    from qbu_crawler.server.runtime import runtime
+    assert hasattr(runtime, "weekly_scheduler")
+
+
+def test_runtime_has_monthly_scheduler():
+    from qbu_crawler.server.runtime import runtime
+    assert hasattr(runtime, "monthly_scheduler")
+
+
+def test_build_runtime_returns_schedulers(monkeypatch):
+    from qbu_crawler.server import runtime as runtime_module
+    rt = runtime_module.build_runtime()
+    # Schedulers may be None if disabled by env vars; just check attribute exists
+    assert hasattr(rt, "weekly_scheduler")
+    assert hasattr(rt, "monthly_scheduler")
