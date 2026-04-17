@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -187,17 +188,50 @@ def _read_existing_skus(csv_path: str) -> set[str]:
         return {(row.get("sku") or "").strip() for row in reader if row.get("sku")}
 
 
-def _append_csv(results: list[CategoryResult], csv_path: str) -> None:
-    """Append rows to csv, preserving header and existing manual edits."""
+class CategoryMapLocked(RuntimeError):
+    """Raised when the CSV lock cannot be acquired within timeout."""
+
+
+def _acquire_lock(csv_path: str, timeout: float) -> Path:
+    """Cross-platform exclusive lock using O_CREAT|O_EXCL sentinel file."""
+    import time as _time
+    lock_path = Path(csv_path + ".lock")
+    deadline = _time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return lock_path
+        except FileExistsError:
+            if _time.monotonic() >= deadline:
+                raise CategoryMapLocked(
+                    f"Could not acquire {lock_path} within {timeout}s"
+                )
+            _time.sleep(0.05)
+
+
+def _append_csv(
+    results: list[CategoryResult],
+    csv_path: str,
+    lock_timeout: float = 5.0,
+) -> None:
+    """Append rows to csv under exclusive lock. Preserves existing manual edits."""
     path = Path(csv_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    file_exists = path.exists()
-    with open(path, "a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["sku", "category", "sub_category", "price_band_override"])
-        for r in results:
-            writer.writerow([r["sku"], r["category"], r["sub_category"], ""])
+    lock_path = _acquire_lock(csv_path, lock_timeout)
+    try:
+        file_exists = path.exists()
+        with open(path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["sku", "category", "sub_category", "price_band_override"])
+            for r in results:
+                writer.writerow([r["sku"], r["category"], r["sub_category"], ""])
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def sync_new_skus(db_path: str | None = None, csv_path: str | None = None) -> int:

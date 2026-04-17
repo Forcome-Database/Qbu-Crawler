@@ -307,3 +307,64 @@ def test_infer_categories_isolates_failed_batches(monkeypatch):
     assert by_sku["X"]["category"] == "grinder"
     # Exactly 2 LLM calls were attempted (one per batch)
     assert calls["n"] == 2
+
+
+def test_append_csv_uses_exclusive_lock(tmp_path):
+    """If a .lock sentinel file already exists, _append_csv must raise
+    CategoryMapLocked; removing the lock lets it succeed."""
+    import pytest
+    from qbu_crawler.server import category_inferrer
+
+    csv_path = tmp_path / "cat.csv"
+    lock_path = tmp_path / "cat.csv.lock"
+    lock_path.write_text("held-by-someone-else")
+
+    with pytest.raises(category_inferrer.CategoryMapLocked):
+        category_inferrer._append_csv(
+            [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+            str(csv_path),
+            lock_timeout=0.3,
+        )
+
+    # Release the lock
+    lock_path.unlink()
+
+    category_inferrer._append_csv(
+        [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+        str(csv_path),
+        lock_timeout=0.3,
+    )
+    assert csv_path.exists()
+    # Lock file was cleaned up
+    assert not lock_path.exists()
+    # Row was written with the expected header
+    content = csv_path.read_text()
+    assert "sku,category,sub_category,price_band_override" in content
+    assert "A,grinder,," in content
+
+
+def test_append_csv_releases_lock_on_exception(tmp_path, monkeypatch):
+    """If the write step fails mid-operation, the lock file must still be released."""
+    from qbu_crawler.server import category_inferrer
+
+    csv_path = tmp_path / "cat.csv"
+
+    # Force the inner open() to blow up to simulate disk full / permission denied
+    real_open = open
+
+    def _bad_open(path, *args, **kwargs):
+        if str(path).endswith("cat.csv"):
+            raise OSError("simulated disk full")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _bad_open)
+
+    with __import__("pytest").raises(OSError):
+        category_inferrer._append_csv(
+            [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+            str(csv_path),
+            lock_timeout=0.3,
+        )
+
+    # Lock file must be gone even though the write failed
+    assert not (tmp_path / "cat.csv.lock").exists()
