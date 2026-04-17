@@ -291,3 +291,56 @@ def test_derive_category_benchmark_unknown_ownership_counted_as_unmapped():
     assert result["unmapped_count"] == 3
     # No category entry produced (no ok status, no insufficient_samples, nothing)
     assert "grinder" not in result["categories"]
+
+
+# ── Task 7: derive_product_scorecard ────────────────────────────
+
+
+def test_scorecard_green_low_risk():
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": "O1", "name": "Grinder", "ownership": "own", "rating": 4.7, "review_count": 100}]
+    risk_products = [{"sku": "O1", "risk_score": 5, "negative_rate": 0.02, "negative_count": 2, "review_count": 100}]
+    result = derive_product_scorecard(products, risk_products, safety_incidents=[])
+    own = next(c for c in result["scorecards"] if c["sku"] == "O1")
+    assert own["light"] == "green"
+
+
+def test_scorecard_yellow_medium_risk():
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": "O1", "name": "Grinder", "ownership": "own", "rating": 4.0, "review_count": 50}]
+    risk_products = [{"sku": "O1", "risk_score": 22, "negative_rate": 0.05, "negative_count": 3, "review_count": 50}]
+    result = derive_product_scorecard(products, risk_products, safety_incidents=[])
+    own = next(c for c in result["scorecards"] if c["sku"] == "O1")
+    assert own["light"] == "yellow"
+
+
+def test_scorecard_red_high_risk():
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": "O1", "name": "Grinder", "ownership": "own", "rating": 3.0, "review_count": 50}]
+    risk_products = [{"sku": "O1", "risk_score": 40, "negative_rate": 0.1, "negative_count": 5, "review_count": 50}]
+    result = derive_product_scorecard(products, risk_products, safety_incidents=[])
+    own = next(c for c in result["scorecards"] if c["sku"] == "O1")
+    assert own["light"] == "red"
+
+
+def test_scorecard_red_for_safety_incident():
+    """Any critical/high safety incident forces red light, regardless of risk_score."""
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": "O1", "name": "Grinder", "ownership": "own", "rating": 4.8, "review_count": 100}]
+    risk_products = [{"sku": "O1", "risk_score": 5, "negative_rate": 0.01, "negative_count": 1, "review_count": 100}]
+    safety_incidents = [{"product_sku": "O1", "safety_level": "critical"}]
+    result = derive_product_scorecard(products, risk_products, safety_incidents=safety_incidents)
+    own = next(c for c in result["scorecards"] if c["sku"] == "O1")
+    assert own["light"] == "red"
+    assert own["safety_flag"] is True
+
+
+def test_scorecard_trend_from_previous_month(monkeypatch):
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": "O1", "name": "Grinder", "ownership": "own", "rating": 4.5, "review_count": 100}]
+    risk_products = [{"sku": "O1", "risk_score": 12, "negative_rate": 0.04, "negative_count": 4, "review_count": 100}]
+    prev_scorecards = {"O1": {"risk_score": 25, "light": "yellow"}}
+    result = derive_product_scorecard(products, risk_products, safety_incidents=[],
+                                      previous_scorecards=prev_scorecards)
+    own = next(c for c in result["scorecards"] if c["sku"] == "O1")
+    assert own["trend"] == "improving"  # risk dropped from 25 to 12
