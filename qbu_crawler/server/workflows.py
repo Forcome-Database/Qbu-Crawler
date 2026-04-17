@@ -930,6 +930,10 @@ class WorkflowWorker:
 
         changed = False
         if run["status"] != "reporting":
+            # Auto-map any new SKUs into category_map.csv before report builds it.
+            # sync_new_skus swallows all errors internally — never blocks the workflow.
+            from qbu_crawler.server.category_inferrer import sync_new_skus
+            sync_new_skus()
             run = models.update_workflow_run(
                 run_id,
                 status="reporting",
