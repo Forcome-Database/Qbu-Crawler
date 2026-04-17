@@ -123,6 +123,7 @@ DAILY_SCHEDULER_TIME = _clock_time_env("DAILY_SCHEDULER_TIME", "08:00")
 DAILY_SCHEDULER_INTERVAL = int(os.getenv("DAILY_SCHEDULER_INTERVAL", "30"))
 DAILY_SCHEDULER_RETRY_SECONDS = int(os.getenv("DAILY_SCHEDULER_RETRY_SECONDS", "300"))
 WEEKLY_SCHEDULER_TIME = _clock_time_env("WEEKLY_SCHEDULER_TIME", "09:30")
+MONTHLY_SCHEDULER_TIME = _clock_time_env("MONTHLY_SCHEDULER_TIME", "09:30")
 WORKFLOW_TRANSLATION_WAIT_SECONDS = int(os.getenv("WORKFLOW_TRANSLATION_WAIT_SECONDS", "900"))
 
 # ── OpenClaw Webhook（任务完成即时通知）────────────
@@ -167,6 +168,11 @@ REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 REPORT_CLUSTER_ANALYSIS = os.getenv("REPORT_CLUSTER_ANALYSIS", "true").lower() == "true"
 REPORT_MAX_CLUSTER_ANALYSIS = int(os.getenv("REPORT_MAX_CLUSTER_ANALYSIS", "3"))
 SAFETY_TIERS_PATH = os.getenv("SAFETY_TIERS_PATH", os.path.join(DATA_DIR, "safety_tiers.json"))
+# ── P008 Phase 4: Category mapping for monthly report ─────
+CATEGORY_MAP_PATH = os.getenv(
+    "CATEGORY_MAP_PATH",
+    os.path.join(DATA_DIR, "category_map.csv"),
+)
 os.makedirs(REPORT_DIR, exist_ok=True)
 OPENCLAW_WORKSPACE_DIR = os.getenv("OPENCLAW_WORKSPACE_DIR", "") or os.path.join(
     BASE_DIR,

@@ -124,6 +124,10 @@ def build_weekly_trigger_key(logical_date: str) -> str:
     return f"weekly:{logical_date}"
 
 
+def build_monthly_trigger_key(logical_date: str) -> str:
+    return f"monthly:{logical_date}"
+
+
 def _all_daily_runs_terminal(since: str, until: str) -> bool:
     """Check if all daily runs in the given window are terminal (completed/needs_attention)."""
     conn = models.get_conn()
