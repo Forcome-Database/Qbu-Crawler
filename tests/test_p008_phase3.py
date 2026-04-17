@@ -589,3 +589,363 @@ def test_p008_phase3_integration(db, tmp_path, monkeypatch):
     report_result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
     assert report_result["mode"] == "weekly_report"
     assert report_result.get("html_path") is not None
+
+
+# ── Task 3 (P4-B3): neg_series unit fix ─────────────────────────
+
+
+def test_weekly_recap_neg_series_is_percentage(db, tmp_path, monkeypatch):
+    """neg_series 必须为百分比值（0-100），与 Y 轴标签 '差评率 (%)' 对齐。
+
+    own_negative_review_rate 存储为分数（0.0-1.0），_build_weekly_recap 在
+    填充 neg_series 时必须乘以 100，否则图表数值是真实值的 1/100。
+    """
+    from qbu_crawler.server.report_snapshot import _build_weekly_recap
+
+    # Write fake analytics JSON files that _build_weekly_recap reads
+    analytics1 = {
+        "kpis": {
+            "health_index": 70.0,
+            "own_negative_review_rate": 0.04,          # 4 % stored as fraction
+            "own_negative_review_rate_display": "4.0%",
+            "high_risk_count": 2,
+        }
+    }
+    analytics2 = {
+        "kpis": {
+            "health_index": 68.0,
+            "own_negative_review_rate": 0.06,          # 6 % stored as fraction
+            "own_negative_review_rate_display": "6.0%",
+            "high_risk_count": 3,
+        }
+    }
+    path1 = tmp_path / "weekly_analytics_w1.json"
+    path2 = tmp_path / "weekly_analytics_w2.json"
+    path1.write_text(json.dumps(analytics1), encoding="utf-8")
+    path2.write_text(json.dumps(analytics2), encoding="utf-8")
+
+    # Insert completed weekly workflow_runs whose analytics_path points to the temp files
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until, analytics_path)"
+        " VALUES ('weekly', 'completed', 'full_sent', '2026-04-07',"
+        " 'weekly:2026-04-07', 'weekly',"
+        " '2026-03-31T00:00:00+08:00', '2026-04-07T00:00:00+08:00', ?)",
+        (str(path1),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until, analytics_path)"
+        " VALUES ('weekly', 'completed', 'full_sent', '2026-04-14',"
+        " 'weekly:2026-04-14', 'weekly',"
+        " '2026-04-07T00:00:00+08:00', '2026-04-14T00:00:00+08:00', ?)",
+        (str(path2),),
+    )
+    conn.commit()
+    conn.close()
+
+    # Call _build_weekly_recap with a window that overlaps both runs
+    summaries, trend_config = _build_weekly_recap(
+        "2026-03-31T00:00:00+08:00",
+        "2026-04-30T00:00:00+08:00",
+    )
+
+    assert trend_config is not None, "trend_config should not be None with valid data"
+    neg_dataset = next(
+        d for d in trend_config["data"]["datasets"] if "差评率" in d.get("label", "")
+    )
+    data = neg_dataset["data"]
+
+    # Values must be in percentage space: 4.0 and 6.0, not 0.04 and 0.06
+    assert any(v is not None and 3.5 <= v <= 4.5 for v in data), (
+        f"neg_series[0] should be ~4.0 (percentage), got {data}"
+    )
+    assert any(v is not None and 5.5 <= v <= 6.5 for v in data), (
+        f"neg_series[1] should be ~6.0 (percentage), got {data}"
+    )
+
+
+# ── Task 4 (P008): load_previous_report_context tier isolation ───────────────
+
+
+def test_weekly_report_does_not_use_daily_run_as_baseline(db, tmp_path, monkeypatch):
+    """
+    场景：DB 中存在近期已完成的 daily run（id=1, 分析文件存在）和上周已完成的 weekly run
+    （id=2, 分析文件存在）。当生成本周 weekly 报告时，baseline 必须取 id=2（上周报），不能取 id=1（日报）。
+    """
+    import json
+    from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+    daily_analytics = tmp_path / "daily.json"
+    daily_analytics.write_text(json.dumps({"kpis": {"health_index": 70}}))
+    weekly_analytics = tmp_path / "weekly.json"
+    weekly_analytics.write_text(json.dumps({"kpis": {"health_index": 80}}))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (1, 'daily', 'completed', 'full_sent', '2026-04-19',"
+        " 'daily:2026-04-19', 'daily', ?)",
+        (str(daily_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (2, 'weekly', 'completed', 'full_sent', '2026-04-13',"
+        " 'weekly:2026-04-13', 'weekly', ?)",
+        (str(weekly_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (3, 'weekly', 'reporting', 'none', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly')"
+    )
+    conn.commit()
+    conn.close()
+
+    prev_weekly, _ = load_previous_report_context(3, report_tier="weekly")
+    assert prev_weekly is not None
+    assert prev_weekly["kpis"]["health_index"] == 80
+
+
+def test_daily_briefing_does_not_use_weekly_run_as_baseline(db, tmp_path, monkeypatch):
+    """Reverse: daily run 只能看 daily 基线。"""
+    import json
+    from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+    daily_analytics = tmp_path / "daily.json"
+    daily_analytics.write_text(json.dumps({"kpis": {"health_index": 70}}))
+    weekly_analytics = tmp_path / "weekly.json"
+    weekly_analytics.write_text(json.dumps({"kpis": {"health_index": 80}}))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (1, 'daily', 'completed', 'full_sent', '2026-04-18',"
+        " 'daily:2026-04-18', 'daily', ?)",
+        (str(daily_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (2, 'weekly', 'completed', 'full_sent', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly', ?)",
+        (str(weekly_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (3, 'daily', 'reporting', 'none', '2026-04-21',"
+        " 'daily:2026-04-21', 'daily')"
+    )
+    conn.commit()
+    conn.close()
+
+    prev_daily, _ = load_previous_report_context(3, report_tier="daily")
+    assert prev_daily is not None
+    assert prev_daily["kpis"]["health_index"] == 70  # daily 基线，不是 80
+
+
+# ── Task 8 (integration): freeze_report_snapshot propagates is_partial ──
+
+
+def test_freeze_snapshot_sets_is_partial_on_short_weekly(db, tmp_path, monkeypatch):
+    """Weekly run 数据不足 7 天时，_meta.is_partial 应为 True 并含 expected/actual days。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    # 4 天窗口的周报（冷启动）: data_since=2026-04-09, data_until=2026-04-13 → 4 days
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (1, 'weekly', 'reporting', 'none', '2026-04-13',"
+        " 'weekly:2026-04-13', 'weekly', '2026-04-09T00:00:00+08:00', '2026-04-13T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Isolate from DB/LLM calls
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(1)
+
+    # Read the saved snapshot from disk
+    snap_path = tmp_path / "workflow-run-1-snapshot-2026-04-13.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "weekly"
+    assert snapshot["_meta"].get("is_partial") is True
+    assert snapshot["_meta"]["expected_days"] == 7
+    assert snapshot["_meta"]["actual_days"] == 4
+
+
+def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
+    """满 7 天的 weekly run 不应带 is_partial。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    # 7 天窗口：data_since=2026-04-13, data_until=2026-04-20 → 7 days
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (2, 'weekly', 'reporting', 'none', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly', '2026-04-13T00:00:00+08:00', '2026-04-20T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(2)
+
+    snap_path = tmp_path / "workflow-run-2-snapshot-2026-04-20.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "weekly"
+    assert snapshot["_meta"].get("is_partial") is not True
+
+
+# ── Task 9: V3 template cold-week notice ────────────────────────
+
+
+def test_v3_html_shows_cold_week_notice_when_window_empty(tmp_path):
+    """窗口期无新评论时，Issues tab 开头应提示'本期窗口内无新评论变动'。"""
+    from qbu_crawler.server.report_html import render_v3_html
+
+    snapshot = {
+        "logical_date": "2026-04-20",
+        "data_since": "2026-04-13T00:00:00+08:00",
+        "data_until": "2026-04-20T00:00:00+08:00",
+        "products": [],
+        "reviews": [],
+        "cumulative": {
+            "products": [{"name": "X", "sku": "S1", "ownership": "own",
+                           "rating": 4.5, "review_count": 10, "site": "t",
+                           "price": 100, "stock_status": "in_stock"}],
+            "reviews": [],
+        },
+        "_meta": {"report_tier": "weekly", "schema_version": "3"},
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"own_review_rows": 10},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+    }
+    out = render_v3_html(snapshot, analytics, output_path=str(tmp_path / "r.html"))
+    html = open(out, encoding="utf-8").read()
+    # 提示条应在 HTML 中出现
+    assert "本期窗口内无新评论" in html or "累积分析" in html
+
+
+def test_v3_html_no_cold_notice_when_window_has_reviews(tmp_path):
+    """有新评论时 Issues tab 不应出现冷周提示。"""
+    from qbu_crawler.server.report_html import render_v3_html
+
+    snapshot = {
+        "logical_date": "2026-04-20",
+        "products": [],
+        "reviews": [
+            {"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "S1",
+             "headline": "Ok", "body": "works", "author": "A"}
+        ],
+        "cumulative": {
+            "products": [{"name": "X", "sku": "S1", "ownership": "own",
+                           "rating": 4.5, "review_count": 11, "site": "t",
+                           "price": 100, "stock_status": "in_stock"}],
+            "reviews": [
+                {"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "S1",
+                 "headline": "Ok", "body": "works", "sentiment": "positive",
+                 "analysis_labels": "[]"}
+            ],
+        },
+        "_meta": {"report_tier": "weekly", "schema_version": "3"},
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"own_review_rows": 10},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+    }
+    out = render_v3_html(snapshot, analytics, output_path=str(tmp_path / "r.html"))
+    html = open(out, encoding="utf-8").read()
+    assert "本期窗口内无新评论" not in html
+
+
+# ── Fix: calendar-accurate monthly expected_days ─────────────────
+
+
+def test_freeze_snapshot_monthly_february_not_partial(db, tmp_path, monkeypatch):
+    """February 完整月（28 天）不应被误标 is_partial。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (10, 'monthly', 'reporting', 'none', '2026-03-01',"
+        " 'monthly:2026-03-01', 'monthly', '2026-02-01T00:00:00+08:00', '2026-03-01T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(10)
+
+    snap_path = tmp_path / "workflow-run-10-snapshot-2026-03-01.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "monthly"
+    assert snapshot["_meta"].get("is_partial") is not True  # 完整 Feb 月，不应 partial
+
+
+def test_freeze_snapshot_monthly_partial_when_data_short(db, tmp_path, monkeypatch):
+    """部署不满一月时 actual < expected，is_partial=True。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    conn = _get_test_conn(db)
+    # March has 31 days; this run only covers 10 days (cold start)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (11, 'monthly', 'reporting', 'none', '2026-04-01',"
+        " 'monthly:2026-04-01', 'monthly', '2026-03-22T00:00:00+08:00', '2026-04-01T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(11)
+
+    snap_path = tmp_path / "workflow-run-11-snapshot-2026-04-01.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"].get("is_partial") is True
+    assert snapshot["_meta"]["expected_days"] == 31
+    assert snapshot["_meta"]["actual_days"] == 10

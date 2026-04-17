@@ -375,9 +375,35 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
-    # P008 Phase 3: Pass report_tier from run to _meta
+    # P008 Phase 3: Pass report_tier from run to _meta; inject is_partial for cold-start
+    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar length
+    # of the previous month (data_since's month), so Feb (28/29d) / Apr (30d) / Jul (31d)
+    # each compute expected correctly.
     run_tier = run.get("report_tier", "daily")
-    _inject_meta(snapshot, tier=run_tier)
+    _expected: int | None = None
+    _actual: int | None = None
+    if run_tier in ("weekly", "monthly") and run.get("data_since") and run.get("data_until"):
+        try:
+            _since_d = datetime.fromisoformat(run["data_since"]).date()
+            _until_d = datetime.fromisoformat(run["data_until"]).date()
+            _actual = (_until_d - _since_d).days
+            if run_tier == "weekly":
+                _expected = 7
+            else:  # monthly
+                import calendar
+                _expected = calendar.monthrange(_since_d.year, _since_d.month)[1]
+        except (TypeError, ValueError) as e:
+            _logger.warning(
+                "freeze_report_snapshot: could not parse data window for run %s (%s); "
+                "skipping is_partial check", run_id, e,
+            )
+            _expected = None
+            _actual = None
+
+    if _expected is not None and _actual is not None:
+        _inject_meta(snapshot, tier=run_tier, expected_days=_expected, actual_days=_actual)
+    else:
+        _inject_meta(snapshot, tier=run_tier)
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     snapshot_path = os.path.join(
@@ -451,7 +477,7 @@ def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None, cumulat
     # Resolve last full report link from the previous completed run
     last_full_report_path = None
     run_id_for_lookup = snapshot.get("run_id", 0)
-    prev_run = models.get_previous_completed_run(run_id_for_lookup)
+    prev_run = models.get_previous_completed_run(run_id_for_lookup, report_tier="daily")
     if prev_run:
         # Construct expected path from run_id (v3 HTML naming convention)
         expected = os.path.join(
@@ -731,7 +757,7 @@ def _generate_daily_briefing(snapshot, send_email=True):
     logical_date = snapshot.get("logical_date", "")
 
     # Load previous context for change detection
-    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id, report_tier="daily")
     changes = detect_snapshot_changes(snapshot, prev_snapshot) if prev_snapshot else {}
 
     # Compute cumulative analytics
@@ -879,7 +905,28 @@ def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
         subject = f"[安全] {subject}"
 
     report.send_email(recipients=recipients, subject=subject, body_html=body_html)
-    return {"success": True, "error": None, "recipients": recipients}
+
+    # P2-F2: safety 信号独立分发至 SAFETY 通道，避免告警被日常收件人淹没
+    safety_extra = []
+    if has_safety and getattr(config, "EMAIL_RECIPIENTS_SAFETY", None):
+        safety_extra = [
+            r for r in config.EMAIL_RECIPIENTS_SAFETY
+            if r and r not in recipients
+        ]
+        if safety_extra:
+            try:
+                report.send_email(
+                    recipients=safety_extra,
+                    subject=subject,
+                    body_html=body_html,
+                )
+            except Exception:
+                _logger.warning(
+                    "Safety channel send failed, recipients=%s", safety_extra, exc_info=True
+                )
+                safety_extra = []  # don't claim delivery on failure
+
+    return {"success": True, "error": None, "recipients": recipients + safety_extra}
 
 
 def _generate_weekly_report(snapshot, send_email=True):
@@ -1378,7 +1425,7 @@ def _build_weekly_recap(data_since, data_until):
             neg_rate_display = kpis.get("own_negative_review_rate_display") or "—"
             health_series.append(float(health) if health is not None else None)
             neg = kpis.get("own_negative_review_rate")
-            neg_series.append(float(neg) if neg is not None else None)
+            neg_series.append(round(float(neg) * 100, 2) if neg is not None else None)
             summaries.append(
                 f"{week_label}（{row['logical_date']}）：健康 {health if health is not None else '—'} · "
                 f"差评率 {neg_rate_display} · 高风险 {kpis.get('high_risk_count', 0)}"
@@ -1571,8 +1618,8 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     elif run_tier == "monthly":
         return _generate_monthly_report(snapshot, send_email)
 
-    # Load previous context
-    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+    # Load previous context (legacy path: run_tier is None → treat as daily)
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id, report_tier="daily")
 
     # Determine mode
     mode, context = determine_report_mode(snapshot, prev_snapshot, prev_analytics)
@@ -1642,8 +1689,14 @@ def _render_full_email_html(snapshot, analytics):
     prev_analytics_ctx = None
     prev_snapshot = None
     run_id = snapshot.get("run_id", 0)
+    _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
+    if not _snap_meta_tier:
+        _logger.warning(
+            "snapshot missing _meta.report_tier, defaulting to 'daily'"
+        )
+    _email_tier = _snap_meta_tier or "daily"
     if run_id:
-        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=_email_tier)
     changes = detect_snapshot_changes(snapshot, prev_snapshot)
 
     # New review summary for email template
@@ -1804,7 +1857,13 @@ def generate_full_report_from_snapshot(
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         # P008: compute snapshot changes for Tab 2
         try:
-            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0))
+            _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
+            if not _snap_meta_tier:
+                _logger.warning(
+                    "snapshot missing _meta.report_tier, defaulting to 'daily'"
+                )
+            _snap_tier = _snap_meta_tier or "daily"
+            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0), report_tier=_snap_tier)
             _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
         except Exception:
             _changes = None
