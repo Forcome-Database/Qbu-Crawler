@@ -881,19 +881,26 @@ def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
     report.send_email(recipients=recipients, subject=subject, body_html=body_html)
 
     # P2-F2: safety 信号独立分发至 SAFETY 通道，避免告警被日常收件人淹没
+    safety_extra = []
     if has_safety and getattr(config, "EMAIL_RECIPIENTS_SAFETY", None):
-        extra = [
+        safety_extra = [
             r for r in config.EMAIL_RECIPIENTS_SAFETY
             if r and r not in recipients
         ]
-        if extra:
-            report.send_email(
-                recipients=extra,
-                subject=subject,
-                body_html=body_html,
-            )
+        if safety_extra:
+            try:
+                report.send_email(
+                    recipients=safety_extra,
+                    subject=subject,
+                    body_html=body_html,
+                )
+            except Exception:
+                _logger.warning(
+                    "Safety channel send failed, recipients=%s", safety_extra, exc_info=True
+                )
+                safety_extra = []  # don't claim delivery on failure
 
-    return {"success": True, "error": None, "recipients": recipients}
+    return {"success": True, "error": None, "recipients": recipients + safety_extra}
 
 
 def _generate_weekly_report(snapshot, send_email=True):

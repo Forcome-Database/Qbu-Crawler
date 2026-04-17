@@ -755,3 +755,37 @@ def test_daily_briefing_no_safety_send_without_signal(monkeypatch, db):
     assert "[安全]" not in calls[0]["subject"]
     all_recipients = {r for c in calls for r in c["recipients"]}
     assert "safety@example.com" not in all_recipients
+
+
+def test_daily_briefing_safety_channel_failure_does_not_break_primary(monkeypatch, db):
+    """safety send 抛异常时，primary 已成功的结果不应被污染，extra recipients 不纳入 return。"""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler import config as cfg
+
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS", ["ops@example.com"])
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS_SAFETY", ["safety@example.com"])
+
+    send_count = {"n": 0}
+
+    def flaky_send(*, recipients, subject, body_html, **kw):
+        send_count["n"] += 1
+        if "safety@example.com" in recipients:
+            raise RuntimeError("SMTP transient error")
+
+    monkeypatch.setattr(report_snapshot.report, "send_email", flaky_send)
+
+    snapshot = {"logical_date": "2026-04-18", "_meta": {"report_tier": "daily"}}
+    result = report_snapshot._send_daily_briefing_email(
+        snapshot=snapshot,
+        cumulative_kpis={"health_index": 70},
+        window_reviews=[],
+        attention_signals=[{"type": "safety_keyword", "level": "critical",
+                            "review_id": 42, "summary": "metal"}],
+        changes={},
+    )
+    # 两次 send 都被尝试（primary ok + safety failed）
+    assert send_count["n"] == 2
+    # 返回值仍报 success（primary 成功），但 extra 不计入 recipients
+    assert result["success"] is True
+    assert "safety@example.com" not in result["recipients"]
+    assert "ops@example.com" in result["recipients"]
