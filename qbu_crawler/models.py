@@ -231,7 +231,7 @@ def init_db():
             evidence_snapshot TEXT NOT NULL,
             evidence_hash     TEXT NOT NULL UNIQUE,
             detected_at       TEXT NOT NULL,
-            created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at        TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
         );
     """)
     # 兼容旧表：添加缺失的列
