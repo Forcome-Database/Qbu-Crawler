@@ -375,9 +375,24 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
-    # P008 Phase 3: Pass report_tier from run to _meta
+    # P008 Phase 3: Pass report_tier from run to _meta; inject is_partial for cold-start
     run_tier = run.get("report_tier", "daily")
-    _inject_meta(snapshot, tier=run_tier)
+    _EXPECTED_DAYS = {"weekly": 7, "monthly": 30}
+    _expected = _EXPECTED_DAYS.get(run_tier)
+    if _expected and run.get("data_since") and run.get("data_until"):
+        try:
+            _since_d = datetime.fromisoformat(run["data_since"]).date()
+            _until_d = datetime.fromisoformat(run["data_until"]).date()
+            _actual = (_until_d - _since_d).days
+        except (TypeError, ValueError):
+            _actual = None
+        if _actual is not None:
+            _inject_meta(snapshot, tier=run_tier,
+                         expected_days=_expected, actual_days=_actual)
+        else:
+            _inject_meta(snapshot, tier=run_tier)
+    else:
+        _inject_meta(snapshot, tier=run_tier)
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     snapshot_path = os.path.join(

@@ -748,3 +748,72 @@ def test_daily_briefing_does_not_use_weekly_run_as_baseline(db, tmp_path, monkey
     prev_daily, _ = load_previous_report_context(3, report_tier="daily")
     assert prev_daily is not None
     assert prev_daily["kpis"]["health_index"] == 70  # daily 基线，不是 80
+
+
+# ── Task 8 (integration): freeze_report_snapshot propagates is_partial ──
+
+
+def test_freeze_snapshot_sets_is_partial_on_short_weekly(db, tmp_path, monkeypatch):
+    """Weekly run 数据不足 7 天时，_meta.is_partial 应为 True 并含 expected/actual days。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    # 4 天窗口的周报（冷启动）: data_since=2026-04-09, data_until=2026-04-13 → 4 days
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (1, 'weekly', 'reporting', 'none', '2026-04-13',"
+        " 'weekly:2026-04-13', 'weekly', '2026-04-09T00:00:00+08:00', '2026-04-13T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Isolate from DB/LLM calls
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(1)
+
+    # Read the saved snapshot from disk
+    snap_path = tmp_path / "workflow-run-1-snapshot-2026-04-13.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "weekly"
+    assert snapshot["_meta"].get("is_partial") is True
+    assert snapshot["_meta"]["expected_days"] == 7
+    assert snapshot["_meta"]["actual_days"] == 4
+
+
+def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
+    """满 7 天的 weekly run 不应带 is_partial。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    # 7 天窗口：data_since=2026-04-13, data_until=2026-04-20 → 7 days
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (2, 'weekly', 'reporting', 'none', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly', '2026-04-13T00:00:00+08:00', '2026-04-20T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(2)
+
+    snap_path = tmp_path / "workflow-run-2-snapshot-2026-04-20.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "weekly"
+    assert snapshot["_meta"].get("is_partial") is not True
