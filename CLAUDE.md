@@ -48,6 +48,10 @@ Qbu-Crawler/
 │       ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
 │       ├── report.py           # 报告生成（数据查询 + LLM翻译 + Excel + 邮件）
 │       ├── report_common.py    # 报告共享常量、归一化、人话化 bullets、hero headline、alert level
+│       ├── analytics_lifecycle.py    # P4: 问题生命周期完整状态机 (R1-R6)
+│       ├── analytics_category.py     # P4: 品类对标 + 直接配对降级
+│       ├── analytics_scorecard.py    # P4: SKU 健康计分卡 (红黄绿灯 + 趋势)
+│       ├── analytics_executive.py    # P4: LLM 高管摘要 + 确定性降级
 │       ├── task_manager.py     # 爬虫任务生命周期管理（线程池 + 取消 + 持久化）
 │       ├── translator.py       # 后台翻译守护线程（DB-as-Queue + LLM 批量翻译）
 │       ├── api/
@@ -59,6 +63,12 @@ Qbu-Crawler/
 │       │   ├── __init__.py
 │       │   ├── tools.py        # MCP Tools（任务操作 + 数据查询 + SQL + 报告生成）
 │       │   └── resources.py    # MCP Resources（数据库元数据）
+│       ├── report_templates/
+│       │   ├── daily_report_v3.html.j2     # 日报 V3 HTML 模板
+│       │   ├── email_daily.html.j2         # 日报邮件摘要
+│       │   ├── email_weekly.html.j2        # 周报邮件摘要
+│       │   ├── monthly_report.html.j2      # P4: 月报模板 (高管首屏 + 7 Tab)
+│       │   └── email_monthly.html.j2       # P4: 月报邮件 (高管首屏摘要)
 │       └── openclaw/
 │           ├── README.md
 │           ├── plugin/                 # MCP 插件
@@ -84,7 +94,8 @@ Qbu-Crawler/
 │   └── workflows/
 │       └── publish.yml     # GitHub Actions CI/CD（tag 触发自动发布）
 ├── data/
-│   └── products.db
+│   ├── products.db
+│   └── category_map.csv     # P4: SKU 品类映射
 └── docs/
     ├── rules/         # 各站点采集规则
     ├── features/      # 需求文档
@@ -210,6 +221,9 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
 | `REPORT_DIR` | `data/reports` | Excel 报告输出目录 |
+| `WEEKLY_SCHEDULER_TIME` | `09:30` | 周报每周一触发时间 |
+| `MONTHLY_SCHEDULER_TIME` | `09:30` | 月报每月 1 日触发时间 |
+| `CATEGORY_MAP_PATH` | `data/category_map.csv` | SKU 品类映射 CSV 路径 |
 
 ### MinIO 配置（.env）
 
@@ -250,7 +264,9 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 当前采用 **服务内嵌调度 + outbox/bridge 通知** 架构：
 1. **DailySchedulerWorker（每日定时，embedded）**：按 `.env` 中的 `DAILY_SCHEDULER_TIME` 检查是否到点；到点后直接读取 CSV，并调用 `submit_daily_run()` 创建当日 workflow run
 2. **WorkflowWorker（后台推进）**：处理 stale task reconcile、报表阶段推进和 run 状态流转；定时提交是否已经跑过由 `workflow_runs.trigger_key` 幂等控制
-3. **NotifierWorker（后台投递）**：消费 `notification_outbox`，通过 OpenClaw notify bridge 投递 DingTalk/即时通知，只有 bridge 明确成功才标记 delivered
+3. **WeeklySchedulerWorker（每周一定时）**：每周一 `WEEKLY_SCHEDULER_TIME` 触发周报生成（V3 HTML + 4-sheet Excel + 摘要邮件）。前置等待窗口内所有 daily run 终态。
+4. **MonthlySchedulerWorker（每月 1 日定时）**：每月 1 日 `MONTHLY_SCHEDULER_TIME` 触发月报生成（V3 风格 HTML + 6-sheet Excel + 高管摘要邮件）。包含品类对标、SKU 计分卡、问题完整生命周期 (active/receding/dormant/recurrent) 和 LLM 高管摘要。前置等待 daily + weekly 全部终态（Section 2.5 序列化）。
+5. **NotifierWorker（后台投递）**：消费 `notification_outbox`，通过 OpenClaw notify bridge 投递 DingTalk/即时通知，只有 bridge 明确成功才标记 delivered
 
 临时任务追踪：`start_scrape`/`start_collect` 传入 `reply_to` 参数，服务端自动持久化到 tasks 表（`reply_to` + `notified_at` 列）。通知链路以 `notification_outbox` 为准，避免把 hook/HTTP 成功误记成“已送达”。`Heartbeat` 仅用于轻量巡检和 AI sidecar，不再承担每日主调度。
 
