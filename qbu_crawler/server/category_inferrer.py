@@ -13,6 +13,7 @@ import logging
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -188,26 +189,33 @@ def _read_existing_skus(csv_path: str) -> set[str]:
         return {(row.get("sku") or "").strip() for row in reader if row.get("sku")}
 
 
-class CategoryMapLocked(RuntimeError):
+class CategoryMapLocked(TimeoutError):
     """Raised when the CSV lock cannot be acquired within timeout."""
 
 
+_LOCK_POLL_INTERVAL = 0.05
+
+
 def _acquire_lock(csv_path: str, timeout: float) -> Path:
-    """Cross-platform exclusive lock using O_CREAT|O_EXCL sentinel file."""
-    import time as _time
+    """Cross-platform exclusive lock using O_CREAT|O_EXCL sentinel file.
+
+    Assumes local filesystem: O_EXCL is unreliable on older NFS/SMB shares.
+    Lock is stale-vulnerable — a crashed holder leaves the sentinel until
+    manually removed (acceptable for low-frequency daily append; see P009 devlog).
+    """
     lock_path = Path(csv_path + ".lock")
-    deadline = _time.monotonic() + timeout
+    deadline = time.monotonic() + timeout
     while True:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
             return lock_path
         except FileExistsError:
-            if _time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 raise CategoryMapLocked(
                     f"Could not acquire {lock_path} within {timeout}s"
                 )
-            _time.sleep(0.05)
+            time.sleep(_LOCK_POLL_INTERVAL)
 
 
 def _append_csv(
@@ -260,6 +268,10 @@ def sync_new_skus(db_path: str | None = None, csv_path: str | None = None) -> in
             len(results), csv_path,
         )
         return len(results)
+    except CategoryMapLocked as exc:
+        # Expected contention — another sync is in flight. Log tersely.
+        logger.warning("sync_new_skus: %s (will retry next run)", exc)
+        return 0
     except Exception:
         logger.exception("sync_new_skus: failed silently (will retry next run)")
         return 0
