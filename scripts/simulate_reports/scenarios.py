@@ -40,7 +40,7 @@ _add(Scenario(
     description="首日部署冷启动 (is_partial=true)",
     events=[],  # prepare 已把 scraped_at 重分布好
     expected={
-        "tier": "daily", "report_mode": "full",
+        "tier": "daily", "report_mode": "standard",
         "is_partial": True,
         "html_must_contain": [],
     },
@@ -56,7 +56,7 @@ _add(Scenario(
         _ev("inject_new_reviews", count=3, polarity="negative",
             label="shipping"),
     ],
-    expected={"tier": "daily", "report_mode": "full", "is_partial": False},
+    expected={"tier": "daily", "report_mode": "standard", "is_partial": False},
 ))
 
 # S03 safety doubled (D07 = 2026-03-26)
@@ -69,7 +69,7 @@ _add(Scenario(
         _ev("inject_safety_incidents_from_today", level="critical",
             failure_mode="foreign_object"),
     ],
-    expected={"tier": "daily", "report_mode": "full"},
+    expected={"tier": "daily", "report_mode": "standard"},
 ))
 
 # S04 R1 active (D08 = 2026-03-27)
@@ -81,7 +81,7 @@ _add(Scenario(
             label="quality_stability"),
     ],
     expected={
-        "tier": "daily", "report_mode": "full",
+        "tier": "daily", "report_mode": "standard",
         "lifecycle_states_must_include": ["active"],
     },
 ))
@@ -119,7 +119,7 @@ _add(Scenario(
         _ev("mutate_random_product", price_delta_pct=-0.15,
             stock_status="out_of_stock"),
     ],
-    expected={"tier": "daily", "report_mode": "change"},
+    expected={"tier": "daily", "report_mode": "standard"},
 ))
 
 # S08 quiet email days (D17-D19)
@@ -131,7 +131,7 @@ for sid, d, n in [("S08a", date(2026, 4, 5), 1),
         description=f"Quiet 模式第 {n} 天（发邮件）",
         events=[],
         expected={
-            "tier": "daily", "report_mode": "quiet",
+            "tier": "daily", "report_mode": "standard",
             "email_count_min": 1,
         },
     ))
@@ -145,7 +145,7 @@ for sid, d in [("S09a", date(2026, 4, 8)),
         description="Quiet 模式持续静默（不发邮件）",
         events=[],
         expected={
-            "tier": "daily", "report_mode": "quiet",
+            "tier": "daily", "report_mode": "standard",
             "email_count_max": 0,
         },
     ))
