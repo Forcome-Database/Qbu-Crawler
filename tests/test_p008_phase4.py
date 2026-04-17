@@ -344,3 +344,15 @@ def test_scorecard_trend_from_previous_month(monkeypatch):
                                       previous_scorecards=prev_scorecards)
     own = next(c for c in result["scorecards"] if c["sku"] == "O1")
     assert own["trend"] == "improving"  # risk dropped from 25 to 12
+
+
+def test_scorecard_sku_none_not_false_safety_flagged():
+    """A product without a SKU must not inherit a None-SKU safety incident's red light."""
+    from qbu_crawler.server.analytics_scorecard import derive_product_scorecard
+    products = [{"sku": None, "name": "Orphan", "ownership": "own", "rating": 4.8, "review_count": 50}]
+    risk_products = [{"sku": None, "risk_score": 3, "negative_rate": 0.01, "negative_count": 1, "review_count": 50}]
+    safety_incidents = [{"product_sku": None, "safety_level": "critical"}]
+    result = derive_product_scorecard(products, risk_products, safety_incidents=safety_incidents)
+    own = result["scorecards"][0]
+    assert own["safety_flag"] is False
+    assert own["light"] == "green"  # low risk, no safety → green

@@ -66,6 +66,7 @@ def derive_product_scorecard(
         s.get("product_sku")
         for s in safety_incidents
         if s.get("safety_level") in _HIGH_SAFETY_LEVELS
+        and s.get("product_sku") is not None
     }
     risk_by_sku = {r.get("sku"): r for r in risk_products}
 
