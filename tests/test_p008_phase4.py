@@ -498,7 +498,7 @@ def test_executive_summary_fallback_when_llm_unavailable(monkeypatch):
     monkeypatch.setattr(config, "LLM_API_KEY", "")
 
     inputs = {
-        "kpis": {"health_index": 72.3, "own_negative_review_rate": 4.2, "high_risk_count": 2,
+        "kpis": {"health_index": 72.3, "own_negative_review_rate": 0.042, "high_risk_count": 2,
                  "own_review_rows": 200},
         "kpi_delta": {"health_index": -1.5, "high_risk_count": +1},
         "top_issues": [{"label_display": "质量稳定性", "review_count": 8, "severity_display": "高"}],
