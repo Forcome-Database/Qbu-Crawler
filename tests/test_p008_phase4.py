@@ -83,3 +83,69 @@ def test_submit_monthly_run_january_wraps_to_december(db):
     conn.close()
     assert row["data_since"] == "2025-12-01T00:00:00+08:00"
     assert row["data_until"] == "2026-01-01T00:00:00+08:00"
+
+
+# ── Task 3: MonthlySchedulerWorker ──────────────────────────────
+
+
+def test_monthly_scheduler_skips_non_first_day(db, monkeypatch):
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False
+
+
+def test_monthly_scheduler_skips_before_scheduled_time(db, monkeypatch):
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 5, 1, 8, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False
+
+
+def test_monthly_scheduler_triggers_on_first_day_after_time(db, monkeypatch):
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 5, 1, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is True
+
+    conn = _get_test_conn(db)
+    row = conn.execute(
+        "SELECT * FROM workflow_runs WHERE trigger_key = 'monthly:2026-05-01'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["report_tier"] == "monthly"
+
+
+def test_monthly_scheduler_idempotent(db, monkeypatch):
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 5, 1, 10, 0, tzinfo=config.SHANGHAI_TZ)
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is True
+    assert worker.process_once(now=now) is False  # already submitted
+
+
+def test_monthly_scheduler_waits_for_weekly_runs(db, monkeypatch):
+    """Monthly must wait until all weekly runs overlapping the month window are terminal."""
+    from qbu_crawler.server.workflows import MonthlySchedulerWorker
+    now = datetime(2026, 5, 1, 10, 0, tzinfo=config.SHANGHAI_TZ)
+
+    # Seed a completed daily run + a running weekly run
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('daily', 'completed', 'full_sent', '2026-04-30',"
+        " 'daily:2026-04-30', 'daily', '2026-04-30T00:00:00+08:00', '2026-05-01T00:00:00+08:00')"
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES ('weekly', 'reporting', 'full_pending', '2026-04-27',"
+        " 'weekly:2026-04-27', 'weekly', '2026-04-20T00:00:00+08:00', '2026-04-27T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    worker = MonthlySchedulerWorker(schedule_time="09:30")
+    assert worker.process_once(now=now) is False  # blocked on weekly

@@ -128,6 +128,28 @@ def build_monthly_trigger_key(logical_date: str) -> str:
     return f"monthly:{logical_date}"
 
 
+def _all_weekly_runs_terminal(since: str, until: str) -> bool:
+    """Check if all weekly runs overlapping the given window are terminal.
+
+    Uses partial-overlap semantics (``data_since < until AND data_until > since``)
+    because a weekly window may straddle the month boundary.
+    """
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM workflow_runs
+            WHERE report_tier = 'weekly'
+              AND data_since < ? AND data_until > ?
+              AND status NOT IN ('completed', 'needs_attention')
+            """,
+            (until, since),
+        ).fetchone()
+        return (row["cnt"] if row else 0) == 0
+    finally:
+        conn.close()
+
+
 def _all_daily_runs_terminal(since: str, until: str) -> bool:
     """Check if all daily runs in the given window are terminal (completed/needs_attention)."""
     conn = models.get_conn()
@@ -609,6 +631,81 @@ class WeeklySchedulerWorker:
         if result.get("created"):
             logger.info(
                 "WeeklySchedulerWorker: submitted weekly run for %s (trigger_key=%s)",
+                logical_date, result["trigger_key"],
+            )
+            return True
+        return False
+
+
+class MonthlySchedulerWorker:
+    """Every 1st of the month at MONTHLY_SCHEDULER_TIME, submit a monthly report run."""
+
+    def __init__(self, *, schedule_time: str | None = None, interval: int | None = None):
+        self._schedule_time = schedule_time or config.MONTHLY_SCHEDULER_TIME
+        self._schedule_hour, self._schedule_minute = _parse_schedule_time(self._schedule_time)
+        self._interval = interval or config.DAILY_SCHEDULER_INTERVAL
+        self._stop_event = Event()
+        self._wake_event = Event()
+        self._thread = Thread(target=self._run, daemon=True, name="monthly-scheduler")
+
+    def start(self):
+        self._thread.start()
+        logger.info("MonthlySchedulerWorker: started (time=%s)", self._schedule_time)
+
+    def stop(self):
+        self._stop_event.set()
+        self._wake_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                self.process_once()
+            except Exception:
+                logger.exception("MonthlySchedulerWorker: error in process_once")
+            self._stop_event.wait(timeout=self._interval)
+
+    def process_once(self, now: datetime | None = None) -> bool:
+        current = now or config.now_shanghai()
+        if current.day != 1:
+            return False
+
+        scheduled_at = current.replace(
+            hour=self._schedule_hour, minute=self._schedule_minute,
+            second=0, microsecond=0,
+        )
+        if current < scheduled_at:
+            return False
+
+        logical_date = current.date().isoformat()
+        trigger_key = build_monthly_trigger_key(logical_date)
+        if models.get_workflow_run_by_trigger_key(trigger_key):
+            return False  # idempotent
+
+        # P008 Section 2.5: serialize daily → weekly → monthly. When month-1st is
+        # also a Monday, all three schedulers fire at the same HH:MM. Wait until
+        # all daily AND weekly runs in the month window are terminal before
+        # submitting the monthly run.
+        from qbu_crawler.server.report_common import tier_date_window
+        since, until = tier_date_window("monthly", logical_date)
+        if not _all_daily_runs_terminal(since, until):
+            logger.debug(
+                "MonthlySchedulerWorker: waiting for daily runs in [%s, %s) to complete",
+                since, until,
+            )
+            return False
+        if not _all_weekly_runs_terminal(since, until):
+            logger.debug(
+                "MonthlySchedulerWorker: waiting for weekly runs in [%s, %s) to complete",
+                since, until,
+            )
+            return False
+
+        result = submit_monthly_run(logical_date=logical_date)
+        if result.get("created"):
+            logger.info(
+                "MonthlySchedulerWorker: submitted monthly run for %s (trigger_key=%s)",
                 logical_date, result["trigger_key"],
             )
             return True
