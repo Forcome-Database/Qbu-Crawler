@@ -376,21 +376,32 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     snapshot["snapshot_hash"] = snapshot_hash
 
     # P008 Phase 3: Pass report_tier from run to _meta; inject is_partial for cold-start
+    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar length
+    # of the previous month (data_since's month), so Feb (28/29d) / Apr (30d) / Jul (31d)
+    # each compute expected correctly.
     run_tier = run.get("report_tier", "daily")
-    _EXPECTED_DAYS = {"weekly": 7, "monthly": 30}
-    _expected = _EXPECTED_DAYS.get(run_tier)
-    if _expected and run.get("data_since") and run.get("data_until"):
+    _expected: int | None = None
+    _actual: int | None = None
+    if run_tier in ("weekly", "monthly") and run.get("data_since") and run.get("data_until"):
         try:
             _since_d = datetime.fromisoformat(run["data_since"]).date()
             _until_d = datetime.fromisoformat(run["data_until"]).date()
             _actual = (_until_d - _since_d).days
-        except (TypeError, ValueError):
+            if run_tier == "weekly":
+                _expected = 7
+            else:  # monthly
+                import calendar
+                _expected = calendar.monthrange(_since_d.year, _since_d.month)[1]
+        except (TypeError, ValueError) as e:
+            _logger.warning(
+                "freeze_report_snapshot: could not parse data window for run %s (%s); "
+                "skipping is_partial check", run_id, e,
+            )
+            _expected = None
             _actual = None
-        if _actual is not None:
-            _inject_meta(snapshot, tier=run_tier,
-                         expected_days=_expected, actual_days=_actual)
-        else:
-            _inject_meta(snapshot, tier=run_tier)
+
+    if _expected is not None and _actual is not None:
+        _inject_meta(snapshot, tier=run_tier, expected_days=_expected, actual_days=_actual)
     else:
         _inject_meta(snapshot, tier=run_tier)
 

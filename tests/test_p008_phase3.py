@@ -817,3 +817,70 @@ def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
 
     assert snapshot["_meta"]["report_tier"] == "weekly"
     assert snapshot["_meta"].get("is_partial") is not True
+
+
+# ── Fix: calendar-accurate monthly expected_days ─────────────────
+
+
+def test_freeze_snapshot_monthly_february_not_partial(db, tmp_path, monkeypatch):
+    """February 完整月（28 天）不应被误标 is_partial。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (10, 'monthly', 'reporting', 'none', '2026-03-01',"
+        " 'monthly:2026-03-01', 'monthly', '2026-02-01T00:00:00+08:00', '2026-03-01T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(10)
+
+    snap_path = tmp_path / "workflow-run-10-snapshot-2026-03-01.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"]["report_tier"] == "monthly"
+    assert snapshot["_meta"].get("is_partial") is not True  # 完整 Feb 月，不应 partial
+
+
+def test_freeze_snapshot_monthly_partial_when_data_short(db, tmp_path, monkeypatch):
+    """部署不满一月时 actual < expected，is_partial=True。"""
+    import json as _json
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+    conn = _get_test_conn(db)
+    # March has 31 days; this run only covers 10 days (cold start)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, data_since, data_until)"
+        " VALUES (11, 'monthly', 'reporting', 'none', '2026-04-01',"
+        " 'monthly:2026-04-01', 'monthly', '2026-03-22T00:00:00+08:00', '2026-04-01T00:00:00+08:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(report_snapshot.report, "query_report_data",
+                        lambda since, until=None: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data",
+                        lambda: ([], []))
+
+    report_snapshot.freeze_report_snapshot(11)
+
+    snap_path = tmp_path / "workflow-run-11-snapshot-2026-04-01.json"
+    snapshot = _json.loads(snap_path.read_text(encoding="utf-8"))
+
+    assert snapshot["_meta"].get("is_partial") is True
+    assert snapshot["_meta"]["expected_days"] == 31
+    assert snapshot["_meta"]["actual_days"] == 10
