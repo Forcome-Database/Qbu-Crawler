@@ -462,3 +462,32 @@ def test_p008_phase1_integration(db):
     snapshot = {"logical_date": "2026-04-16"}
     enriched = _inject_meta(snapshot)
     assert enriched["_meta"]["schema_version"] == "3"
+
+
+def test_save_safety_incident_is_idempotent(db):
+    """重复调用相同 review_id + evidence_hash 不应产生多行。"""
+    import hashlib, json
+    evidence = {"review_id": 1, "text": "metal shaving"}
+    payload = json.dumps(evidence, sort_keys=True)
+    h = hashlib.sha256(payload.encode()).hexdigest()
+
+    # 插入 review 先满足 FK
+    conn = models.get_conn()
+    conn.execute("INSERT INTO products (url, name, sku, site) VALUES (?, ?, ?, ?)",
+                 ("http://t/p1", "P", "S1", "test"))
+    conn.execute("INSERT INTO reviews (product_id, author, headline, body, rating)"
+                 " VALUES (1, 'a', 'h', 'b', 1.0)")
+    conn.commit()
+    conn.close()
+
+    for _ in range(3):
+        models.save_safety_incident(
+            review_id=1, product_sku="S1", safety_level="critical",
+            failure_mode="metal", evidence_snapshot=payload, evidence_hash=h,
+        )
+    conn = models.get_conn()
+    rows = conn.execute(
+        "SELECT COUNT(*) AS c FROM safety_incidents WHERE review_id = 1"
+    ).fetchone()
+    conn.close()
+    assert rows["c"] == 1
