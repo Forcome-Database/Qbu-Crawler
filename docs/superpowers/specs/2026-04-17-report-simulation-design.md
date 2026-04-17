@@ -327,3 +327,149 @@ C:\Users\leo\Desktop\报告\reports\
 任何一项违反上述约束即视为实现 bug，应：
 - 阻断实现并在本文档追加注释说明
 - 优先调整模拟脚本适配业务代码，而非反过来
+
+---
+
+## 10. 分析友好性（核心可用性要求）
+
+报告产出后必须便于**逐场景审阅 + 快速定位问题 + 改业务代码后低成本复验**。本节落成硬性交付项。
+
+### 10.1 每场景 `debug/` 目录
+
+每个场景目录下新增 `debug/` 子目录，固定文件清单：
+
+| 文件 | 内容 | 回答的问题 |
+|---|---|---|
+| `db_state_before.json` | 应用事件前 DB 关键计数（products / reviews / review_issue_labels / safety_incidents 按 site/ownership 分组）+ 关键行样本 | 当天输入状态 |
+| `db_state_after.json` | 应用事件后同构 | 事件生效校验 |
+| `events_applied.json` | 当天编排事件列表（human-readable，含参数） | 这一天做了什么 |
+| `workflow_run.json` | `workflow_runs` 表该 run 完整行（含 status/phase/error/snapshot_path） | 走到哪个阶段、是否 error |
+| `outbox_rows.json` | 该 run 关联的 `notification_outbox` 全部行（payload 含摘要，原文在 `emails/`） | 邮件编排逻辑 |
+| `analytics_tree.json` | 业务代码输出的完整 analytics dict（含 window + cumulative + lifecycle + category + scorecard + executive） | 所有 KPI 如何算出 |
+| `top_reviews.json` | 报告里展示的"关键评论"对应的原始 `reviews` + `review_analysis` 联合行 | 哪些评论驱动了这张报告 |
+| `html_checksum.txt` | HTML 渲染后的结构指纹（标签计数 + 关键元素 sha1） | 改代码后产物是否变化 |
+| `excel_structure.json` | Excel 的 sheet 清单 + 每 sheet 行数 / 列名 | Excel 结构快照 |
+
+### 10.2 `manifest.json` 升级（期望 vs 实际）
+
+每场景在 `scenarios.py` 里声明 `expected`，runner 跑完后采集 `actual` 并对比，写入 manifest：
+
+```jsonc
+{
+  "scenario_id": "S10",
+  "logical_date": "2026-04-14",
+  "phase": "P4",
+  "description": "quality_stability 复发触发 R4",
+  "expected": {
+    "tier": "daily",
+    "report_mode": "standard",
+    "lifecycle_states_must_include": ["recurrent"],
+    "is_partial": false,
+    "html_must_contain": ["复发", "quality_stability"],
+    "excel_must_have_sheets": ["评论明细", "产品概览"],
+    "email_count_min": 1,
+    "email_must_not_contain": ["翻译未完成"]
+  },
+  "actual": {
+    "tier": "daily",
+    "report_mode": "standard",
+    "lifecycle_states_seen": ["recurrent", "active"],
+    "is_partial": false,
+    "html_contains": {"复发": true, "quality_stability": true},
+    "excel_sheets": ["评论明细", "产品概览", "风险打分"],
+    "email_count": 2,
+    "email_must_not_contain_check": true
+  },
+  "verdict": "PASS",
+  "failures": [],
+  "warnings": [],
+  "artifacts": ["daily.html", "daily.xlsx", "snapshot.json", "analytics.json", "emails/...", "debug/..."],
+  "git_sha": "ab1c724",
+  "spec_version": "2026-04-17",
+  "executed_at": "2026-04-17T23:45:12"
+}
+```
+
+`verdict` 取值：
+- `PASS` — 所有 expected 断言通过
+- `WARN` — 辅助断言未过但核心断言过（例如 email_count 多了 1 封但内容对）
+- `FAIL` — 关键断言未过（例如 report_mode 不对 / lifecycle 缺失）
+
+### 10.3 顶层 `reports/index.html` 升级
+
+- 顶部汇总徽章：`✅ N PASS  ⚠️ N WARN  ❌ N FAIL  共 27`
+- 左侧过滤器：tier / mode / lifecycle_state / verdict（多选）
+- 每张卡片：
+  - 标题（场景 ID + 描述）+ 徽章
+  - 核心 KPI 摘要（新评论数、风险产品数、lifecycle_states）
+  - 展开区：`expected vs actual` 对照表
+  - 产物链接（HTML / Excel / snapshot.json / analytics.json / emails/ / debug/）
+- 支持按 `git_sha` 分组展示（同场景多次 rerun 的产物并列，便于对比改代码前后）
+
+### 10.4 CLI 子命令
+
+模拟脚本入口扩展为多子命令：
+
+| 命令 | 作用 |
+|---|---|
+| `python -m scripts.simulate_reports prepare` | 克隆基线 DB、重分布 scraped_at、回填 labels |
+| `python -m scripts.simulate_reports run` | 跑完整 42 天时间轴 |
+| `python -m scripts.simulate_reports run-one <SID>` | 从最近 checkpoint 回滚并只跑指定场景（秒级迭代） |
+| `python -m scripts.simulate_reports rerun-after-fix` | 全量重跑（不做 prepare，复用已重分布的 DB 基础） |
+| `python -m scripts.simulate_reports show <SID>` | 打印 manifest + debug 关键指标 |
+| `python -m scripts.simulate_reports diff <SID1> <SID2>` | 对比两场景的 analytics/HTML/Excel 结构差异 |
+| `python -m scripts.simulate_reports verify` | 重跑所有断言，输出彩色 PASS/FAIL 列表 |
+| `python -m scripts.simulate_reports issues` | 汇总 FAIL/WARN 到 `reports/issues.md` |
+| `python -m scripts.simulate_reports index` | 仅重建顶层 index.html（产物未变时快速重绘） |
+| `python -m scripts.simulate_reports reset` | 删除工作副本 DB + checkpoints + scenarios/ |
+
+### 10.5 Checkpoint 机制
+
+- `run` 过程中每完成一天末尾：拷贝 `data/sim/simulation.db` → `data/sim/checkpoints/<YYYY-MM-DD>.db`
+- `run-one <SID>` 逻辑：查出该场景对应日期 D、上一天 D-1；若 `checkpoints/D-1.db` 存在，直接复制为 `simulation.db`，应用当天事件后跑报告；否则从最近可用 checkpoint 顺推到 D-1
+- 单场景迭代成本从全量跑（分钟级）压到秒级
+
+### 10.6 `reports/issues.md` 自动生成
+
+`verify` 或 `issues` 命令扫描所有 `manifest.json` 的 `failures` + `warnings`，按严重度分组输出 markdown：
+
+```md
+# Simulation Issues — <git_sha> run @ 2026-04-17T23:45
+
+## ❌ FAIL (2)
+### S07 daily-change (2026-04-04)
+- expected `report_mode=change`, actual `standard`
+- 可能原因：`determine_report_mode()` 未把"0 新评论 + 价格变化"识别为 Change
+- 相关文件：qbu_crawler/server/report_snapshot.py
+- 重现：`python -m scripts.simulate_reports run-one S07`
+
+### S11 daily-needs-attention (2026-04-15)
+...
+
+## ⚠️ WARN (1)
+### M1 monthly
+- 月报 executive_summary 字符数 < 200（期望 ≥ 500）
+- 可能是 LLM 超时降级到确定性摘要，检查 debug/workflow_run.json.error
+```
+
+### 10.7 业务代码迭代工作流
+
+落成后的典型使用链：
+
+1. `run` 跑完 → 打开 `index.html` 审阅所有产物
+2. 发现 S07 产物不对 → 点开 S07 卡片看 `expected vs actual` → 展开 `debug/analytics_tree.json` 定位哪段数据异常
+3. 判断是业务 bug → 改业务代码（`qbu_crawler/`）
+4. `run-one S07` 秒级复验 → 如果 verdict=PASS 且视觉 OK，继续
+5. `rerun-after-fix` 全量复跑确保没回归
+6. 所有 PASS 后 `verify` 输出绿色全通过
+
+### 10.8 新增验收标准（补充第 7 节）
+
+- [ ] 每场景目录含完整 `debug/` 9 个文件
+- [ ] 每个 `manifest.json` 含 `expected` + `actual` + `verdict` + `git_sha`
+- [ ] `verify` 命令可独立于 `run` 运行并给出彩色输出
+- [ ] `run-one <SID>` 能在 ≤ 30 秒内完成单场景复验（利用 checkpoint）
+- [ ] `diff <SID1> <SID2>` 能列出 analytics 关键字段差异（至少字段级）
+- [ ] `issues.md` 在存在 FAIL 时自动生成且给出可能原因提示
+- [ ] `index.html` 含徽章 + 过滤 + expected/actual 对照展开
+- [ ] 整套工作流文档化进 `scripts/simulate_reports/README.md`
