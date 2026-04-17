@@ -454,3 +454,45 @@ def test_render_full_email_html_accepts_explicit_report_tier():
     assert "report_tier" in sig.parameters
     assert sig.parameters["report_tier"].default is None
     assert sig.parameters["report_tier"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_report_tier_priority_explicit_over_meta(monkeypatch, caplog):
+    """Priority contract: explicit param wins over snapshot._meta; _meta used
+    when explicit is None; WARNING only when both absent."""
+    from qbu_crawler.server import report_snapshot
+
+    captured: dict = {}
+
+    def _probe(*args, **kwargs):
+        captured["report_tier"] = kwargs.get("report_tier")
+        # Short-circuit inside the real function: we just want the resolved tier
+        raise RuntimeError("probe-short-circuit")
+
+    # Intercept the first call that consumes the resolved report_tier:
+    # load_previous_report_context is where resolution lands in both functions.
+    monkeypatch.setattr(
+        report_snapshot, "load_previous_report_context", _probe,
+    )
+
+    # Case 1: explicit="weekly" wins over _meta.report_tier="daily"
+    snap1 = {"_meta": {"report_tier": "daily"}, "run_id": 1, "logical_date": "2026-04-17"}
+    with pytest.raises(RuntimeError, match="probe-short-circuit"):
+        report_snapshot._render_full_email_html(snap1, {}, report_tier="weekly")
+    assert captured["report_tier"] == "weekly"
+
+    # Case 2: explicit=None falls back to _meta
+    captured.clear()
+    snap2 = {"_meta": {"report_tier": "monthly"}, "run_id": 2, "logical_date": "2026-04-17"}
+    with pytest.raises(RuntimeError, match="probe-short-circuit"):
+        report_snapshot._render_full_email_html(snap2, {})
+    assert captured["report_tier"] == "monthly"
+
+    # Case 3: both absent → defaults to "daily" with WARNING
+    captured.clear()
+    import logging
+    snap3 = {"run_id": 3, "logical_date": "2026-04-17"}
+    with caplog.at_level(logging.WARNING, logger="qbu_crawler.server.report_snapshot"):
+        with pytest.raises(RuntimeError, match="probe-short-circuit"):
+            report_snapshot._render_full_email_html(snap3, {})
+    assert captured["report_tier"] == "daily"
+    assert any("report_tier missing" in rec.message for rec in caplog.records)

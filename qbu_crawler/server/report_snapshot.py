@@ -1690,7 +1690,10 @@ def _render_full_email_html(snapshot, analytics, *, report_tier: str | None = No
     if report_tier is None:
         _logger.warning(
             "_render_full_email_html: report_tier missing "
-            "(explicit param + snapshot._meta both absent); defaulting to 'daily'"
+            "(explicit param + snapshot._meta both absent); "
+            "run_id=%s logical_date=%s; defaulting to 'daily'",
+            snapshot.get("run_id"),
+            snapshot.get("logical_date"),
         )
         report_tier = "daily"
 
@@ -1799,7 +1802,10 @@ def generate_full_report_from_snapshot(
     if report_tier is None:
         _logger.warning(
             "generate_full_report_from_snapshot: report_tier missing "
-            "(explicit param + snapshot._meta both absent); defaulting to 'daily'"
+            "(explicit param + snapshot._meta both absent); "
+            "run_id=%s logical_date=%s; defaulting to 'daily'",
+            snapshot.get("run_id"),
+            snapshot.get("logical_date"),
         )
         report_tier = "daily"
 
