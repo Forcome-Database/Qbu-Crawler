@@ -119,6 +119,32 @@ class BaseScraper:
             pass
 
     @classmethod
+    def _try_connect_chrome(cls, port: int) -> "Chromium | None":
+        """连接到指定端口的 Chrome，主动验证 socket + DevTools HTTP 都活着。
+        失败返回 None。避免 DrissionPage Chromium() 是 lazy 的导致返回伪 browser。"""
+        import socket
+        import urllib.request
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=1):
+                pass
+        except OSError:
+            return None
+        try:
+            with urllib.request.urlopen(
+                f'http://127.0.0.1:{port}/json/version', timeout=2,
+            ) as resp:
+                if resp.status != 200:
+                    return None
+        except Exception:
+            return None
+        try:
+            browser = Chromium(port)
+            cls._cleanup_tabs(browser)
+            return browser
+        except Exception:
+            return None
+
+    @classmethod
     def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
         """使用 Chrome 用户数据启动浏览器，可选代理。
         Chrome 支持 --user-data-dir + --proxy-server 同时使用，
@@ -128,14 +154,12 @@ class BaseScraper:
         if proxy:
             # 代理是启动参数，切换代理必须重启 Chrome
             cls._kill_user_data_chrome(port)
+            time.sleep(1)  # 等旧 Chrome 释放 user_data 文件锁
         else:
-            # 无代理时尝试连接已运行的 Chrome
-            try:
-                browser = Chromium(port)
-                cls._cleanup_tabs(browser)
+            # 无代理时尝试复用已运行的 Chrome
+            browser = cls._try_connect_chrome(port)
+            if browser is not None:
                 return browser
-            except Exception:
-                pass
 
         chrome_path = _find_chrome()
         args = [
@@ -154,16 +178,56 @@ class BaseScraper:
         if HEADLESS and _has_display():
             args.append('--headless=new')
         args.append('--disable-session-crashed-bubble')
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(20):
-            time.sleep(1)
+        # Launch Chrome. Drain stderr continuously in a daemon thread so the
+        # ~64KB pipe buffer cannot block Chrome in write() and mask a hung
+        # startup as a silent 60s timeout.
+        proc = subprocess.Popen(
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        stderr_buf: list[bytes] = []
+        stderr_buf_lock = threading.Lock()
+
+        def _drain_stderr(pipe, buf, lock):
             try:
-                browser = Chromium(port)
-                cls._cleanup_tabs(browser)
-                return browser
+                for chunk in iter(lambda: pipe.read(4096), b""):
+                    with lock:
+                        buf.append(chunk)
+                        # Cap at 1 MB by dropping oldest chunks
+                        total = sum(len(c) for c in buf)
+                        while total > 1_000_000 and len(buf) > 1:
+                            dropped = buf.pop(0)
+                            total -= len(dropped)
             except Exception:
-                continue
-        raise RuntimeError(f"Chrome with user data failed to start on port {port}")
+                pass
+
+        drain_thread = threading.Thread(
+            target=_drain_stderr,
+            args=(proc.stderr, stderr_buf, stderr_buf_lock),
+            daemon=True,
+        )
+        drain_thread.start()
+
+        for _ in range(60):
+            time.sleep(1)
+            if proc.poll() is not None:
+                drain_thread.join(timeout=1)
+                with stderr_buf_lock:
+                    tail = (b"".join(stderr_buf) or b"").decode(
+                        "utf-8", errors="ignore",
+                    )[-500:]
+                raise RuntimeError(
+                    f"Chrome exited early (code={proc.returncode}). "
+                    f"Likely cause: user_data_dir locked by another Chrome instance. "
+                    f"Close all Chrome windows using profile "
+                    f"{CHROME_USER_DATA_PATH!r} and retry. stderr: {tail}"
+                )
+            browser = cls._try_connect_chrome(port)
+            if browser is not None:
+                return browser
+        raise RuntimeError(
+            f"Chrome with user data failed to start on port {port} within 60s. "
+            f"Profile may be too large; check {CHROME_USER_DATA_PATH!r}."
+        )
 
     @staticmethod
     def _cleanup_tabs(browser):

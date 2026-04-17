@@ -3,6 +3,7 @@
 import sqlite3
 import subprocess
 import urllib.error
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -860,3 +861,218 @@ def test_openclaw_bridge_sender_classifies_retryable_and_permanent_failures():
 
     assert permanent.value.retryable is False
     assert permanent.value.http_status == 403
+
+
+# ---------------------------------------------------------------------------
+# I3: cleanup_old_notifications wiring + Shanghai tz
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_old_notifications_removes_expired_delivered_rows(notifier_db):
+    """Expired delivered rows are purged; fresh rows and non-delivered rows
+    are kept. Cutoff uses Shanghai tz (now_shanghai - retention_days)."""
+    from qbu_crawler import config as _config
+
+    fresh = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "chat:cid-fresh",
+            "payload": {"task_id": "task-fresh"},
+            "dedupe_key": "task-fresh:completed",
+            "payload_hash": "hash-fresh",
+        }
+    )
+    old = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "chat:cid-old",
+            "payload": {"task_id": "task-old"},
+            "dedupe_key": "task-old:completed",
+            "payload_hash": "hash-old",
+        }
+    )
+
+    # Make the "old" row delivered + updated_at 31 days ago in Shanghai tz.
+    old_ts = (_config.now_shanghai() - timedelta(days=31)).isoformat()
+    # Make the "fresh" row delivered + updated_at today in Shanghai tz.
+    fresh_ts = _config.now_shanghai().isoformat()
+
+    conn = notifier_db()
+    conn.execute(
+        "UPDATE notification_outbox SET status = 'delivered', updated_at = ? WHERE id = ?",
+        (old_ts, old["id"]),
+    )
+    conn.execute(
+        "UPDATE notification_outbox SET status = 'delivered', updated_at = ? WHERE id = ?",
+        (fresh_ts, fresh["id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    removed = models.cleanup_old_notifications(retention_days=30)
+    assert removed == 1
+
+    assert models.get_notification(old["id"]) is None
+    assert models.get_notification(fresh["id"]) is not None
+
+
+def test_notifier_worker_calls_cleanup_on_interval(monkeypatch):
+    """_maybe_cleanup is gated by NOTIFICATION_CLEANUP_INTERVAL_S via
+    time.monotonic(). Calling it twice in a row must only trigger cleanup
+    once; resetting _last_cleanup_ts should allow a second call."""
+    from qbu_crawler.server.notifier import NotifierWorker
+    from qbu_crawler.server import notifier as notifier_module
+
+    class _DummySender:
+        def send(self, notification):
+            return {"bridge_request_id": "x", "http_status": 200}
+
+    worker = NotifierWorker(sender=_DummySender(), lease_seconds=30, max_attempts=3)
+
+    call_count = {"n": 0}
+
+    def _stub(retention_days: int = 30):
+        call_count["n"] += 1
+        return 0
+
+    monkeypatch.setattr(notifier_module.models, "cleanup_old_notifications", _stub)
+    # Ensure the interval > 0 so gating is meaningful.
+    monkeypatch.setattr(notifier_module.config, "NOTIFICATION_CLEANUP_INTERVAL_S", 3600)
+    monkeypatch.setattr(notifier_module.config, "NOTIFICATION_RETENTION_DAYS", 30)
+
+    # First call: _last_cleanup_ts == 0.0, must invoke cleanup.
+    worker._maybe_cleanup()
+    assert call_count["n"] == 1
+
+    # Second call immediately: interval not elapsed, must NOT invoke cleanup.
+    worker._maybe_cleanup()
+    assert call_count["n"] == 1
+
+    # Reset timestamp: next call should invoke cleanup again.
+    worker._last_cleanup_ts = 0.0
+    worker._maybe_cleanup()
+    assert call_count["n"] == 2
+
+
+def test_notifier_worker_cleanup_failure_is_non_fatal(monkeypatch):
+    """If cleanup_old_notifications raises, _maybe_cleanup must not propagate
+    the exception — the notifier loop must stay alive."""
+    from qbu_crawler.server.notifier import NotifierWorker
+    from qbu_crawler.server import notifier as notifier_module
+
+    class _DummySender:
+        def send(self, notification):
+            return {"bridge_request_id": "x", "http_status": 200}
+
+    worker = NotifierWorker(sender=_DummySender(), lease_seconds=30, max_attempts=3)
+
+    def _boom(retention_days: int = 30):
+        raise RuntimeError("simulated db failure")
+
+    monkeypatch.setattr(notifier_module.models, "cleanup_old_notifications", _boom)
+    monkeypatch.setattr(notifier_module.config, "NOTIFICATION_CLEANUP_INTERVAL_S", 3600)
+    monkeypatch.setattr(notifier_module.config, "NOTIFICATION_RETENTION_DAYS", 30)
+
+    # Must not raise
+    worker._maybe_cleanup()
+    # Timestamp should still have advanced so we don't hammer the broken cleanup.
+    assert worker._last_cleanup_ts > 0.0
+
+
+# ---------------------------------------------------------------------------
+# I4: distinguish "failed notify" from "never attempted" via
+# tasks.notified_attempt_at
+# ---------------------------------------------------------------------------
+
+
+def test_mark_notification_failure_sets_task_notified_attempt_at(notifier_db):
+    """Terminal (deadletter) notification failure must set tasks.notified_attempt_at,
+    so ops can distinguish 'tried and failed' from 'never attempted'.
+
+    Note: tasks.notified_at must remain NULL because delivery never succeeded —
+    that column is the success marker, and overloading it would destroy the
+    distinction this migration is meant to create.
+    """
+    from qbu_crawler import config
+
+    # Create a task in a terminal state.
+    models.save_task(
+        {
+            "id": "T-FAIL",
+            "type": "scrape",
+            "status": "completed",
+            "params": {},
+            "created_at": config.now_shanghai().isoformat(),
+        }
+    )
+
+    # Enqueue a notification payload referencing that task.
+    row = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "dingtalk:default",
+            "payload": {"task_id": "T-FAIL"},
+            "dedupe_key": "T-FAIL:done",
+            "payload_hash": "hash-T-FAIL",
+        }
+    )
+    nid = row["id"]
+
+    ts = config.now_shanghai().isoformat()
+    result = models.mark_notification_failure(
+        notification_id=nid,
+        failed_at=ts,
+        error_message="connection refused",
+        retryable=False,
+        max_attempts=3,
+    )
+    assert result == "deadletter"
+
+    t = models.get_task("T-FAIL")
+    assert t["notified_attempt_at"] == ts
+    # notified_at remains None because success never happened.
+    assert t.get("notified_at") in (None, "")
+
+
+def test_mark_notification_failure_sets_attempt_at_on_retryable_path(notifier_db):
+    """Retryable failure (attempts < max_attempts, status='failed') must still
+    update tasks.notified_attempt_at so ops can see the last attempt even for
+    runs that are still being retried."""
+    from qbu_crawler import config
+
+    models.save_task(
+        {
+            "id": "T-RETRY",
+            "type": "scrape",
+            "status": "completed",
+            "params": {},
+            "created_at": config.now_shanghai().isoformat(),
+        }
+    )
+    row = models.enqueue_notification(
+        {
+            "kind": "task_completed",
+            "channel": "dingtalk",
+            "target": "dingtalk:default",
+            "payload": {"task_id": "T-RETRY"},
+            "dedupe_key": "T-RETRY:done",
+            "payload_hash": "hash-T-RETRY",
+        }
+    )
+
+    ts = config.now_shanghai().isoformat()
+    result = models.mark_notification_failure(
+        notification_id=row["id"],
+        failed_at=ts,
+        error_message="timeout",
+        retryable=True,
+        max_attempts=3,  # attempts=1 < 3 → status='failed', not deadletter
+    )
+    assert result == "failed"
+
+    t = models.get_task("T-RETRY")
+    assert t["notified_attempt_at"] == ts
+    assert t.get("notified_at") in (None, "")

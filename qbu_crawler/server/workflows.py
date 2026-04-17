@@ -31,6 +31,28 @@ from qbu_crawler.server.report_snapshot import (
 logger = logging.getLogger(__name__)
 
 
+def _maybe_sync_category_map(run_id: int) -> None:
+    """Idempotently sync new SKUs into category_map.csv for this workflow run.
+
+    Uses workflow_runs.category_synced as the authoritative idempotency flag so
+    that process restarts or status regressions never cause duplicate LLM calls.
+    All errors are swallowed — this must never block the workflow.
+    """
+    try:
+        run = models.get_workflow_run(run_id)
+        if not run or run.get("category_synced"):
+            return
+        from qbu_crawler.server.category_inferrer import sync_new_skus
+        sync_new_skus()
+    except Exception:
+        logger.exception("sync_new_skus failed; marking synced anyway to avoid retry-storm")
+    finally:
+        try:
+            models.update_workflow_run(run_id, category_synced=1)
+        except Exception:
+            logger.exception("failed to set category_synced flag for run %s", run_id)
+
+
 class LocalHttpTaskSubmitter:
     """Submit tasks into the long-running crawler service over loopback HTTP."""
 
@@ -280,7 +302,9 @@ def submit_daily_run(
             "summary": bundle.summary,
         }
 
-    data_since, data_until = _logical_date_window(logical_date)
+    since_dt, until_dt = _logical_date_window(logical_date)
+    data_since = since_dt.isoformat()
+    data_until = until_dt.isoformat()
     run = models.create_workflow_run(
         {
             "workflow_type": "daily",
@@ -365,10 +389,16 @@ def submit_daily_run(
     }
 
 
-def _logical_date_window(logical_date: str) -> tuple[str, str]:
-    start = datetime.fromisoformat(logical_date)
+def _logical_date_window(logical_date: str) -> tuple[datetime, datetime]:
+    """Return (since, until) as tz-aware ``datetime`` objects (Shanghai, UTC+8).
+
+    The window covers the full logical day: ``[midnight, midnight+24h)``.
+    Callers that need ISO strings must call ``.isoformat()`` at the use site.
+    """
+    d = datetime.strptime(logical_date, "%Y-%m-%d").date()
+    start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=config.SHANGHAI_TZ)
     end = start + timedelta(days=1)
-    return (f"{start.date().isoformat()}T00:00:00+08:00", f"{end.date().isoformat()}T00:00:00+08:00")
+    return start, end
 
 
 def _count_pending_translations_for_window(since: str, until: str) -> int:
@@ -388,6 +418,51 @@ def _count_pending_translations_for_window(since: str, until: str) -> int:
             (_report_db_ts(since), _report_db_ts(until)),
         ).fetchone()
         return int(row[0] if row else 0)
+    finally:
+        conn.close()
+
+
+def _translation_coverage_acceptable(
+    translated: int, total: int, stalled: bool,
+) -> bool:
+    """Return True if current coverage is acceptable to proceed with full report.
+
+    Gate only activates when translation worker is confirmed stalled. When not
+    stalled (still within wait window) the caller is responsible for waiting.
+    total<=0 means no translatable reviews so coverage is trivially acceptable.
+    """
+    if not stalled or total <= 0:
+        return True
+    ratio = translated / total
+    return ratio >= config.TRANSLATION_COVERAGE_MIN
+
+
+def _translation_progress_snapshot(since: str, until: str) -> tuple[int, int]:
+    """Return (translated_count, total_in_window) for the given data window.
+
+    Uses the same scraped_at window semantics as
+    _count_pending_translations_for_window.  "Translated" = translate_status='done'
+    (see reviews table; other values: NULL=pending, 'failed'=retrying,
+    'skipped'=dead-lettered).
+    """
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN translate_status = 'done' THEN 1 ELSE 0 END) AS tr,
+                COUNT(*) AS total
+            FROM reviews
+            WHERE scraped_at >= ?
+              AND scraped_at < ?
+            """,
+            (_report_db_ts(since), _report_db_ts(until)),
+        ).fetchone()
+        if row is None:
+            return (0, 0)
+        translated = int(row[0] or 0)
+        total = int(row[1] or 0)
+        return (translated, total)
     finally:
         conn.close()
 
@@ -811,8 +886,14 @@ class WorkflowWorker:
             if self._stop_event.is_set():
                 break
             try:
-                while self.process_once() and not self._stop_event.is_set():
-                    continue
+                while not self._stop_event.is_set():
+                    if not self.process_once():
+                        break
+                    # Min sleep between inner iterations to prevent CPU pegging
+                    # when process_once() repeatedly returns True. Interruptible
+                    # via _stop_event.wait() for clean shutdown.
+                    if self._stop_event.wait(0.05):
+                        break
             except Exception:
                 logger.exception("WorkflowWorker: unexpected error")
 
@@ -930,6 +1011,7 @@ class WorkflowWorker:
 
         changed = False
         if run["status"] != "reporting":
+            _maybe_sync_category_map(run_id)
             run = models.update_workflow_run(
                 run_id,
                 status="reporting",
@@ -952,10 +1034,28 @@ class WorkflowWorker:
                     )
                 return changed
             if pending_translations > 0:
+                translated, total = _translation_progress_snapshot(
+                    run["data_since"], run["data_until"],
+                )
+                if not _translation_coverage_acceptable(
+                    translated=translated, total=total, stalled=True,
+                ):
+                    logger.error(
+                        "WorkflowWorker: translation coverage %d/%d below threshold "
+                        "(min=%.2f) for run %s; routing to needs_attention",
+                        translated, total, config.TRANSLATION_COVERAGE_MIN, run_id,
+                    )
+                    self._move_run_to_attention(
+                        run, now,
+                        f"Translation coverage {translated}/{total} below "
+                        f"{config.TRANSLATION_COVERAGE_MIN:.0%}",
+                    )
+                    return True
                 logger.warning(
-                    "WorkflowWorker: translation stalled for run %s; continuing with %d untranslated reviews",
-                    run_id,
-                    pending_translations,
+                    "WorkflowWorker: translation stalled for run %s; continuing "
+                    "with %d/%d translated (coverage=%.2f)",
+                    run_id, translated, total,
+                    translated / max(total, 1),
                 )
             _clear_translation_progress(run_id)
             run = freeze_report_snapshot(run_id, now=now)

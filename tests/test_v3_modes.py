@@ -292,7 +292,7 @@ class TestGenerateReportFromSnapshot:
         # Mock the full report generation to avoid needing real data
         monkeypatch.setattr(
             "qbu_crawler.server.report_snapshot.generate_full_report_from_snapshot",
-            lambda snapshot, send_email=True, output_path=None: {
+            lambda snapshot, send_email=True, output_path=None, **kwargs: {
                 "status": "completed",
                 "run_id": snapshot["run_id"],
                 "products_count": 1, "reviews_count": 1,
@@ -348,7 +348,7 @@ class TestGenerateReportFromSnapshot:
         """When full mode raises, generate_report_from_snapshot re-raises."""
         from qbu_crawler.server.report_snapshot import generate_report_from_snapshot
 
-        def _boom(snapshot, send_email=True, output_path=None):
+        def _boom(snapshot, send_email=True, output_path=None, **kwargs):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(

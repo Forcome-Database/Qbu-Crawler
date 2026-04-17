@@ -1,7 +1,7 @@
 import hashlib
 import json as _json
 import sqlite3
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from qbu_crawler.config import DB_PATH, now_shanghai
 from qbu_crawler.server.scope import Scope
@@ -246,6 +246,10 @@ def init_db():
         "ALTER TABLE reviews ADD COLUMN translate_retries INTEGER DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN reply_to TEXT",
         "ALTER TABLE tasks ADD COLUMN notified_at TIMESTAMP",
+        # P009 I4: populated on every delivery attempt (including terminal failure),
+        # so ops can distinguish "tried and failed" (notified_attempt_at IS NOT NULL,
+        # notified_at IS NULL) from "never attempted" (both NULL).
+        "ALTER TABLE tasks ADD COLUMN notified_attempt_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN last_progress_at TIMESTAMP",
         "ALTER TABLE tasks ADD COLUMN worker_token TEXT",
@@ -260,6 +264,7 @@ def init_db():
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
         "ALTER TABLE review_analysis ADD COLUMN label_anomaly_flags TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN category_synced INTEGER NOT NULL DEFAULT 0",
         """
     DELETE FROM safety_incidents
     WHERE id NOT IN (
@@ -568,7 +573,7 @@ def mark_task_lost(
     """Mark a stale running task as failed so it can be reconciled."""
     conn = get_conn()
     try:
-        finished_at = finished_at or _NOW_SHANGHAI
+        finished_at = finished_at or now_shanghai().isoformat()
         cursor = conn.execute(
             """
             UPDATE tasks
@@ -694,6 +699,7 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         "error",
         "report_mode",
         "report_tier",
+        "category_synced",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
@@ -1290,6 +1296,25 @@ def get_time_axis_semantics() -> dict:
         conn.close()
 
 
+def get_earliest_review_scraped_at() -> str | None:
+    """Return the earliest scraped_at across all reviews, or None if empty.
+
+    Used by report_snapshot to detect true cold-start (deployment younger
+    than the tier window) for an accurate is_partial flag.
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT MIN(scraped_at) AS earliest FROM reviews"
+        ).fetchone()
+        if row is None:
+            return None
+        earliest = row["earliest"]
+        return earliest if earliest else None
+    finally:
+        conn.close()
+
+
 def preview_scope_counts(scope: Scope) -> dict:
     """Return matched product/review counts for a normalized scope."""
     conn = get_conn()
@@ -1811,7 +1836,7 @@ def mark_notification_failure(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT attempts FROM notification_outbox WHERE id = ?",
+            "SELECT attempts, payload FROM notification_outbox WHERE id = ?",
             (notification_id,),
         ).fetchone()
         attempts = (row["attempts"] if row else 0) + 1
@@ -1832,6 +1857,24 @@ def mark_notification_failure(
             """,
             (next_status, attempts, error_message, http_status, exit_code, failed_at, notification_id),
         )
+        # P009 I4: record the attempt on the linked task so ops can distinguish
+        # "tried and failed" (notified_attempt_at IS NOT NULL, notified_at IS NULL)
+        # from "never attempted" (both NULL). notified_at itself is untouched —
+        # it remains the success-only marker.
+        try:
+            raw_payload = row["payload"] if row else None
+            payload = _json.loads(raw_payload) if raw_payload else {}
+            task_id = payload.get("task_id") if isinstance(payload, dict) else None
+            if task_id:
+                conn.execute(
+                    "UPDATE tasks SET notified_attempt_at = ? WHERE id = ?",
+                    (failed_at, task_id),
+                )
+        except Exception:
+            # Swallow linkage errors (malformed JSON, missing column on an older
+            # DB, etc.) — the outbox row has already been marked failed and
+            # that write must not be lost.
+            pass
         conn.commit()
         return next_status
     finally:
@@ -1839,7 +1882,8 @@ def mark_notification_failure(
 
 
 def cleanup_old_notifications(retention_days: int = 30) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    cutoff_dt = now_shanghai() - timedelta(days=retention_days)
+    cutoff = cutoff_dt.isoformat()
     conn = get_conn()
     try:
         cursor = conn.execute(

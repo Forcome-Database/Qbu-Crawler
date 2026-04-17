@@ -187,6 +187,8 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `OPENCLAW_HOOK_TOKEN` | — | OpenClaw hooks.token，与 openclaw.json 中配置一致 |
 | `SQL_QUERY_TIMEOUT` | `5` | execute_sql 超时（秒） |
 | `SQL_QUERY_MAX_ROWS` | `500` | execute_sql 最大返回行数 |
+| `NOTIFICATION_RETENTION_DAYS` | `30` | `notification_outbox` 中 `delivered`/`deadletter` 终态记录的保留天数，超过后被周期性清理 |
+| `NOTIFICATION_CLEANUP_INTERVAL_S` | `3600` | NotifierWorker 调用 `cleanup_old_notifications` 的最小间隔（秒） |
 
 ### LLM 翻译配置（.env）
 
@@ -204,6 +206,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `TRANSLATE_INTERVAL` | `60` | 翻译轮询间隔（秒） |
 | `TRANSLATE_MAX_RETRIES` | `3` | 单条评论最大重试次数，超过标记 skipped |
 | `TRANSLATE_WORKERS` | `3` | 翻译并发线程数，每轮取 batch_size × workers 条评论并行翻译 |
+| `TRANSLATION_COVERAGE_MIN` | `0.7` | 翻译覆盖率下限（分数 0-1）。翻译 stalled 且实际覆盖率低于此值时，报告运行改走 needs_attention 分支而非强行生成不完整报告 |
 
 ### 邮件 SMTP 配置（.env）
 

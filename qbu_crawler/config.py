@@ -97,6 +97,8 @@ WORKFLOW_NOTIFICATION_TARGET = os.getenv("WORKFLOW_NOTIFICATION_TARGET", "workfl
 NOTIFIER_INTERVAL = int(os.getenv("NOTIFIER_INTERVAL", "5"))
 NOTIFIER_LEASE_SECONDS = int(os.getenv("NOTIFIER_LEASE_SECONDS", "60"))
 NOTIFIER_MAX_ATTEMPTS = int(os.getenv("NOTIFIER_MAX_ATTEMPTS", "3"))
+NOTIFICATION_RETENTION_DAYS = int(os.getenv("NOTIFICATION_RETENTION_DAYS", "30"))
+NOTIFICATION_CLEANUP_INTERVAL_S = int(os.getenv("NOTIFICATION_CLEANUP_INTERVAL_S", "3600"))
 
 # ── Rollout Feature Flags ───────────────────────────
 NOTIFICATION_MODE = _enum_env(
@@ -143,6 +145,9 @@ LLM_TRANSLATE_BATCH_SIZE = int(os.getenv("LLM_TRANSLATE_BATCH_SIZE", "20"))
 TRANSLATE_INTERVAL = int(os.getenv("TRANSLATE_INTERVAL", "60"))
 TRANSLATE_MAX_RETRIES = int(os.getenv("TRANSLATE_MAX_RETRIES", "3"))
 TRANSLATE_WORKERS = int(os.getenv("TRANSLATE_WORKERS", "3"))
+# 翻译覆盖率下限（分数形式 0-1）。低于此值且翻译已 stalled 时，
+# 报告改走 needs_attention 分支而非强行生成不完整报告。
+TRANSLATION_COVERAGE_MIN = float(os.getenv("TRANSLATION_COVERAGE_MIN", "0.7"))
 
 # ── Email SMTP ────────────────────────────────────
 SMTP_HOST = os.getenv("SMTP_HOST", "")

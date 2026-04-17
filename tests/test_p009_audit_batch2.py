@@ -1,0 +1,719 @@
+"""P009 audit batch 2 — TDD test suite."""
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime
+
+import pytest
+
+from qbu_crawler import config, models
+
+
+def _get_test_conn(db_file: str):
+    conn = sqlite3.connect(db_file)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@pytest.fixture
+def fresh_db(monkeypatch, tmp_path):
+    """独立 DB，避免污染 data/products.db。"""
+    db_file = str(tmp_path / "test.db")
+    monkeypatch.setattr(config, "DB_PATH", db_file)
+    monkeypatch.setattr(models, "get_conn", lambda: _get_test_conn(db_file))
+    models.init_db()
+    return db_file
+
+
+def test_mark_task_lost_writes_real_timestamp_not_sql_literal(fresh_db):
+    """finished_at must be a parseable ISO timestamp, not a literal SQL expression."""
+    models.save_task({
+        "id": "T1",
+        "type": "scrape",
+        "status": "running",
+        "params": {"urls": []},
+        "created_at": config.now_shanghai().isoformat(),
+    })
+    ok = models.mark_task_lost("T1")
+    assert ok
+    row = models.get_task("T1")
+    ft = row["finished_at"]
+    # Must not be raw SQL expression text
+    assert "datetime(" not in ft
+    assert "+8 hours" not in ft
+    # Must be a parseable ISO timestamp
+    parsed = datetime.fromisoformat(ft)
+    assert parsed is not None
+
+
+def test_chrome_stderr_does_not_block_on_64kb_output(tmp_path):
+    """Child process writes >64KB to stderr and sleeps. With a drain thread the parent
+    must not be blocked by the pipe buffer: the child keeps running and stderr is
+    fully readable."""
+    import subprocess
+    import sys
+    import threading
+    import time as _time
+
+    # Child: write 100KB to stderr, then sleep 5s
+    script = (
+        "import sys, time; sys.stderr.write('X' * 102400); "
+        "sys.stderr.flush(); time.sleep(5)"
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    buf: list[bytes] = []
+
+    def _drain():
+        try:
+            for chunk in iter(lambda: proc.stderr.read(4096), b""):
+                buf.append(chunk)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_drain, daemon=True)
+    t.start()
+
+    _time.sleep(1.5)
+    try:
+        assert proc.poll() is None, "child should still be sleeping"
+        assert len(b"".join(buf)) >= 102400, "drain thread must have consumed stderr"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        t.join(timeout=2)
+
+
+def test_sync_new_skus_skipped_when_category_synced_flag_is_set(fresh_db, monkeypatch):
+    """workflow_runs.category_synced=1 must short-circuit the LLM call."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-17",
+        "trigger_key": "daily:2026-04-17",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+    models.update_workflow_run(run["id"], category_synced=1)
+
+    calls = {"n": 0}
+
+    def _fake_sync(*a, **kw):
+        calls["n"] += 1
+        return 0
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _fake_sync,
+    )
+
+    workflows._maybe_sync_category_map(run["id"])
+    assert calls["n"] == 0
+
+
+def test_sync_new_skus_runs_once_and_sets_flag(fresh_db, monkeypatch):
+    """First call runs sync_new_skus and sets category_synced=1; second call is a no-op."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-18",
+        "trigger_key": "daily:2026-04-18",
+        "data_since": "2026-04-17T00:00:00+08:00",
+        "data_until": "2026-04-18T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+
+    calls = {"n": 0}
+
+    def _fake_sync(*a, **kw):
+        calls["n"] += 1
+        return 3
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _fake_sync,
+    )
+
+    workflows._maybe_sync_category_map(run["id"])
+    workflows._maybe_sync_category_map(run["id"])  # second call must short-circuit
+
+    assert calls["n"] == 1
+    refreshed = models.get_workflow_run(run["id"])
+    assert refreshed["category_synced"] == 1
+
+
+def test_translation_coverage_gate_pure_function(monkeypatch):
+    """Pure function gate: stalled + low coverage blocks, stalled + high coverage allows,
+    not stalled always allows, zero total always allows."""
+    from qbu_crawler import config
+    from qbu_crawler.server.workflows import _translation_coverage_acceptable
+
+    monkeypatch.setattr(config, "TRANSLATION_COVERAGE_MIN", 0.7)
+
+    # 30% coverage while stalled → block
+    assert _translation_coverage_acceptable(translated=3, total=10, stalled=True) is False
+    # 80% coverage while stalled → allow
+    assert _translation_coverage_acceptable(translated=8, total=10, stalled=True) is True
+    # exactly at threshold while stalled → allow
+    assert _translation_coverage_acceptable(translated=7, total=10, stalled=True) is True
+    # Not stalled (still waiting) → always allow, even 0%
+    assert _translation_coverage_acceptable(translated=0, total=10, stalled=False) is True
+    # total=0 (no translatable reviews) → always allow
+    assert _translation_coverage_acceptable(translated=0, total=0, stalled=True) is True
+
+
+def test_translation_progress_snapshot_counts_from_reviews_table(fresh_db):
+    """_translation_progress_snapshot must count reviews in the window (by scraped_at)
+    and report the 'done' subset as translated, mirroring
+    _count_pending_translations_for_window's column semantics.
+    """
+    from qbu_crawler.server.workflows import _translation_progress_snapshot
+
+    # Insert a product so reviews have a valid FK
+    conn = models.get_conn()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO products (site, url, name, sku)
+            VALUES ('test', 'http://t/p1', 'P1', 'SKU-1')
+            """
+        )
+        product_id = cursor.lastrowid
+        # Window: 2026-04-10 00:00 → 2026-04-11 00:00 (Shanghai)
+        # _report_db_ts strips tz and formats as naive Shanghai-local "YYYY-MM-DD HH:MM:SS"
+        in_window = "2026-04-10 12:00:00"
+        before_window = "2026-04-09 23:59:59"
+        after_window = "2026-04-11 00:00:00"  # exclusive upper bound
+
+        rows = [
+            # In window: 3 done, 1 failed, 1 NULL, 1 skipped → total=6, translated=3
+            (product_id, "a1", "h1", "b1", "done", in_window),
+            (product_id, "a2", "h2", "b2", "done", in_window),
+            (product_id, "a3", "h3", "b3", "done", in_window),
+            (product_id, "a4", "h4", "b4", "failed", in_window),
+            (product_id, "a5", "h5", "b5", None, in_window),
+            (product_id, "a6", "h6", "b6", "skipped", in_window),
+            # Outside window: should be ignored
+            (product_id, "b1", "bh1", "bb1", "done", before_window),
+            (product_id, "b2", "bh2", "bb2", "done", after_window),
+        ]
+        for pid, author, headline, body, status, scraped_at in rows:
+            conn.execute(
+                """
+                INSERT INTO reviews
+                    (product_id, author, headline, body, body_hash,
+                     translate_status, scraped_at)
+                VALUES (?, ?, ?, ?, '', ?, ?)
+                """,
+                (pid, author, headline, body, status, scraped_at),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    translated, total = _translation_progress_snapshot(
+        since="2026-04-10T00:00:00+08:00",
+        until="2026-04-11T00:00:00+08:00",
+    )
+    assert total == 6
+    assert translated == 3
+
+
+def test_sync_new_skus_still_sets_flag_when_inner_raises(fresh_db, monkeypatch):
+    """Even if sync_new_skus raises, the flag must be set to prevent retry-storm."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-19",
+        "trigger_key": "daily:2026-04-19",
+        "data_since": "2026-04-18T00:00:00+08:00",
+        "data_until": "2026-04-19T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+
+    def _bad_sync(*a, **kw):
+        raise RuntimeError("simulated LLM timeout")
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _bad_sync,
+    )
+
+    # Must not propagate the exception out of the helper
+    workflows._maybe_sync_category_map(run["id"])
+
+    refreshed = models.get_workflow_run(run["id"])
+    assert refreshed["category_synced"] == 1
+
+
+def test_infer_categories_isolates_failed_batches(monkeypatch):
+    """One batch raising must not kill other batches; failed items fall back to 'other'."""
+    from qbu_crawler.server import category_inferrer
+
+    # Force one product per batch so each product is its own batch.
+    monkeypatch.setattr(category_inferrer, "_BATCH_SIZE", 1)
+
+    calls = {"n": 0}
+
+    class _FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls["n"] += 1
+                    # First batch: fail. Second: success.
+                    if calls["n"] == 1:
+                        raise RuntimeError("simulated LLM timeout")
+
+                    class _R:
+                        choices = [
+                            type("C", (), {
+                                "finish_reason": "stop",
+                                "message": type("M", (), {
+                                    "content": '{"results":[{"sku":"X","category":"grinder","sub_category":"","confidence":0.95}]}',
+                                })(),
+                            })(),
+                        ]
+                    return _R()
+
+    products = [
+        {"sku": "A", "name": "Kitchen Grinder #22", "url": ""},
+        {"sku": "X", "name": "Meat Grinder", "url": ""},
+    ]
+    results = category_inferrer.infer_categories(products, client=_FakeClient())
+
+    assert len(results) == 2
+    by_sku = {r["sku"]: r for r in results}
+    # A was in the failed batch → fallback to 'other' (confidence 0 < 0.7 → 'other')
+    assert by_sku["A"]["category"] == "other"
+    # X's batch succeeded
+    assert by_sku["X"]["category"] == "grinder"
+    # Exactly 2 LLM calls were attempted (one per batch)
+    assert calls["n"] == 2
+
+
+def test_append_csv_uses_exclusive_lock(tmp_path):
+    """If a .lock sentinel file already exists, _append_csv must raise
+    CategoryMapLocked; removing the lock lets it succeed."""
+    import pytest
+    from qbu_crawler.server import category_inferrer
+
+    csv_path = tmp_path / "cat.csv"
+    lock_path = tmp_path / "cat.csv.lock"
+    lock_path.write_text("held-by-someone-else")
+
+    with pytest.raises(category_inferrer.CategoryMapLocked):
+        category_inferrer._append_csv(
+            [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+            str(csv_path),
+            lock_timeout=0.3,
+        )
+
+    # Release the lock
+    lock_path.unlink()
+
+    category_inferrer._append_csv(
+        [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+        str(csv_path),
+        lock_timeout=0.3,
+    )
+    assert csv_path.exists()
+    # Lock file was cleaned up
+    assert not lock_path.exists()
+    # Row was written with the expected header
+    content = csv_path.read_text()
+    assert "sku,category,sub_category,price_band_override" in content
+    assert "A,grinder,," in content
+
+
+def test_append_csv_releases_lock_on_exception(tmp_path, monkeypatch):
+    """If the write step fails mid-operation, the lock file must still be released."""
+    from qbu_crawler.server import category_inferrer
+
+    csv_path = tmp_path / "cat.csv"
+
+    # Force the inner open() to blow up to simulate disk full / permission denied
+    real_open = open
+
+    def _bad_open(path, *args, **kwargs):
+        if str(path).endswith("cat.csv"):
+            raise OSError("simulated disk full")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _bad_open)
+
+    with __import__("pytest").raises(OSError):
+        category_inferrer._append_csv(
+            [{"sku": "A", "category": "grinder", "sub_category": "", "confidence": 0.9}],
+            str(csv_path),
+            lock_timeout=0.3,
+        )
+
+    # Lock file must be gone even though the write failed
+    assert not (tmp_path / "cat.csv.lock").exists()
+
+
+# ---------------------------------------------------------------------------
+# I5 — _logical_date_window returns tz-aware datetime objects
+# ---------------------------------------------------------------------------
+
+
+def test_logical_date_window_returns_tzinfo_aware_datetimes():
+    """The helper must return tz-aware datetime objects, not ISO strings,
+    so callers never accidentally mix naive and aware datetimes."""
+    from datetime import datetime, timedelta
+    from qbu_crawler.server.workflows import _logical_date_window
+
+    since, until = _logical_date_window("2026-04-17")
+    assert isinstance(since, datetime)
+    assert isinstance(until, datetime)
+    assert since.tzinfo is not None
+    assert until.tzinfo is not None
+    # Shanghai = UTC+8
+    assert since.utcoffset() == timedelta(hours=8)
+    assert until.utcoffset() == timedelta(hours=8)
+    # Sanity: window is exactly 24 hours for daily
+    assert (until - since) == timedelta(days=1)
+    # Start at midnight
+    assert since.time().hour == 0 and since.time().minute == 0
+
+
+def test_workflow_worker_inner_loop_has_min_sleep():
+    """Simulate process_once returning True forever — the inner loop must
+    self-throttle via stop_event.wait(0.05) so CPU doesn't peg."""
+    from qbu_crawler.server import workflows
+    import threading
+    import time as _time
+
+    worker = workflows.WorkflowWorker.__new__(workflows.WorkflowWorker)
+    worker._stop_event = threading.Event()
+    worker._wake_event = threading.Event()
+    # Pre-set wake so the outer wait returns immediately and we enter the
+    # inner loop right away. Use a near-zero outer interval as a backup.
+    worker._wake_event.set()
+    worker._interval = 0
+
+    calls = {"n": 0}
+
+    def _fake_process_once(now=None):
+        calls["n"] += 1
+        return True  # keep work coming
+
+    worker.process_once = _fake_process_once
+
+    thread = threading.Thread(target=worker._run, daemon=True)
+    thread.start()
+    _time.sleep(0.6)
+    worker._stop_event.set()
+    worker._wake_event.set()
+    thread.join(timeout=2)
+
+    # With 50ms min sleep: 0.6s / 0.05s ≈ 12 iterations max.
+    # Without: tens of thousands.
+    assert calls["n"] <= 20, f"CPU-pegging: {calls['n']} iterations in 0.6s"
+    # But there MUST be some iterations — not just zero
+    assert calls["n"] >= 5, f"Over-throttled: only {calls['n']} iterations in 0.6s"
+
+
+def test_generate_full_report_from_snapshot_accepts_explicit_report_tier():
+    """D015 #3 follow-up: explicit report_tier parameter with _meta fallback."""
+    import inspect
+    from qbu_crawler.server import report_snapshot
+
+    sig = inspect.signature(report_snapshot.generate_full_report_from_snapshot)
+    assert "report_tier" in sig.parameters
+    # Backward-compat: default None so existing callers pass _meta as before.
+    assert sig.parameters["report_tier"].default is None
+    # Keyword-only so positional callers aren't shifted.
+    assert sig.parameters["report_tier"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_render_full_email_html_accepts_explicit_report_tier():
+    """D015 #3 follow-up: _render_full_email_html also takes explicit tier."""
+    import inspect
+    from qbu_crawler.server import report_snapshot
+
+    sig = inspect.signature(report_snapshot._render_full_email_html)
+    assert "report_tier" in sig.parameters
+    assert sig.parameters["report_tier"].default is None
+    assert sig.parameters["report_tier"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_report_tier_priority_explicit_over_meta(monkeypatch, caplog):
+    """Priority contract: explicit param wins over snapshot._meta; _meta used
+    when explicit is None; WARNING only when both absent."""
+    from qbu_crawler.server import report_snapshot
+
+    captured: dict = {}
+
+    def _probe(*args, **kwargs):
+        captured["report_tier"] = kwargs.get("report_tier")
+        # Short-circuit inside the real function: we just want the resolved tier
+        raise RuntimeError("probe-short-circuit")
+
+    # Intercept the first call that consumes the resolved report_tier:
+    # load_previous_report_context is where resolution lands in both functions.
+    monkeypatch.setattr(
+        report_snapshot, "load_previous_report_context", _probe,
+    )
+
+    # Case 1: explicit="weekly" wins over _meta.report_tier="daily"
+    snap1 = {"_meta": {"report_tier": "daily"}, "run_id": 1, "logical_date": "2026-04-17"}
+    with pytest.raises(RuntimeError, match="probe-short-circuit"):
+        report_snapshot._render_full_email_html(snap1, {}, report_tier="weekly")
+    assert captured["report_tier"] == "weekly"
+
+    # Case 2: explicit=None falls back to _meta
+    captured.clear()
+    snap2 = {"_meta": {"report_tier": "monthly"}, "run_id": 2, "logical_date": "2026-04-17"}
+    with pytest.raises(RuntimeError, match="probe-short-circuit"):
+        report_snapshot._render_full_email_html(snap2, {})
+    assert captured["report_tier"] == "monthly"
+
+    # Case 3: both absent → defaults to "daily" with WARNING
+    captured.clear()
+    import logging
+    snap3 = {"run_id": 3, "logical_date": "2026-04-17"}
+    with caplog.at_level(logging.WARNING, logger="qbu_crawler.server.report_snapshot"):
+        with pytest.raises(RuntimeError, match="probe-short-circuit"):
+            report_snapshot._render_full_email_html(snap3, {})
+    assert captured["report_tier"] == "daily"
+    assert any("report_tier missing" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# F3 / D015 #5 — True cold-start detection via earliest_review_scraped_at
+# ---------------------------------------------------------------------------
+
+
+def _insert_product_raw(conn, site="basspro", sku="SKU-X", name="Test",
+                        url="http://example.com/x"):
+    cursor = conn.execute(
+        """
+        INSERT INTO products (site, url, name, sku)
+        VALUES (?, ?, ?, ?)
+        """,
+        (site, url, name, sku),
+    )
+    return cursor.lastrowid
+
+
+def _insert_review_raw(conn, product_id, author, headline, body, scraped_at):
+    """Insert a review directly (bypassing save_reviews which ignores scraped_at)."""
+    import hashlib as _h
+    body_hash = _h.md5((body or "").encode("utf-8")).hexdigest()[:16]
+    conn.execute(
+        """
+        INSERT INTO reviews (product_id, author, headline, body, body_hash,
+                             rating, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (product_id, author, headline, body, body_hash, 3, scraped_at),
+    )
+
+
+def test_get_earliest_review_scraped_at_returns_none_when_empty(fresh_db):
+    """No reviews → None."""
+    assert models.get_earliest_review_scraped_at() is None
+
+
+def test_get_earliest_review_scraped_at_returns_min(fresh_db):
+    """Returns the earliest scraped_at from reviews."""
+    conn = models.get_conn()
+    try:
+        pid = _insert_product_raw(conn)
+        for i, ts in enumerate([
+            "2026-03-15 10:00:00",
+            "2026-03-01 10:00:00",
+            "2026-04-01 10:00:00",
+        ]):
+            _insert_review_raw(conn, pid, f"u{i}", f"h{i}", f"b{i}", ts)
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert models.get_earliest_review_scraped_at() == "2026-03-01 10:00:00"
+
+
+def test_inject_meta_is_partial_true_when_earliest_review_after_window_start(
+    fresh_db, monkeypatch,
+):
+    """Cold-start: earliest review scraped_at > window_start → is_partial=True,
+    even when the calendar window is fully elapsed (actual_days == expected_days)."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-04-15T00:00:00+08:00",
+    )
+
+    # Window is a full 7-day calendar week (no calendar gap), yet the deployment
+    # (earliest review 2026-04-15) is younger than the window start (2026-04-10).
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["earliest_review_scraped_at"] == "2026-04-15T00:00:00+08:00"
+
+
+def test_inject_meta_is_partial_true_when_reviews_table_empty(
+    fresh_db, monkeypatch,
+):
+    """Empty reviews table + a window → is_partial = True (nothing to show)."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: None,
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="monthly",
+        expected_days=30,
+        actual_days=30,
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["earliest_review_scraped_at"] is None
+
+
+def test_inject_meta_not_partial_when_earliest_review_predates_window(
+    fresh_db, monkeypatch,
+):
+    """Deployment predates window + full calendar coverage → is_partial not set."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-01-01T00:00:00+08:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    assert "is_partial" not in snap["_meta"]
+    assert snap["_meta"]["earliest_review_scraped_at"] == "2026-01-01T00:00:00+08:00"
+
+
+def test_inject_meta_calendar_gap_still_triggers_partial(
+    fresh_db, monkeypatch,
+):
+    """Backward-compat: the classic actual_days < expected_days check
+    still fires even when cold-start is not in play."""
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-01-01T00:00:00+08:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="monthly",
+        expected_days=30,
+        actual_days=20,  # calendar gap — partial regardless of cold-start
+        window_start_dt=window_start,
+    )
+    assert snap["_meta"]["is_partial"] is True
+    assert snap["_meta"]["expected_days"] == 30
+    assert snap["_meta"]["actual_days"] == 20
+
+
+def test_inject_meta_handles_naive_scraped_at_from_db(fresh_db, monkeypatch):
+    """reviews.scraped_at in the DB is naive Shanghai-local 'YYYY-MM-DD HH:MM:SS'.
+    The comparison against an aware window_start_dt must not raise TypeError."""
+    from qbu_crawler.server import report_snapshot
+
+    # Simulate the real DB format: naive, space-separated.
+    monkeypatch.setattr(
+        "qbu_crawler.models.get_earliest_review_scraped_at",
+        lambda: "2026-04-15 08:30:00",
+    )
+
+    window_start = datetime.fromisoformat("2026-04-10T00:00:00+08:00")
+    snap: dict = {}
+    report_snapshot._inject_meta(
+        snap,
+        tier="weekly",
+        expected_days=7,
+        actual_days=7,
+        window_start_dt=window_start,
+    )
+    # 2026-04-15 (Shanghai-local) is after 2026-04-10 → partial
+    assert snap["_meta"]["is_partial"] is True
+
+
+# ---------------------------------------------------------------------------
+# F4 / D015 #6 — LLM prompt unit-semantics disambiguation
+# ---------------------------------------------------------------------------
+
+
+def test_category_inferrer_prompt_clarifies_confidence_as_fraction():
+    """System prompt must state confidence is a float 0.0-1.0, not percentage."""
+    from qbu_crawler.server import category_inferrer
+
+    messages = category_inferrer._build_messages([
+        {"sku": "X", "name": "test", "url": ""},
+    ])
+    system = messages[0]["content"]
+    assert "0.0" in system or "float" in system.lower()
+    assert "NOT a percentage" in system or "not a percentage" in system.lower() \
+        or "fraction" in system.lower()
+
+
+def test_analytics_executive_prompt_clarifies_neg_rate_as_fraction():
+    """Executive summary prompt must state neg_rate is a fraction 0.0-1.0."""
+    from qbu_crawler.server import analytics_executive
+
+    # Grab the prompt constant (name may vary: _PROMPT, _LLM_PROMPT, etc.)
+    prompt_attr = None
+    for name in ("_PROMPT", "_LLM_PROMPT", "_EXEC_PROMPT", "_SYSTEM_PROMPT", "PROMPT"):
+        if hasattr(analytics_executive, name):
+            prompt_attr = name
+            break
+    assert prompt_attr is not None, "could not locate the executive LLM prompt constant"
+
+    prompt = getattr(analytics_executive, prompt_attr)
+    text = prompt if isinstance(prompt, str) else str(prompt)
+
+    # At least one of these phrasings must be present to anchor the unit.
+    assertions = [
+        "fraction" in text.lower(),
+        "0.0" in text and "1.0" in text,
+        "0.05" in text and ("5%" in text or "5 %" in text),
+    ]
+    assert any(assertions), "prompt does not disambiguate neg_rate unit"

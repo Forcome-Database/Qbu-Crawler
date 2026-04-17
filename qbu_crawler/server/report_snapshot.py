@@ -20,8 +20,20 @@ _RECIPIENTS_FILE_PATH = os.path.join(
 
 
 def _inject_meta(snapshot: dict, tier: str = "daily",
-                 expected_days: int | None = None, actual_days: int | None = None) -> dict:
-    """Add version metadata to snapshot for traceability."""
+                 expected_days: int | None = None, actual_days: int | None = None,
+                 window_start_dt: datetime | None = None) -> dict:
+    """Add version metadata to snapshot for traceability.
+
+    is_partial resolution (D015 #5 / F3 — true cold-start detection):
+      1. If `window_start_dt` is provided and the earliest review scraped_at
+         is later than it (or the reviews table is empty), the deployment is
+         younger than the tier window → is_partial = True.
+      2. Otherwise, fall back to the classic `actual_days < expected_days`
+         calendar check.
+
+    `earliest_review_scraped_at` is always recorded in `_meta` so downstream
+    templates can show "data since N" in cold-start notices.
+    """
     from qbu_crawler import __version__
     meta = {
         "schema_version": "3",
@@ -29,10 +41,40 @@ def _inject_meta(snapshot: dict, tier: str = "daily",
         "taxonomy_version": snapshot.get("taxonomy_version", "v1"),
         "report_tier": tier,
     }
+
+    is_partial = False
     if expected_days is not None and actual_days is not None and actual_days < expected_days:
-        meta["is_partial"] = True
+        is_partial = True
         meta["expected_days"] = expected_days
         meta["actual_days"] = actual_days
+
+    # Cold-start detection: compare earliest review against the window start.
+    earliest_review = models.get_earliest_review_scraped_at()
+    if window_start_dt is not None:
+        if earliest_review is None:
+            # No reviews at all — the window is trivially partial.
+            is_partial = True
+        else:
+            try:
+                earliest_dt = datetime.fromisoformat(
+                    str(earliest_review).replace(" ", "T")
+                )
+            except ValueError:
+                earliest_dt = None
+            if earliest_dt is not None:
+                if earliest_dt.tzinfo is None:
+                    # reviews.scraped_at is stored as naive Shanghai-local time.
+                    earliest_dt = earliest_dt.replace(tzinfo=config.SHANGHAI_TZ)
+                if earliest_dt > window_start_dt:
+                    is_partial = True
+
+    meta["earliest_review_scraped_at"] = earliest_review
+    if is_partial:
+        meta["is_partial"] = True
+        # Preserve expected/actual only when the calendar check set them above
+        # (meta already has them). Cold-start without calendar gap leaves them
+        # off — downstream code already treats their absence as "unknown".
+
     snapshot["_meta"] = meta
     return snapshot
 
@@ -375,13 +417,23 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     ).hexdigest()
     snapshot["snapshot_hash"] = snapshot_hash
 
-    # P008 Phase 3: Pass report_tier from run to _meta; inject is_partial for cold-start
-    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar length
-    # of the previous month (data_since's month), so Feb (28/29d) / Apr (30d) / Jul (31d)
-    # each compute expected correctly.
+    # P008 Phase 3 / D015 #5 (F3): Pass report_tier from run to _meta; inject
+    # is_partial for both calendar gap AND true cold-start (deployment younger
+    # than the tier window, detected via earliest review scraped_at).
+    # Cold-start cue: weekly uses fixed 7 days; monthly uses the actual calendar
+    # length of the previous month (data_since's month), so Feb (28/29d) /
+    # Apr (30d) / Jul (31d) each compute expected correctly.
     run_tier = run.get("report_tier", "daily")
     _expected: int | None = None
     _actual: int | None = None
+    _window_start_dt: datetime | None = None
+    if run.get("data_since"):
+        try:
+            _window_start_dt = datetime.fromisoformat(run["data_since"])
+            if _window_start_dt.tzinfo is None:
+                _window_start_dt = _window_start_dt.replace(tzinfo=config.SHANGHAI_TZ)
+        except (TypeError, ValueError):
+            _window_start_dt = None
     if run_tier in ("weekly", "monthly") and run.get("data_since") and run.get("data_until"):
         try:
             _since_d = datetime.fromisoformat(run["data_since"]).date()
@@ -400,10 +452,13 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
             _expected = None
             _actual = None
 
-    if _expected is not None and _actual is not None:
-        _inject_meta(snapshot, tier=run_tier, expected_days=_expected, actual_days=_actual)
-    else:
-        _inject_meta(snapshot, tier=run_tier)
+    _inject_meta(
+        snapshot,
+        tier=run_tier,
+        expected_days=_expected,
+        actual_days=_actual,
+        window_start_dt=_window_start_dt,
+    )
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     snapshot_path = os.path.join(
@@ -942,6 +997,7 @@ def _generate_weekly_report(snapshot, send_email=True):
     try:
         full_result = generate_full_report_from_snapshot(
             snapshot, send_email=False,  # We send our own email
+            report_tier="weekly",
         )
     except Exception as exc:
         _logger.exception("Weekly report: full generation failed for run %d", run_id)
@@ -1122,7 +1178,9 @@ def _generate_monthly_report(snapshot, send_email=True):
 
     # Generate full V3 report (reuse for charts, KPIs, Excel data)
     try:
-        full_result = generate_full_report_from_snapshot(snapshot, send_email=False)
+        full_result = generate_full_report_from_snapshot(
+            snapshot, send_email=False, report_tier="monthly",
+        )
     except Exception:
         _logger.exception("Monthly report: full generation failed for run %d", run_id)
         raise
@@ -1636,9 +1694,11 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         if mode == "full":
             # Entry point for 3-mode routing. workflows.py calls this function
             # instead of generate_full_report_from_snapshot directly.
-            # Delegate to existing function (which handles its own email)
+            # Delegate to existing function (which handles its own email).
+            # Legacy path: run_tier is None → treat as daily (matches branch above).
             result = generate_full_report_from_snapshot(
                 snapshot, send_email=send_email, output_path=output_path,
+                report_tier="daily",
             )
             result["mode"] = "full"
             # Full-mode email now uses email_full.html.j2 via _render_full_email_html()
@@ -1664,10 +1724,33 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         raise
 
 
-def _render_full_email_html(snapshot, analytics):
-    """Render email_full.html.j2 for the full-mode email body."""
+def _render_full_email_html(snapshot, analytics, *, report_tier: str | None = None):
+    """Render email_full.html.j2 for the full-mode email body.
+
+    Args:
+        snapshot: report snapshot dict
+        analytics: analytics dict
+        report_tier: explicit tier ("daily" / "weekly" / "monthly") for
+            baseline lookup. Falls back to ``snapshot["_meta"]["report_tier"]``
+            for backward compatibility (D015 #3 follow-up). If both absent,
+            logs WARNING and defaults to ``"daily"``.
+    """
     from jinja2 import Environment, FileSystemLoader, select_autoescape
     from qbu_crawler.server.report_common import normalize_deep_report_analytics, _compute_alert_level
+
+    # D015 #3 follow-up: resolve report_tier with priority:
+    # explicit param > snapshot._meta.report_tier > WARNING + "daily"
+    if report_tier is None:
+        report_tier = (snapshot.get("_meta") or {}).get("report_tier")
+    if report_tier is None:
+        _logger.warning(
+            "_render_full_email_html: report_tier missing "
+            "(explicit param + snapshot._meta both absent); "
+            "run_id=%s logical_date=%s; defaulting to 'daily'",
+            snapshot.get("run_id"),
+            snapshot.get("logical_date"),
+        )
+        report_tier = "daily"
 
     template_dir = Path(__file__).parent / "report_templates"
     env = Environment(
@@ -1689,14 +1772,8 @@ def _render_full_email_html(snapshot, analytics):
     prev_analytics_ctx = None
     prev_snapshot = None
     run_id = snapshot.get("run_id", 0)
-    _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
-    if not _snap_meta_tier:
-        _logger.warning(
-            "snapshot missing _meta.report_tier, defaulting to 'daily'"
-        )
-    _email_tier = _snap_meta_tier or "daily"
     if run_id:
-        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=_email_tier)
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=report_tier)
     changes = detect_snapshot_changes(snapshot, prev_snapshot)
 
     # New review summary for email template
@@ -1759,7 +1836,34 @@ def generate_full_report_from_snapshot(
     snapshot: dict,
     send_email: bool = True,
     output_path: str | None = None,
+    *,
+    report_tier: str | None = None,
 ) -> dict:
+    """Generate full-mode report (analytics + Excel + V3 HTML + email).
+
+    Args:
+        snapshot: report snapshot dict
+        send_email: whether to send the summary email
+        output_path: optional explicit Excel output path
+        report_tier: explicit tier ("daily" / "weekly" / "monthly") for
+            baseline lookup. Falls back to ``snapshot["_meta"]["report_tier"]``
+            for backward compatibility (D015 #3 follow-up). If both absent,
+            logs WARNING and defaults to ``"daily"``.
+    """
+    # D015 #3 follow-up: resolve report_tier with priority:
+    # explicit param > snapshot._meta.report_tier > WARNING + "daily"
+    if report_tier is None:
+        report_tier = (snapshot.get("_meta") or {}).get("report_tier")
+    if report_tier is None:
+        _logger.warning(
+            "generate_full_report_from_snapshot: report_tier missing "
+            "(explicit param + snapshot._meta both absent); "
+            "run_id=%s logical_date=%s; defaulting to 'daily'",
+            snapshot.get("run_id"),
+            snapshot.get("logical_date"),
+        )
+        report_tier = "daily"
+
     if not snapshot.get("reviews") and not snapshot.get("cumulative"):
         return {"status": "completed_no_change", "reason": "No new reviews"}
 
@@ -1857,13 +1961,9 @@ def generate_full_report_from_snapshot(
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         # P008: compute snapshot changes for Tab 2
         try:
-            _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
-            if not _snap_meta_tier:
-                _logger.warning(
-                    "snapshot missing _meta.report_tier, defaulting to 'daily'"
-                )
-            _snap_tier = _snap_meta_tier or "daily"
-            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0), report_tier=_snap_tier)
+            _prev_a, _prev_s = load_previous_report_context(
+                snapshot.get("run_id", 0), report_tier=report_tier,
+            )
             _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
         except Exception:
             _changes = None
@@ -1883,7 +1983,9 @@ def generate_full_report_from_snapshot(
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
         # Render email_full.html.j2 (replaces legacy daily_report_email.html.j2)
         try:
-            body_html = _render_full_email_html(snapshot, analytics)
+            body_html = _render_full_email_html(
+                snapshot, analytics, report_tier=report_tier,
+            )
         except Exception:
             _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
             body_html = report.render_daily_email_html(snapshot, analytics)

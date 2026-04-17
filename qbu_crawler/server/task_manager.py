@@ -206,7 +206,7 @@ class TaskManager:
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
-                    logger.error(f"[Task {task_id}] Failed {url}: {e}")
+                    logger.exception(f"[Task {task_id}] Failed {url}: {e}")
                     task.progress["failed"] = task.progress.get("failed", 0) + 1
                     task.progress["completed"] = i + 1
 
@@ -292,7 +292,7 @@ class TaskManager:
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
-                    logger.error(f"[Task {task_id}] Failed {url}: {e}")
+                    logger.exception(f"[Task {task_id}] Failed {url}: {e}")
                     task.progress["failed"] = task.progress.get("failed", 0) + 1
                     task.progress["completed"] = i + 1
 
