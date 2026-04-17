@@ -92,3 +92,95 @@ def test_chrome_stderr_does_not_block_on_64kb_output(tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
         t.join(timeout=2)
+
+
+def test_sync_new_skus_skipped_when_category_synced_flag_is_set(fresh_db, monkeypatch):
+    """workflow_runs.category_synced=1 must short-circuit the LLM call."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-17",
+        "trigger_key": "daily:2026-04-17",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+    models.update_workflow_run(run["id"], category_synced=1)
+
+    calls = {"n": 0}
+
+    def _fake_sync(*a, **kw):
+        calls["n"] += 1
+        return 0
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _fake_sync,
+    )
+
+    workflows._maybe_sync_category_map(run["id"])
+    assert calls["n"] == 0
+
+
+def test_sync_new_skus_runs_once_and_sets_flag(fresh_db, monkeypatch):
+    """First call runs sync_new_skus and sets category_synced=1; second call is a no-op."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-18",
+        "trigger_key": "daily:2026-04-18",
+        "data_since": "2026-04-17T00:00:00+08:00",
+        "data_until": "2026-04-18T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+
+    calls = {"n": 0}
+
+    def _fake_sync(*a, **kw):
+        calls["n"] += 1
+        return 3
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _fake_sync,
+    )
+
+    workflows._maybe_sync_category_map(run["id"])
+    workflows._maybe_sync_category_map(run["id"])  # second call must short-circuit
+
+    assert calls["n"] == 1
+    refreshed = models.get_workflow_run(run["id"])
+    assert refreshed["category_synced"] == 1
+
+
+def test_sync_new_skus_still_sets_flag_when_inner_raises(fresh_db, monkeypatch):
+    """Even if sync_new_skus raises, the flag must be set to prevent retry-storm."""
+    from qbu_crawler.server import workflows
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily",
+        "logical_date": "2026-04-19",
+        "trigger_key": "daily:2026-04-19",
+        "data_since": "2026-04-18T00:00:00+08:00",
+        "data_until": "2026-04-19T00:00:00+08:00",
+        "status": "running",
+        "created_at": config.now_shanghai().isoformat(),
+        "updated_at": config.now_shanghai().isoformat(),
+    })
+
+    def _bad_sync(*a, **kw):
+        raise RuntimeError("simulated LLM timeout")
+
+    monkeypatch.setattr(
+        "qbu_crawler.server.category_inferrer.sync_new_skus", _bad_sync,
+    )
+
+    # Must not propagate the exception out of the helper
+    workflows._maybe_sync_category_map(run["id"])
+
+    refreshed = models.get_workflow_run(run["id"])
+    assert refreshed["category_synced"] == 1

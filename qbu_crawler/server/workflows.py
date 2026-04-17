@@ -31,6 +31,28 @@ from qbu_crawler.server.report_snapshot import (
 logger = logging.getLogger(__name__)
 
 
+def _maybe_sync_category_map(run_id: int) -> None:
+    """Idempotently sync new SKUs into category_map.csv for this workflow run.
+
+    Uses workflow_runs.category_synced as the authoritative idempotency flag so
+    that process restarts or status regressions never cause duplicate LLM calls.
+    All errors are swallowed — this must never block the workflow.
+    """
+    try:
+        run = models.get_workflow_run(run_id)
+        if not run or run.get("category_synced"):
+            return
+        from qbu_crawler.server.category_inferrer import sync_new_skus
+        sync_new_skus()
+    except Exception:
+        logger.exception("sync_new_skus failed; marking synced anyway to avoid retry-storm")
+    finally:
+        try:
+            models.update_workflow_run(run_id, category_synced=1)
+        except Exception:
+            logger.exception("failed to set category_synced flag for run %s", run_id)
+
+
 class LocalHttpTaskSubmitter:
     """Submit tasks into the long-running crawler service over loopback HTTP."""
 
@@ -930,10 +952,7 @@ class WorkflowWorker:
 
         changed = False
         if run["status"] != "reporting":
-            # Auto-map any new SKUs into category_map.csv before report builds it.
-            # sync_new_skus swallows all errors internally — never blocks the workflow.
-            from qbu_crawler.server.category_inferrer import sync_new_skus
-            sync_new_skus()
+            _maybe_sync_category_map(run_id)
             run = models.update_workflow_run(
                 run_id,
                 status="reporting",
