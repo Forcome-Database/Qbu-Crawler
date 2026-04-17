@@ -22,6 +22,15 @@ def set_env():
     os.environ["QBU_DATA_DIR"] = str(config.SIM_DATA_DIR)
     os.environ["REPORT_DIR"] = str(config.REPORT_WORK_DIR)
 
+    # Simulation: disable outbound side-effects so business code is fully
+    # deterministic and self-contained.
+    #   - SMTP_HOST cleared => send_email short-circuits with
+    #     {"success": False, "error": "SMTP_HOST not configured"}
+    #   - OPENCLAW_HOOK_URL cleared => _maybe_trigger_ai_digest no-ops
+    os.environ["SMTP_HOST"] = ""
+    os.environ["OPENCLAW_HOOK_URL"] = ""
+    os.environ["OPENCLAW_BRIDGE_URL"] = ""
+
 
 def load_business():
     """Lazy import business modules and return a namespace handle."""
