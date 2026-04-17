@@ -1,6 +1,6 @@
 """Data-construction operations that mutate simulation.db or derive mutations."""
+import json
 from datetime import date, datetime, timedelta
-from typing import Iterable
 
 
 # Fraction of reviews that land on the timeline start day (cold-start batch)
@@ -49,3 +49,57 @@ def redistribute_scraped_at(
         new_r["scraped_at"] = stamp.strftime("%Y-%m-%dT%H:%M:%S")
         out.append(new_r)
     return out
+
+
+def expand_labels_rows(review_analysis_rows: list[dict]) -> list[dict]:
+    """Flatten review_analysis.labels JSON into review_issue_labels rows."""
+    out = []
+    for ra in review_analysis_rows:
+        labels_raw = ra.get("labels")
+        if not labels_raw:
+            continue
+        try:
+            labels = json.loads(labels_raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(labels, list):
+            continue
+        for lbl in labels:
+            if not isinstance(lbl, dict) or "code" not in lbl:
+                continue
+            out.append({
+                "review_id": ra["review_id"],
+                "label_code": lbl.get("code"),
+                "label_polarity": lbl.get("polarity", "neutral"),
+                "severity": lbl.get("severity", "low"),
+                "confidence": float(lbl.get("confidence", 0.5) or 0.5),
+                "source": "seed_from_review_analysis",
+                "taxonomy_version": "v1",
+            })
+    return out
+
+
+def seed_issue_labels(conn) -> int:
+    """Populate review_issue_labels from review_analysis.labels JSON."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT review_id, labels FROM review_analysis"
+    ).fetchall()]
+    to_insert = expand_labels_rows(rows)
+    # Clear existing to be idempotent
+    conn.execute("DELETE FROM review_issue_labels")
+    now = "2026-03-20T09:00:00"
+    conn.executemany(
+        """INSERT INTO review_issue_labels
+           (review_id, label_code, label_polarity, severity, confidence,
+            source, taxonomy_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                r["review_id"], r["label_code"], r["label_polarity"],
+                r["severity"], r["confidence"], r["source"],
+                r["taxonomy_version"], now, now,
+            )
+            for r in to_insert
+        ],
+    )
+    return len(to_insert)

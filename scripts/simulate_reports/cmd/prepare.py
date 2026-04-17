@@ -21,6 +21,9 @@ def run(argv):
         conn.execute("DELETE FROM notification_outbox")
         print("Cleared workflow_runs / workflow_run_tasks / notification_outbox")
         _apply_scraped_at_redistribution(conn)
+        from ..data_builder import seed_issue_labels
+        n = seed_issue_labels(conn)
+        print(f"Seeded review_issue_labels: {n} rows")
     return 0
 
 
