@@ -675,3 +675,45 @@ def test_inject_meta_handles_naive_scraped_at_from_db(fresh_db, monkeypatch):
     )
     # 2026-04-15 (Shanghai-local) is after 2026-04-10 → partial
     assert snap["_meta"]["is_partial"] is True
+
+
+# ---------------------------------------------------------------------------
+# F4 / D015 #6 — LLM prompt unit-semantics disambiguation
+# ---------------------------------------------------------------------------
+
+
+def test_category_inferrer_prompt_clarifies_confidence_as_fraction():
+    """System prompt must state confidence is a float 0.0-1.0, not percentage."""
+    from qbu_crawler.server import category_inferrer
+
+    messages = category_inferrer._build_messages([
+        {"sku": "X", "name": "test", "url": ""},
+    ])
+    system = messages[0]["content"]
+    assert "0.0" in system or "float" in system.lower()
+    assert "NOT a percentage" in system or "not a percentage" in system.lower() \
+        or "fraction" in system.lower()
+
+
+def test_analytics_executive_prompt_clarifies_neg_rate_as_fraction():
+    """Executive summary prompt must state neg_rate is a fraction 0.0-1.0."""
+    from qbu_crawler.server import analytics_executive
+
+    # Grab the prompt constant (name may vary: _PROMPT, _LLM_PROMPT, etc.)
+    prompt_attr = None
+    for name in ("_PROMPT", "_LLM_PROMPT", "_EXEC_PROMPT", "_SYSTEM_PROMPT", "PROMPT"):
+        if hasattr(analytics_executive, name):
+            prompt_attr = name
+            break
+    assert prompt_attr is not None, "could not locate the executive LLM prompt constant"
+
+    prompt = getattr(analytics_executive, prompt_attr)
+    text = prompt if isinstance(prompt, str) else str(prompt)
+
+    # At least one of these phrasings must be present to anchor the unit.
+    assertions = [
+        "fraction" in text.lower(),
+        "0.0" in text and "1.0" in text,
+        "0.05" in text and ("5%" in text or "5 %" in text),
+    ]
+    assert any(assertions), "prompt does not disambiguate neg_rate unit"

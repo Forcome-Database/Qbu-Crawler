@@ -82,7 +82,8 @@ def _build_messages(products: list[dict]) -> list[dict]:
         "- Cubers and tenderizers → tenderizer (same mechanism)\n"
         "- Spare motors, pedals, attachments, plates, knives → accessory\n"
         "- Meat lugs / tubs → container\n"
-        "- Use 'other' if confidence < 0.7. NEVER invent new categories.\n\n"
+        "- `confidence` is a float in [0.0, 1.0] (NOT a percentage). "
+        "Use 'other' when confidence < 0.70. NEVER invent new categories.\n\n"
         'Output strict JSON only: {"results":[{"sku":"...","category":"...",'
         '"sub_category":"","confidence":0.0}]}'
     )
