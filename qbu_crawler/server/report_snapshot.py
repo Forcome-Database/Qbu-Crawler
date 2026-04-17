@@ -942,6 +942,7 @@ def _generate_weekly_report(snapshot, send_email=True):
     try:
         full_result = generate_full_report_from_snapshot(
             snapshot, send_email=False,  # We send our own email
+            report_tier="weekly",
         )
     except Exception as exc:
         _logger.exception("Weekly report: full generation failed for run %d", run_id)
@@ -1122,7 +1123,9 @@ def _generate_monthly_report(snapshot, send_email=True):
 
     # Generate full V3 report (reuse for charts, KPIs, Excel data)
     try:
-        full_result = generate_full_report_from_snapshot(snapshot, send_email=False)
+        full_result = generate_full_report_from_snapshot(
+            snapshot, send_email=False, report_tier="monthly",
+        )
     except Exception:
         _logger.exception("Monthly report: full generation failed for run %d", run_id)
         raise
@@ -1636,9 +1639,11 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         if mode == "full":
             # Entry point for 3-mode routing. workflows.py calls this function
             # instead of generate_full_report_from_snapshot directly.
-            # Delegate to existing function (which handles its own email)
+            # Delegate to existing function (which handles its own email).
+            # Legacy path: run_tier is None → treat as daily (matches branch above).
             result = generate_full_report_from_snapshot(
                 snapshot, send_email=send_email, output_path=output_path,
+                report_tier="daily",
             )
             result["mode"] = "full"
             # Full-mode email now uses email_full.html.j2 via _render_full_email_html()
@@ -1664,10 +1669,30 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         raise
 
 
-def _render_full_email_html(snapshot, analytics):
-    """Render email_full.html.j2 for the full-mode email body."""
+def _render_full_email_html(snapshot, analytics, *, report_tier: str | None = None):
+    """Render email_full.html.j2 for the full-mode email body.
+
+    Args:
+        snapshot: report snapshot dict
+        analytics: analytics dict
+        report_tier: explicit tier ("daily" / "weekly" / "monthly") for
+            baseline lookup. Falls back to ``snapshot["_meta"]["report_tier"]``
+            for backward compatibility (D015 #3 follow-up). If both absent,
+            logs WARNING and defaults to ``"daily"``.
+    """
     from jinja2 import Environment, FileSystemLoader, select_autoescape
     from qbu_crawler.server.report_common import normalize_deep_report_analytics, _compute_alert_level
+
+    # D015 #3 follow-up: resolve report_tier with priority:
+    # explicit param > snapshot._meta.report_tier > WARNING + "daily"
+    if report_tier is None:
+        report_tier = (snapshot.get("_meta") or {}).get("report_tier")
+    if report_tier is None:
+        _logger.warning(
+            "_render_full_email_html: report_tier missing "
+            "(explicit param + snapshot._meta both absent); defaulting to 'daily'"
+        )
+        report_tier = "daily"
 
     template_dir = Path(__file__).parent / "report_templates"
     env = Environment(
@@ -1689,14 +1714,8 @@ def _render_full_email_html(snapshot, analytics):
     prev_analytics_ctx = None
     prev_snapshot = None
     run_id = snapshot.get("run_id", 0)
-    _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
-    if not _snap_meta_tier:
-        _logger.warning(
-            "snapshot missing _meta.report_tier, defaulting to 'daily'"
-        )
-    _email_tier = _snap_meta_tier or "daily"
     if run_id:
-        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=_email_tier)
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=report_tier)
     changes = detect_snapshot_changes(snapshot, prev_snapshot)
 
     # New review summary for email template
@@ -1759,7 +1778,31 @@ def generate_full_report_from_snapshot(
     snapshot: dict,
     send_email: bool = True,
     output_path: str | None = None,
+    *,
+    report_tier: str | None = None,
 ) -> dict:
+    """Generate full-mode report (analytics + Excel + V3 HTML + email).
+
+    Args:
+        snapshot: report snapshot dict
+        send_email: whether to send the summary email
+        output_path: optional explicit Excel output path
+        report_tier: explicit tier ("daily" / "weekly" / "monthly") for
+            baseline lookup. Falls back to ``snapshot["_meta"]["report_tier"]``
+            for backward compatibility (D015 #3 follow-up). If both absent,
+            logs WARNING and defaults to ``"daily"``.
+    """
+    # D015 #3 follow-up: resolve report_tier with priority:
+    # explicit param > snapshot._meta.report_tier > WARNING + "daily"
+    if report_tier is None:
+        report_tier = (snapshot.get("_meta") or {}).get("report_tier")
+    if report_tier is None:
+        _logger.warning(
+            "generate_full_report_from_snapshot: report_tier missing "
+            "(explicit param + snapshot._meta both absent); defaulting to 'daily'"
+        )
+        report_tier = "daily"
+
     if not snapshot.get("reviews") and not snapshot.get("cumulative"):
         return {"status": "completed_no_change", "reason": "No new reviews"}
 
@@ -1857,13 +1900,9 @@ def generate_full_report_from_snapshot(
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         # P008: compute snapshot changes for Tab 2
         try:
-            _snap_meta_tier = snapshot.get("_meta", {}).get("report_tier")
-            if not _snap_meta_tier:
-                _logger.warning(
-                    "snapshot missing _meta.report_tier, defaulting to 'daily'"
-                )
-            _snap_tier = _snap_meta_tier or "daily"
-            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0), report_tier=_snap_tier)
+            _prev_a, _prev_s = load_previous_report_context(
+                snapshot.get("run_id", 0), report_tier=report_tier,
+            )
             _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
         except Exception:
             _changes = None
@@ -1883,7 +1922,9 @@ def generate_full_report_from_snapshot(
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
         # Render email_full.html.j2 (replaces legacy daily_report_email.html.j2)
         try:
-            body_html = _render_full_email_html(snapshot, analytics)
+            body_html = _render_full_email_html(
+                snapshot, analytics, report_tier=report_tier,
+            )
         except Exception:
             _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
             body_html = report.render_daily_email_html(snapshot, analytics)

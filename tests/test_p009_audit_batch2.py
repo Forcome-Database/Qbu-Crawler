@@ -430,3 +430,27 @@ def test_workflow_worker_inner_loop_has_min_sleep():
     assert calls["n"] <= 20, f"CPU-pegging: {calls['n']} iterations in 0.6s"
     # But there MUST be some iterations — not just zero
     assert calls["n"] >= 5, f"Over-throttled: only {calls['n']} iterations in 0.6s"
+
+
+def test_generate_full_report_from_snapshot_accepts_explicit_report_tier():
+    """D015 #3 follow-up: explicit report_tier parameter with _meta fallback."""
+    import inspect
+    from qbu_crawler.server import report_snapshot
+
+    sig = inspect.signature(report_snapshot.generate_full_report_from_snapshot)
+    assert "report_tier" in sig.parameters
+    # Backward-compat: default None so existing callers pass _meta as before.
+    assert sig.parameters["report_tier"].default is None
+    # Keyword-only so positional callers aren't shifted.
+    assert sig.parameters["report_tier"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_render_full_email_html_accepts_explicit_report_tier():
+    """D015 #3 follow-up: _render_full_email_html also takes explicit tier."""
+    import inspect
+    from qbu_crawler.server import report_snapshot
+
+    sig = inspect.signature(report_snapshot._render_full_email_html)
+    assert "report_tier" in sig.parameters
+    assert sig.parameters["report_tier"].default is None
+    assert sig.parameters["report_tier"].kind == inspect.Parameter.KEYWORD_ONLY
