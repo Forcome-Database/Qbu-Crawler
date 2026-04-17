@@ -458,7 +458,7 @@ def test_generate_report_from_snapshot_daily_tier(db, tmp_path, monkeypatch):
     }
 
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
 
     result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
 
@@ -490,7 +490,7 @@ def test_generate_report_from_snapshot_null_tier_uses_old_path(db, tmp_path, mon
     }
 
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
 
     result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
 
@@ -540,7 +540,7 @@ def test_p008_phase2_integration(db, tmp_path, monkeypatch):
     from qbu_crawler.server import report_snapshot
 
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid: (None, None))
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda rid, **kw: (None, None))
 
     # 1. Create a daily-tier workflow run
     conn = _get_test_conn(db)

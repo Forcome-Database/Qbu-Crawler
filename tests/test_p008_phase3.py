@@ -664,3 +664,87 @@ def test_weekly_recap_neg_series_is_percentage(db, tmp_path, monkeypatch):
     assert any(v is not None and 5.5 <= v <= 6.5 for v in data), (
         f"neg_series[1] should be ~6.0 (percentage), got {data}"
     )
+
+
+# ── Task 4 (P008): load_previous_report_context tier isolation ───────────────
+
+
+def test_weekly_report_does_not_use_daily_run_as_baseline(db, tmp_path, monkeypatch):
+    """
+    场景：DB 中存在近期已完成的 daily run（id=1, 分析文件存在）和上周已完成的 weekly run
+    （id=2, 分析文件存在）。当生成本周 weekly 报告时，baseline 必须取 id=2（上周报），不能取 id=1（日报）。
+    """
+    import json
+    from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+    daily_analytics = tmp_path / "daily.json"
+    daily_analytics.write_text(json.dumps({"kpis": {"health_index": 70}}))
+    weekly_analytics = tmp_path / "weekly.json"
+    weekly_analytics.write_text(json.dumps({"kpis": {"health_index": 80}}))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (1, 'daily', 'completed', 'full_sent', '2026-04-19',"
+        " 'daily:2026-04-19', 'daily', ?)",
+        (str(daily_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (2, 'weekly', 'completed', 'full_sent', '2026-04-13',"
+        " 'weekly:2026-04-13', 'weekly', ?)",
+        (str(weekly_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (3, 'weekly', 'reporting', 'none', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly')"
+    )
+    conn.commit()
+    conn.close()
+
+    prev_weekly, _ = load_previous_report_context(3, report_tier="weekly")
+    assert prev_weekly is not None
+    assert prev_weekly["kpis"]["health_index"] == 80
+
+
+def test_daily_briefing_does_not_use_weekly_run_as_baseline(db, tmp_path, monkeypatch):
+    """Reverse: daily run 只能看 daily 基线。"""
+    import json
+    from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+    daily_analytics = tmp_path / "daily.json"
+    daily_analytics.write_text(json.dumps({"kpis": {"health_index": 70}}))
+    weekly_analytics = tmp_path / "weekly.json"
+    weekly_analytics.write_text(json.dumps({"kpis": {"health_index": 80}}))
+
+    conn = _get_test_conn(db)
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (1, 'daily', 'completed', 'full_sent', '2026-04-18',"
+        " 'daily:2026-04-18', 'daily', ?)",
+        (str(daily_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier, analytics_path)"
+        " VALUES (2, 'weekly', 'completed', 'full_sent', '2026-04-20',"
+        " 'weekly:2026-04-20', 'weekly', ?)",
+        (str(weekly_analytics),),
+    )
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_type, status, report_phase, logical_date,"
+        " trigger_key, report_tier)"
+        " VALUES (3, 'daily', 'reporting', 'none', '2026-04-21',"
+        " 'daily:2026-04-21', 'daily')"
+    )
+    conn.commit()
+    conn.close()
+
+    prev_daily, _ = load_previous_report_context(3, report_tier="daily")
+    assert prev_daily is not None
+    assert prev_daily["kpis"]["health_index"] == 70  # daily 基线，不是 80

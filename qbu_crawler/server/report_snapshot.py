@@ -451,7 +451,7 @@ def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None, cumulat
     # Resolve last full report link from the previous completed run
     last_full_report_path = None
     run_id_for_lookup = snapshot.get("run_id", 0)
-    prev_run = models.get_previous_completed_run(run_id_for_lookup)
+    prev_run = models.get_previous_completed_run(run_id_for_lookup, report_tier="daily")
     if prev_run:
         # Construct expected path from run_id (v3 HTML naming convention)
         expected = os.path.join(
@@ -731,7 +731,7 @@ def _generate_daily_briefing(snapshot, send_email=True):
     logical_date = snapshot.get("logical_date", "")
 
     # Load previous context for change detection
-    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id, report_tier="daily")
     changes = detect_snapshot_changes(snapshot, prev_snapshot) if prev_snapshot else {}
 
     # Compute cumulative analytics
@@ -1571,8 +1571,8 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
     elif run_tier == "monthly":
         return _generate_monthly_report(snapshot, send_email)
 
-    # Load previous context
-    prev_analytics, prev_snapshot = load_previous_report_context(run_id)
+    # Load previous context (legacy path: run_tier is None → treat as daily)
+    prev_analytics, prev_snapshot = load_previous_report_context(run_id, report_tier="daily")
 
     # Determine mode
     mode, context = determine_report_mode(snapshot, prev_snapshot, prev_analytics)
@@ -1642,8 +1642,9 @@ def _render_full_email_html(snapshot, analytics):
     prev_analytics_ctx = None
     prev_snapshot = None
     run_id = snapshot.get("run_id", 0)
+    _email_tier = snapshot.get("_meta", {}).get("report_tier") or "daily"
     if run_id:
-        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id, report_tier=_email_tier)
     changes = detect_snapshot_changes(snapshot, prev_snapshot)
 
     # New review summary for email template
@@ -1804,7 +1805,8 @@ def generate_full_report_from_snapshot(
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         # P008: compute snapshot changes for Tab 2
         try:
-            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0))
+            _snap_tier = snapshot.get("_meta", {}).get("report_tier") or "daily"
+            _prev_a, _prev_s = load_previous_report_context(snapshot.get("run_id", 0), report_tier=_snap_tier)
             _changes = detect_snapshot_changes(snapshot, _prev_s) if _prev_s else None
         except Exception:
             _changes = None
