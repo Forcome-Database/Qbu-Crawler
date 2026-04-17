@@ -170,3 +170,35 @@ def test_build_runtime_returns_schedulers(monkeypatch):
     # Schedulers may be None if disabled by env vars; just check attribute exists
     assert hasattr(rt, "weekly_scheduler")
     assert hasattr(rt, "monthly_scheduler")
+
+
+# ── Task 5: load_category_map ───────────────────────────────────
+
+
+def test_load_category_map_from_csv(tmp_path):
+    csv_text = (
+        "sku,category,sub_category,price_band_override\n"
+        "SKU1,grinder,single_grind,\n"
+        "SKU2,slicer,,premium\n"
+    )
+    csv_path = tmp_path / "category_map.csv"
+    csv_path.write_text(csv_text, encoding="utf-8")
+    from qbu_crawler.server.report_common import load_category_map
+    mapping = load_category_map(str(csv_path))
+    assert mapping["SKU1"] == {"category": "grinder", "sub_category": "single_grind", "price_band_override": ""}
+    assert mapping["SKU2"]["price_band_override"] == "premium"
+
+
+def test_load_category_map_missing_file_returns_empty():
+    from qbu_crawler.server.report_common import load_category_map
+    mapping = load_category_map("/nonexistent/path.csv")
+    assert mapping == {}
+
+
+def test_load_category_map_uses_default_path(monkeypatch, tmp_path):
+    csv_path = tmp_path / "category_map.csv"
+    csv_path.write_text("sku,category,sub_category,price_band_override\nSKU1,grinder,,\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CATEGORY_MAP_PATH", str(csv_path))
+    from qbu_crawler.server.report_common import load_category_map
+    mapping = load_category_map()  # no arg → use config
+    assert "SKU1" in mapping

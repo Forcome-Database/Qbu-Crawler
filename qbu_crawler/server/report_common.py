@@ -1415,3 +1415,34 @@ def normalize_deep_report_analytics(analytics):
         normalized["report_copy"]["executive_bullets"] = _fallback_executive_bullets(normalized)
 
     return normalized
+
+
+# ── Monthly: category map loader ─────────────────────────────────────────────
+
+
+def load_category_map(path: str | None = None) -> dict[str, dict]:
+    """Load SKU→category mapping from CSV.
+
+    Returns ``{sku: {"category": str, "sub_category": str, "price_band_override": str}}``.
+    Missing file or CSV errors return ``{}`` (caller falls back to direct competitor pairing).
+    """
+    import csv as _csv
+    path = path or getattr(config, "CATEGORY_MAP_PATH", None)
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            reader = _csv.DictReader(f)
+            mapping: dict[str, dict] = {}
+            for row in reader:
+                sku = (row.get("sku") or "").strip()
+                if not sku:
+                    continue
+                mapping[sku] = {
+                    "category": (row.get("category") or "").strip(),
+                    "sub_category": (row.get("sub_category") or "").strip(),
+                    "price_band_override": (row.get("price_band_override") or "").strip(),
+                }
+            return mapping
+    except (FileNotFoundError, _csv.Error, OSError):
+        return {}
