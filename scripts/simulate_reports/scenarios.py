@@ -40,7 +40,7 @@ _add(Scenario(
     description="首日部署冷启动 (is_partial=true)",
     events=[],  # prepare 已把 scraped_at 重分布好
     expected={
-        "tier": "daily", "report_mode": "standard",
+        "tier": "daily", "report_mode": "full",
         "is_partial": True,
         "html_must_contain": [],
     },
@@ -56,7 +56,7 @@ _add(Scenario(
         _ev("inject_new_reviews", count=3, polarity="negative",
             label="shipping"),
     ],
-    expected={"tier": "daily", "report_mode": "standard", "is_partial": False},
+    expected={"tier": "daily", "report_mode": "full", "is_partial": False},
 ))
 
 # S03 safety doubled (D07 = 2026-03-26)
@@ -69,7 +69,7 @@ _add(Scenario(
         _ev("inject_safety_incidents_from_today", level="critical",
             failure_mode="foreign_object"),
     ],
-    expected={"tier": "daily", "report_mode": "standard"},
+    expected={"tier": "daily", "report_mode": "full"},
 ))
 
 # S04 R1 active (D08 = 2026-03-27)
@@ -81,7 +81,7 @@ _add(Scenario(
             label="quality_stability"),
     ],
     expected={
-        "tier": "daily", "report_mode": "standard",
+        "tier": "daily", "report_mode": "full",
         "lifecycle_states_must_include": ["active"],
     },
 ))

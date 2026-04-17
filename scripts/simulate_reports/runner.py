@@ -114,6 +114,7 @@ def call_daily(logical_date: date) -> int:
 
     run = biz.models.create_workflow_run({
         "workflow_type": "daily",
+        "report_tier": "daily",
         "status": "running",          # bypass submitted; advance flips to reporting
         "report_phase": "none",
         "logical_date": logical_date.isoformat(),
