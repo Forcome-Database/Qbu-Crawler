@@ -486,3 +486,50 @@ def test_lifecycle_recurrent_then_long_silence_then_new_negative():
     # History should contain two "→dormant" events and two dormant→recurrent events
     dormant_events = [h for h in history if "dormant" in h.get("transition", "")]
     assert len(dormant_events) >= 2, f"Expected ≥2 dormant transitions, got: {history}"
+
+
+# ── Task 9: generate_executive_summary ──────────────────────────
+
+
+def test_executive_summary_fallback_when_llm_unavailable(monkeypatch):
+    """No LLM → fallback summary derived from KPIs / clusters / category data."""
+    from qbu_crawler.server import analytics_executive
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+
+    inputs = {
+        "kpis": {"health_index": 72.3, "own_negative_review_rate": 4.2, "high_risk_count": 2,
+                 "own_review_rows": 200},
+        "kpi_delta": {"health_index": -1.5, "high_risk_count": +1},
+        "top_issues": [{"label_display": "质量稳定性", "review_count": 8, "severity_display": "高"}],
+        "category_benchmark": {"categories": {"grinder": {"status": "ok",
+                                                          "rating_gap": -0.2}}},
+        "safety_incidents_count": 1,
+    }
+    result = analytics_executive.generate_executive_summary(inputs)
+    assert "stance" in result
+    assert isinstance(result["bullets"], list) and len(result["bullets"]) <= 3
+    assert isinstance(result["actions"], list) and len(result["actions"]) <= 3
+
+
+def test_executive_summary_stance_categories():
+    """Stance reflects health: stable / needs_attention / urgent."""
+    from qbu_crawler.server import analytics_executive
+
+    bad_inputs = {
+        "kpis": {"health_index": 35.0, "own_negative_review_rate": 12.0, "high_risk_count": 5,
+                 "own_review_rows": 300},
+        "kpi_delta": {"health_index": -10.0, "high_risk_count": +3},
+        "top_issues": [], "category_benchmark": {"categories": {}}, "safety_incidents_count": 3,
+    }
+    result_bad = analytics_executive._fallback_executive_summary(bad_inputs)
+    assert result_bad["stance"] == "urgent"
+
+    ok_inputs = {
+        "kpis": {"health_index": 78.0, "own_negative_review_rate": 2.5, "high_risk_count": 0,
+                 "own_review_rows": 300},
+        "kpi_delta": {"health_index": +1.0, "high_risk_count": 0},
+        "top_issues": [], "category_benchmark": {"categories": {}}, "safety_incidents_count": 0,
+    }
+    result_ok = analytics_executive._fallback_executive_summary(ok_inputs)
+    assert result_ok["stance"] == "stable"
