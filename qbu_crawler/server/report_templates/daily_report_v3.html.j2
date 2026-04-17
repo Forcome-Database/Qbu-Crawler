@@ -234,9 +234,10 @@
       <h2 class="section-title">自有产品问题诊断</h2>
       <p class="section-sub">按影响规模排序，每个问题簇附带证据引用和改良建议。</p>
 
-      {% if (snapshot.reviews if snapshot.reviews is defined else []) | length == 0 %}
-      <div style="margin-bottom:var(--sp-md);padding:8px 12px;background:#f7fafc;border-radius:4px;font-size:13px;color:var(--text-muted,#a0aec0);">
-        本周无新数据变动，以下为累积分析。
+      {% set _win_reviews = snapshot.reviews if snapshot.reviews is defined else [] %}
+      {% if _win_reviews|length == 0 %}
+      <div class="empty-state" style="margin-bottom:var(--sp-md);background:var(--surface-muted,#f7fafc);padding:var(--sp-md);border-left:3px solid var(--text-muted,#a0aec0);color:var(--text-muted,#4a5568);font-size:13px;">
+        本期窗口内无新评论变动，以下为累积分析。
       </div>
       {% endif %}
 

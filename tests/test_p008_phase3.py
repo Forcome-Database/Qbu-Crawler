@@ -819,6 +819,71 @@ def test_freeze_snapshot_full_week_has_no_is_partial(db, tmp_path, monkeypatch):
     assert snapshot["_meta"].get("is_partial") is not True
 
 
+# ── Task 9: V3 template cold-week notice ────────────────────────
+
+
+def test_v3_html_shows_cold_week_notice_when_window_empty(tmp_path):
+    """窗口期无新评论时，Issues tab 开头应提示'本期窗口内无新评论变动'。"""
+    from qbu_crawler.server.report_html import render_v3_html
+
+    snapshot = {
+        "logical_date": "2026-04-20",
+        "data_since": "2026-04-13T00:00:00+08:00",
+        "data_until": "2026-04-20T00:00:00+08:00",
+        "products": [],
+        "reviews": [],
+        "cumulative": {
+            "products": [{"name": "X", "sku": "S1", "ownership": "own",
+                           "rating": 4.5, "review_count": 10, "site": "t",
+                           "price": 100, "stock_status": "in_stock"}],
+            "reviews": [],
+        },
+        "_meta": {"report_tier": "weekly", "schema_version": "3"},
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"own_review_rows": 10},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+    }
+    out = render_v3_html(snapshot, analytics, output_path=str(tmp_path / "r.html"))
+    html = open(out, encoding="utf-8").read()
+    # 提示条应在 HTML 中出现
+    assert "本期窗口内无新评论" in html or "累积分析" in html
+
+
+def test_v3_html_no_cold_notice_when_window_has_reviews(tmp_path):
+    """有新评论时 Issues tab 不应出现冷周提示。"""
+    from qbu_crawler.server.report_html import render_v3_html
+
+    snapshot = {
+        "logical_date": "2026-04-20",
+        "products": [],
+        "reviews": [
+            {"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "S1",
+             "headline": "Ok", "body": "works", "author": "A"}
+        ],
+        "cumulative": {
+            "products": [{"name": "X", "sku": "S1", "ownership": "own",
+                           "rating": 4.5, "review_count": 11, "site": "t",
+                           "price": 100, "stock_status": "in_stock"}],
+            "reviews": [
+                {"id": 1, "rating": 4.0, "ownership": "own", "product_sku": "S1",
+                 "headline": "Ok", "body": "works", "sentiment": "positive",
+                 "analysis_labels": "[]"}
+            ],
+        },
+        "_meta": {"report_tier": "weekly", "schema_version": "3"},
+    }
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"own_review_rows": 10},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+    }
+    out = render_v3_html(snapshot, analytics, output_path=str(tmp_path / "r.html"))
+    html = open(out, encoding="utf-8").read()
+    assert "本期窗口内无新评论" not in html
+
+
 # ── Fix: calendar-accurate monthly expected_days ─────────────────
 
 
