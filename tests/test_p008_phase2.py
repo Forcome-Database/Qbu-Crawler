@@ -612,3 +612,146 @@ def test_p008_phase2_integration(db, tmp_path, monkeypatch):
     old_result = report_snapshot.generate_report_from_snapshot(old_snapshot, send_email=False)
     assert old_result["mode"] in ("quiet", "change", "full"), \
         f"NULL tier should use old path, got mode={old_result['mode']}"
+
+
+# ── Task 7: P2-F2 safety signal dispatch to EMAIL_RECIPIENTS_SAFETY ──────────
+
+
+def test_daily_briefing_cc_safety_channel_on_safety_signal(monkeypatch, db):
+    """含 safety_keyword attention signal 时必须额外分发到 EMAIL_RECIPIENTS_SAFETY。"""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler import config as cfg
+
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS", ["ops@example.com"])
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS_SAFETY", ["safety@example.com"])
+
+    calls = []
+
+    def fake_send(*, recipients, subject, body_html, **kw):
+        calls.append({"recipients": list(recipients), "subject": subject})
+
+    monkeypatch.setattr(report_snapshot.report, "send_email", fake_send)
+
+    snapshot = {
+        "logical_date": "2026-04-18",
+        "run_id": 999,
+        "products": [],
+        "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    cumulative_kpis = {
+        "health_index": 70.0,
+        "own_negative_review_rate_display": "3.0%",
+        "high_risk_count": 1,
+        "own_review_rows": 10,
+        "health_confidence": "medium",
+    }
+    attention_signals = [
+        {
+            "type": "safety_keyword",
+            "urgency": "action",
+            "title": "安全: Grinder 评论提及安全关键词",
+            "detail": "级别: critical",
+        }
+    ]
+
+    report_snapshot._send_daily_briefing_email(
+        snapshot,
+        cumulative_kpis,
+        window_reviews=[],
+        attention_signals=attention_signals,
+        changes={},
+    )
+
+    assert calls, "send_email was never called"
+    assert any("[安全]" in c["subject"] for c in calls), \
+        f"No call had [安全] in subject: {[c['subject'] for c in calls]}"
+    all_recipients = {r for c in calls for r in c["recipients"]}
+    assert "ops@example.com" in all_recipients, \
+        f"ops@example.com missing from recipients: {all_recipients}"
+    assert "safety@example.com" in all_recipients, \
+        f"safety@example.com missing from recipients: {all_recipients}"
+
+
+def test_daily_briefing_no_duplicate_on_overlap(monkeypatch, db):
+    """EMAIL_RECIPIENTS_SAFETY 地址已在常规收件人列表时不重复发送。"""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler import config as cfg
+
+    # safety recipient overlaps with regular list
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS", ["ops@example.com", "safety@example.com"])
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS_SAFETY", ["safety@example.com"])
+
+    calls = []
+
+    def fake_send(*, recipients, subject, body_html, **kw):
+        calls.append({"recipients": list(recipients), "subject": subject})
+
+    monkeypatch.setattr(report_snapshot.report, "send_email", fake_send)
+
+    snapshot = {
+        "logical_date": "2026-04-18",
+        "run_id": 998,
+        "products": [],
+        "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    cumulative_kpis = {
+        "health_index": 70.0,
+        "own_negative_review_rate_display": "3.0%",
+        "high_risk_count": 1,
+        "own_review_rows": 10,
+        "health_confidence": "medium",
+    }
+    attention_signals = [
+        {"type": "safety_keyword", "urgency": "action",
+         "title": "安全 alert", "detail": "critical"},
+    ]
+
+    report_snapshot._send_daily_briefing_email(
+        snapshot, cumulative_kpis, window_reviews=[], attention_signals=attention_signals, changes={},
+    )
+
+    # Only one send call should occur (no extra call because safety addr already in recipients)
+    assert len(calls) == 1, \
+        f"Expected exactly 1 send_email call when safety addr already in recipients, got {len(calls)}"
+
+
+def test_daily_briefing_no_safety_send_without_signal(monkeypatch, db):
+    """无 safety_keyword 信号时不触发 SAFETY 通道额外发送。"""
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler import config as cfg
+
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS", ["ops@example.com"])
+    monkeypatch.setattr(cfg, "EMAIL_RECIPIENTS_SAFETY", ["safety@example.com"])
+
+    calls = []
+
+    def fake_send(*, recipients, subject, body_html, **kw):
+        calls.append({"recipients": list(recipients), "subject": subject})
+
+    monkeypatch.setattr(report_snapshot.report, "send_email", fake_send)
+
+    snapshot = {
+        "logical_date": "2026-04-18",
+        "run_id": 997,
+        "products": [],
+        "reviews": [],
+        "cumulative": {"products": [], "reviews": []},
+    }
+    cumulative_kpis = {
+        "health_index": 80.0,
+        "own_negative_review_rate_display": "1.0%",
+        "high_risk_count": 0,
+        "own_review_rows": 5,
+        "health_confidence": "low",
+    }
+
+    report_snapshot._send_daily_briefing_email(
+        snapshot, cumulative_kpis, window_reviews=[], attention_signals=[], changes={},
+    )
+
+    assert len(calls) == 1, f"Expected 1 call (no safety extra), got {len(calls)}"
+    assert "[安全]" not in calls[0]["subject"]
+    all_recipients = {r for c in calls for r in c["recipients"]}
+    assert "safety@example.com" not in all_recipients

@@ -879,6 +879,20 @@ def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
         subject = f"[安全] {subject}"
 
     report.send_email(recipients=recipients, subject=subject, body_html=body_html)
+
+    # P2-F2: safety 信号独立分发至 SAFETY 通道，避免告警被日常收件人淹没
+    if has_safety and getattr(config, "EMAIL_RECIPIENTS_SAFETY", None):
+        extra = [
+            r for r in config.EMAIL_RECIPIENTS_SAFETY
+            if r and r not in recipients
+        ]
+        if extra:
+            report.send_email(
+                recipients=extra,
+                subject=subject,
+                body_html=body_html,
+            )
+
     return {"success": True, "error": None, "recipients": recipients}
 
 
