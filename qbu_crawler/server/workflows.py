@@ -414,6 +414,51 @@ def _count_pending_translations_for_window(since: str, until: str) -> int:
         conn.close()
 
 
+def _translation_coverage_acceptable(
+    translated: int, total: int, stalled: bool,
+) -> bool:
+    """Return True if current coverage is acceptable to proceed with full report.
+
+    Gate only activates when translation worker is confirmed stalled. When not
+    stalled (still within wait window) the caller is responsible for waiting.
+    total<=0 means no translatable reviews so coverage is trivially acceptable.
+    """
+    if not stalled or total <= 0:
+        return True
+    ratio = translated / total
+    return ratio >= config.TRANSLATION_COVERAGE_MIN
+
+
+def _translation_progress_snapshot(since: str, until: str) -> tuple[int, int]:
+    """Return (translated_count, total_in_window) for the given data window.
+
+    Uses the same scraped_at window semantics as
+    _count_pending_translations_for_window.  "Translated" = translate_status='done'
+    (see reviews table; other values: NULL=pending, 'failed'=retrying,
+    'skipped'=dead-lettered).
+    """
+    conn = models.get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN translate_status = 'done' THEN 1 ELSE 0 END) AS tr,
+                COUNT(*) AS total
+            FROM reviews
+            WHERE scraped_at >= ?
+              AND scraped_at < ?
+            """,
+            (_report_db_ts(since), _report_db_ts(until)),
+        ).fetchone()
+        if row is None:
+            return (0, 0)
+        translated = int(row[0] or 0)
+        total = int(row[1] or 0)
+        return (translated, total)
+    finally:
+        conn.close()
+
+
 def _report_db_ts(value: str) -> str:
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is not None:
@@ -975,10 +1020,28 @@ class WorkflowWorker:
                     )
                 return changed
             if pending_translations > 0:
+                translated, total = _translation_progress_snapshot(
+                    run["data_since"], run["data_until"],
+                )
+                if not _translation_coverage_acceptable(
+                    translated=translated, total=total, stalled=True,
+                ):
+                    logger.error(
+                        "WorkflowWorker: translation coverage %d/%d below threshold "
+                        "(min=%.2f) for run %s; routing to needs_attention",
+                        translated, total, config.TRANSLATION_COVERAGE_MIN, run_id,
+                    )
+                    self._move_run_to_attention(
+                        run, now,
+                        f"Translation coverage {translated}/{total} below "
+                        f"{config.TRANSLATION_COVERAGE_MIN:.0%}",
+                    )
+                    return True
                 logger.warning(
-                    "WorkflowWorker: translation stalled for run %s; continuing with %d untranslated reviews",
-                    run_id,
-                    pending_translations,
+                    "WorkflowWorker: translation stalled for run %s; continuing "
+                    "with %d/%d translated (coverage=%.2f)",
+                    run_id, translated, total,
+                    translated / max(total, 1),
                 )
             _clear_translation_progress(run_id)
             run = freeze_report_snapshot(run_id, now=now)

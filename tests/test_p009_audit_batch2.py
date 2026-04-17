@@ -157,6 +157,83 @@ def test_sync_new_skus_runs_once_and_sets_flag(fresh_db, monkeypatch):
     assert refreshed["category_synced"] == 1
 
 
+def test_translation_coverage_gate_pure_function(monkeypatch):
+    """Pure function gate: stalled + low coverage blocks, stalled + high coverage allows,
+    not stalled always allows, zero total always allows."""
+    from qbu_crawler import config
+    from qbu_crawler.server.workflows import _translation_coverage_acceptable
+
+    monkeypatch.setattr(config, "TRANSLATION_COVERAGE_MIN", 0.7)
+
+    # 30% coverage while stalled → block
+    assert _translation_coverage_acceptable(translated=3, total=10, stalled=True) is False
+    # 80% coverage while stalled → allow
+    assert _translation_coverage_acceptable(translated=8, total=10, stalled=True) is True
+    # exactly at threshold while stalled → allow
+    assert _translation_coverage_acceptable(translated=7, total=10, stalled=True) is True
+    # Not stalled (still waiting) → always allow, even 0%
+    assert _translation_coverage_acceptable(translated=0, total=10, stalled=False) is True
+    # total=0 (no translatable reviews) → always allow
+    assert _translation_coverage_acceptable(translated=0, total=0, stalled=True) is True
+
+
+def test_translation_progress_snapshot_counts_from_reviews_table(fresh_db):
+    """_translation_progress_snapshot must count reviews in the window (by scraped_at)
+    and report the 'done' subset as translated, mirroring
+    _count_pending_translations_for_window's column semantics.
+    """
+    from qbu_crawler.server.workflows import _translation_progress_snapshot
+
+    # Insert a product so reviews have a valid FK
+    conn = models.get_conn()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO products (site, url, name, sku)
+            VALUES ('test', 'http://t/p1', 'P1', 'SKU-1')
+            """
+        )
+        product_id = cursor.lastrowid
+        # Window: 2026-04-10 00:00 → 2026-04-11 00:00 (Shanghai)
+        # _report_db_ts strips tz and formats as naive Shanghai-local "YYYY-MM-DD HH:MM:SS"
+        in_window = "2026-04-10 12:00:00"
+        before_window = "2026-04-09 23:59:59"
+        after_window = "2026-04-11 00:00:00"  # exclusive upper bound
+
+        rows = [
+            # In window: 3 done, 1 failed, 1 NULL, 1 skipped → total=6, translated=3
+            (product_id, "a1", "h1", "b1", "done", in_window),
+            (product_id, "a2", "h2", "b2", "done", in_window),
+            (product_id, "a3", "h3", "b3", "done", in_window),
+            (product_id, "a4", "h4", "b4", "failed", in_window),
+            (product_id, "a5", "h5", "b5", None, in_window),
+            (product_id, "a6", "h6", "b6", "skipped", in_window),
+            # Outside window: should be ignored
+            (product_id, "b1", "bh1", "bb1", "done", before_window),
+            (product_id, "b2", "bh2", "bb2", "done", after_window),
+        ]
+        for pid, author, headline, body, status, scraped_at in rows:
+            conn.execute(
+                """
+                INSERT INTO reviews
+                    (product_id, author, headline, body, body_hash,
+                     translate_status, scraped_at)
+                VALUES (?, ?, ?, ?, '', ?, ?)
+                """,
+                (pid, author, headline, body, status, scraped_at),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    translated, total = _translation_progress_snapshot(
+        since="2026-04-10T00:00:00+08:00",
+        until="2026-04-11T00:00:00+08:00",
+    )
+    assert total == 6
+    assert translated == 3
+
+
 def test_sync_new_skus_still_sets_flag_when_inner_raises(fresh_db, monkeypatch):
     """Even if sync_new_skus raises, the flag must be set to prevent retry-storm."""
     from qbu_crawler.server import workflows
