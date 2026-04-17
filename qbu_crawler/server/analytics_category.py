@@ -76,9 +76,12 @@ def derive_category_benchmark(
         if not meta or not meta.get("category"):
             unmapped += 1
             continue
+        ownership = p.get("ownership")
+        if ownership not in ("own", "competitor"):
+            unmapped += 1
+            continue
         cat = meta["category"]
-        ownership = p.get("ownership") or "unknown"
-        grouped.setdefault(cat, {"own": [], "competitor": []}).setdefault(ownership, []).append(p)
+        grouped.setdefault(cat, {"own": [], "competitor": []})[ownership].append(p)
 
     categories: dict[str, dict] = {}
     for cat, buckets in grouped.items():
@@ -140,7 +143,11 @@ def _fallback_pairing(products: list[dict]) -> dict:
             "competitor_name": nearest.get("name"),
             "competitor_rating": nearest.get("rating"),
             "rating_gap": gap,
-            "price_diff": round(nearest["price"] - o["price"], 2) if o.get("price") and nearest.get("price") else None,
+            "price_diff": (
+                round(nearest["price"] - o["price"], 2)
+                if o.get("price") is not None and nearest.get("price") is not None
+                else None
+            ),
         })
     return {
         "categories": {},

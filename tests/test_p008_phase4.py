@@ -271,3 +271,23 @@ def test_derive_category_benchmark_fallback_pairing():
     result = derive_category_benchmark(products, category_map={})
     assert result["fallback_mode"] is True
     assert result["pairings"]  # at least one own-vs-competitor pair surfaced
+
+
+def test_derive_category_benchmark_unknown_ownership_counted_as_unmapped():
+    """Products with valid category but non-standard ownership must not silently disappear."""
+    from qbu_crawler.server.analytics_category import derive_category_benchmark
+    products = [
+        {"sku": "X1", "ownership": "unknown", "rating": 4.0, "review_count": 10, "price": 100},
+        {"sku": "X2", "ownership": "", "rating": 4.0, "review_count": 10, "price": 100},
+        {"sku": "X3", "ownership": None, "rating": 4.0, "review_count": 10, "price": 100},
+    ]
+    category_map = {
+        "X1": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "X2": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+        "X3": {"category": "grinder", "sub_category": "", "price_band_override": ""},
+    }
+    result = derive_category_benchmark(products, category_map)
+    # Neither own nor competitor — all 3 should be unmapped
+    assert result["unmapped_count"] == 3
+    # No category entry produced (no ok status, no insufficient_samples, nothing)
+    assert "grinder" not in result["categories"]
