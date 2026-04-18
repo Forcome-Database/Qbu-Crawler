@@ -56,6 +56,11 @@ def load_business():
             "Run `python -m scripts.simulate_reports prepare` first."
         )
 
+    # Apply schema migrations to the simulation DB so new columns / indexes
+    # (e.g. workflow_runs.is_partial, idx_safety_incidents_review_level_mode)
+    # added after the baseline snapshot was created are picked up.
+    models.init_db()
+
     _LOADED = SimpleNamespace(
         config=qbu_config,
         models=models,
