@@ -1170,3 +1170,57 @@ def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
     assert quiet_result["analytics_path"] is not None
     assert quiet_result.get("cumulative_computed") is True
     assert Path(quiet_result["analytics_path"]).is_file()
+
+
+def test_full_report_persists_normalized_kpis(tmp_path, monkeypatch):
+    """D1: analytics.json must contain health_index/own_negative_review_rate_display
+    after write; monthly re-render depends on this."""
+    import json as _json, os as _os
+    from qbu_crawler import config as cfg   # P2 fix: config lives at qbu_crawler.config
+    from qbu_crawler.server import report_snapshot
+    monkeypatch.setattr(cfg, "REPORT_DIR", str(tmp_path))
+
+    snapshot = {
+        "run_id": 999,
+        "logical_date": "2026-04-01",
+        "data_since": "2026-04-01T00:00:00+08:00",
+        "data_until": "2026-04-02T00:00:00+08:00",
+        "snapshot_hash": "abc",
+        "products": [{"id": 1, "sku": "X", "ownership": "own", "rating": 4.5}],
+        "reviews": [
+            {"id": i, "product_id": 1, "rating": 5, "body": "ok", "headline": "",
+             "author": "a", "date_published_parsed": "2026-04-01"}
+            for i in range(5)
+        ],
+        "products_count": 1,
+        "reviews_count": 5,
+        "translated_count": 5,
+        "untranslated_count": 0,
+        "_meta": {"report_tier": "weekly"},
+    }
+    from qbu_crawler.server import report_llm
+    monkeypatch.setattr(
+        report_llm,
+        "generate_report_insights",
+        lambda *a, **kw: {
+            "hero_headline": "test",
+            "executive_summary": "",
+            "executive_bullets": [],
+            "improvement_priorities": [],
+            "competitive_insight": "",
+        },
+    )
+    monkeypatch.setattr(
+        report_llm,
+        "analyze_cluster_deep",
+        lambda *a, **kw: None,
+    )
+    result = report_snapshot.generate_full_report_from_snapshot(
+        snapshot, send_email=False, report_tier="weekly",
+    )
+    ap = result.get("analytics_path")
+    assert ap and _os.path.isfile(ap)
+    payload = _json.loads(open(ap, encoding="utf-8").read())
+    assert payload.get("_schema_version") == "v4"
+    assert payload["kpis_normalized"]["health_index"] is not None
+    assert "own_negative_review_rate_display" in payload["kpis_normalized"]

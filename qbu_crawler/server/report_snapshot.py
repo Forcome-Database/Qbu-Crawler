@@ -1191,9 +1191,28 @@ def _generate_monthly_report(snapshot, send_email=True):
     # the first daily run.
 
     analytics_path = full_result.get("analytics_path")
+    from qbu_crawler.server.report_common import load_analytics_envelope
     analytics = {}
     if analytics_path and os.path.isfile(analytics_path):
-        analytics = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+        envelope = load_analytics_envelope(analytics_path)
+        # Flatten envelope for legacy consumers: prefer normalized
+        analytics = {
+            "kpis": envelope.get("kpis_normalized") or envelope.get("kpis_raw") or {},
+            "self": envelope.get("self", {}),
+            "competitor": envelope.get("competitor", {}),
+            "report_copy": envelope.get("report_copy", {}),
+            "kpi_cards": envelope.get("kpi_cards", []),
+            "issue_cards": envelope.get("issue_cards", []),
+        }
+        # Preserve non-kpi top-level keys
+        for k, v in envelope.items():
+            if k not in analytics and k not in ("kpis_raw", "kpis_normalized", "_schema_version"):
+                analytics[k] = v
+        # P10 fix — surface mode_context so downstream consumers can read
+        # is_partial / mode without walking nested keys
+        _ctx = envelope.get("mode_context") or {}
+        analytics["is_partial"] = _ctx.get("is_partial", False)
+        analytics["mode"] = envelope.get("mode", "full")
 
     cumulative = snapshot.get("cumulative") or {}
     cum_products = cumulative.get("products") or []
@@ -1938,8 +1957,17 @@ def generate_full_report_from_snapshot(
                 r.get("id") for r in snapshot.get("reviews", []) if r.get("id")
             ]
 
+        from qbu_crawler.server.report_common import build_analytics_envelope
+        envelope = build_analytics_envelope(
+            analytics,
+            mode=(snapshot.get("_meta") or {}).get("report_mode", "full"),
+            mode_context={
+                "report_tier": report_tier,
+                "is_partial": (snapshot.get("_meta") or {}).get("is_partial", False),
+            },
+        )
         Path(analytics_path).write_text(
-            json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
+            json.dumps(envelope, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
 
