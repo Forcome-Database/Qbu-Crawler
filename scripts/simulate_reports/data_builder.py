@@ -238,12 +238,13 @@ def inject_safety_incidents(
         ).fetchone()
         sku = rsku[0] if rsku else None
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        evidence_hash = hashlib.md5(f"sim-{rid}-{ts}".encode()).hexdigest()[:16]
         conn.execute(
             """INSERT INTO safety_incidents
                (review_id, product_sku, safety_level, failure_mode,
                 evidence_snapshot, evidence_hash, detected_at, created_at)
-               VALUES (?, ?, ?, ?, 'sim-evidence', 'sim-hash', ?, ?)""",
-            (rid, sku, safety_level, failure_mode, ts, ts),
+               VALUES (?, ?, ?, ?, 'sim-evidence', ?, ?, ?)""",
+            (rid, sku, safety_level, failure_mode, evidence_hash, ts, ts),
         )
 
 
