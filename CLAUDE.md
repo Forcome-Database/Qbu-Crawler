@@ -375,6 +375,26 @@ KPI Delta 计算：
 - **通用性**：不局限于某个站点，其他爬虫项目也会遇到
 - **重要性**：能避免重大踩坑或显著提升效率
 
+## 报告设计系统 V4
+
+`REPORT_DS_VERSION` (env) 控制 HTML 模板版本：
+- `v3`（默认）：legacy templates（`daily_briefing.html.j2` / `daily_report_v3.html.j2` / `monthly_report.html.j2`）
+- `v4`：Editorial Intelligence 统一设计系统，daily/weekly/monthly 共用 `_partials/` 组件
+
+V4 设计语言见 `docs/superpowers/specs/2026-04-18-qbu-report-ds-v4-design.md`。
+
+**Mode 视觉识别**（V4 专属，通过 `mode-strip--{partial,full,change,quiet,weekly,monthly}` CSS class）：
+- Daily-Partial（灰）— 冷启动 `is_partial=True`
+- Daily-Full（靛）— 有新评论
+- Daily-Change（橙）— 无新评但有产品变动
+- Daily-Quiet（绿）— 连续静默
+- Weekly（深靛）
+- Monthly（靛夜）
+
+**置信度徽章**：每个计算指标附 `.conf-badge--{high,medium,low}` 徽章（基于 Bayesian shrinkage 下的样本量判断）。
+
+**AnalyticsEnvelope v4 schema**（`analytics.json` 持久化契约）：包含 `kpis_raw + kpis_normalized + self + competitor + report_copy + kpi_cards + issue_cards + mode + mode_context`，保证 `health_index / high_risk_count / own_negative_review_rate_display` 等派生字段不会在 re-load 时丢失（D1）。
+
 ## 报告模拟器（离线，不改业务代码）
 
 详见 `scripts/simulate_reports/README.md`。用 42 天时间轴 + 事件注入 + 业务代码真实调用，生成每种日/周/月报形态的真实产物 + 逐场景 debug + expected vs actual verdict 对照。
