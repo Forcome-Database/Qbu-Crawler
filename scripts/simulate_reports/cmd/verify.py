@@ -17,7 +17,7 @@ def run(argv):
                 continue
             total += 1
             v = m.get("verdict", "?")
-            tag = {"PASS": "\033[32m✅", "WARN": "\033[33m⚠️", "FAIL": "\033[31m❌"}.get(v, "?")
+            tag = {"PASS": "\033[32m[PASS]", "WARN": "\033[33m[WARN]", "FAIL": "\033[31m[FAIL]"}.get(v, "[?]")
             print(f"{tag} {m['scenario_id']:8s} {v:5s}\033[0m  {m.get('description','')}")
             if v == "PASS":
                 pass_n += 1
