@@ -200,3 +200,68 @@ def _write_template(env, name, output_path, **ctx):
     Path(output_path).write_text(html, encoding="utf-8")
     logger.info("V4 render: %s (%d bytes)", output_path, len(html))
     return output_path
+
+
+def render_weekly_v4(snapshot, analytics, output_path=None, changes=None):
+    """V4 weekly renderer using shared partials."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)),
+                      autoescape=select_autoescape(["html", "j2"]))
+    css_path = template_dir / "daily_report_v3.css"
+    js_path = template_dir / "daily_report_v3.js"
+    css_text = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+    js_text = js_path.read_text(encoding="utf-8") if js_path.exists() else ""
+
+    normalized = normalize_deep_report_analytics(analytics or {})
+    logical_date = snapshot.get("logical_date", "")
+    iso_week = (snapshot.get("_meta") or {}).get("iso_week") or logical_date
+
+    tabs = [
+        {"id": "overview", "label": "总览"},
+        {"id": "changes", "label": "本周变化",
+         "badge": len((snapshot.get("reviews") or [])) or None},
+        {"id": "issues", "label": "问题诊断",
+         "badge": len(normalized.get("issue_cards") or []) or None},
+        {"id": "products", "label": "产品排行"},
+        {"id": "panorama", "label": "全景"},
+    ]
+
+    if output_path is None:
+        output_path = os.path.join(
+            config.REPORT_DIR,
+            f"workflow-run-{snapshot.get('run_id','x')}-full-report.html",
+        )
+
+    return _write_template(
+        env, "weekly.html.j2", output_path,
+        page_title=f"QBU 网评监控 · 周报 {iso_week}",
+        css_text=css_text, js_text=js_text,
+        brand="QBU 网评监控",
+        kpi_items=[
+            {"label": "健康", "value": normalized["kpis"].get("health_index", "—")},
+            {"label": "差评", "value": normalized["kpis"].get("own_negative_review_rate_display", "—")},
+            {"label": "高风险", "value": normalized["kpis"].get("high_risk_count", 0)},
+        ],
+        show_print=True,
+        mode="weekly",
+        kicker=f"WEEKLY REPORT · {iso_week}",
+        meta=f"Run #{snapshot.get('run_id','?')} · {logical_date}",
+        title="QBU 网评监控 周报",
+        headline=(normalized.get("report_copy") or {}).get("hero_headline") or "",
+        health_index=normalized["kpis"].get("health_index"),
+        confidence=normalized["kpis"].get("health_confidence", "no_data"),
+        bullets=(normalized.get("report_copy") or {}).get("executive_bullets_human") or [],
+        actions=None,
+        cards=normalized.get("kpi_cards", []),
+        tabs=tabs, active="overview",
+        analytics=normalized, snapshot=snapshot,
+        window_reviews=snapshot.get("reviews", []),
+        changes=changes or {},
+        issue_cards=normalized.get("issue_cards", []),
+        threshold=config.NEGATIVE_THRESHOLD,
+        generated_at=(snapshot.get("snapshot_at") or "")[:19],
+        version="v4",
+    )

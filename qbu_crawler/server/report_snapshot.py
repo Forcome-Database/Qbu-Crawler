@@ -1202,6 +1202,33 @@ def _generate_weekly_report(snapshot, send_email=True):
         except Exception:
             _logger.debug("Weekly report: failed to enrich analytics", exc_info=True)
 
+    # V4 flag: overwrite html_path with render_weekly_v4 output (keeps same file location)
+    if config.REPORT_DS_VERSION == "v4":
+        try:
+            _html_path = full_result.get("html_path")
+            _analytics_path = full_result.get("analytics_path")
+            _analytics = {}
+            if _analytics_path and os.path.isfile(_analytics_path):
+                from qbu_crawler.server.report_common import load_analytics_envelope
+                _envelope = load_analytics_envelope(_analytics_path)
+                # Flatten normalized kpis for V4 renderer
+                _analytics = {
+                    "kpis": _envelope.get("kpis_normalized") or _envelope.get("kpis_raw") or {},
+                    "self": _envelope.get("self", {}),
+                    "competitor": _envelope.get("competitor", {}),
+                    "report_copy": _envelope.get("report_copy", {}),
+                    "kpi_cards": _envelope.get("kpi_cards", []),
+                    "issue_cards": _envelope.get("issue_cards", []),
+                }
+            if _html_path:
+                report_html.render_weekly_v4(
+                    snapshot, _analytics, output_path=_html_path,
+                    changes=None,
+                )
+                full_result["html_path"] = _html_path
+        except Exception:
+            _logger.exception("V4 weekly render failed; falling back to V3 html_path")
+
     # Send weekly email (summary + link, not full body)
     email_result = None
     if send_email:

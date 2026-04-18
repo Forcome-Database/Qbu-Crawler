@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+{% include "_partials/head.html.j2" %}
+<body>
+  {% include "_partials/kpi_bar.html.j2" %}
+  {% include "_partials/mode_strip.html.j2" %}
+
+  <main class="report-main">
+    {% include "_partials/hero.html.j2" %}
+
+    <section class="section-divider">
+      <span class="section-divider-num">01</span>
+      <span class="section-divider-title">核心指标</span>
+      <span class="section-divider-hint">本周累积 · Δ vs 上周</span>
+    </section>
+    {% include "_partials/kpi_grid.html.j2" %}
+
+    {% include "_partials/tab_nav.html.j2" %}
+
+    <section id="tab-overview" class="tab-panel tab-active" role="tabpanel">
+      <section class="section-divider">
+        <span class="section-divider-num">02</span>
+        <span class="section-divider-title">本周概览</span>
+      </section>
+      {% if analytics.report_copy and analytics.report_copy.executive_bullets_human %}
+      <ul class="hero-bullets">
+        {% for b in analytics.report_copy.executive_bullets_human %}<li>{{ b }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    <section id="tab-changes" class="tab-panel" role="tabpanel">
+      {% if window_reviews %}
+      <p class="changes-sub">本周新评论 Top 30（共 {{ window_reviews|length }} 条）</p>
+      {% for r in window_reviews[:30] %}
+      {% include "_partials/review_quote.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="本周无新增评论", body="所有产品在本周期内无新评论记录。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-issues" class="tab-panel" role="tabpanel">
+      {% if issue_cards %}
+      {% for card in issue_cards %}
+      {% include "_partials/issue_card.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="暂无活跃问题集群", body="本周所有问题标签均无重大波动。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-products" class="tab-panel" role="tabpanel">
+      {% set risk_products = analytics.self.risk_products if analytics.self is defined else [] %}
+      {% if risk_products %}
+      <p class="changes-sub">本周风险产品 Top {{ risk_products|length }}</p>
+      <ul class="products-list">
+        {% for p in risk_products[:20] %}
+        <li class="products-row">
+          <strong>{{ p.product_name or p.product_sku or "—" }}</strong>
+          <span class="products-meta">风险分 {{ p.risk_score or 0 }} · 差评率 {{ (p.negative_rate * 100)|round(1) if p.negative_rate else "—" }}%</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      {% with title="无高风险产品", body="所有产品风险分均在阈值以内。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-panorama" class="tab-panel" role="tabpanel">
+      {% with title="全景图表待接入", body="V4 Phase 3.3 将加入 Chart.js 图表（情感分布 / 热力图 / 周对比）。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+    </section>
+  </main>
+  {% include "_partials/footer.html.j2" %}
+  {% if js_text %}<script>{{ js_text|safe }}</script>{% endif %}
+</body>
+</html>

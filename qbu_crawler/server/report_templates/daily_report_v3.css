@@ -1451,3 +1451,8 @@ details summary:hover { color: var(--accent); }
 .attention-list { list-style: none; padding: 0; margin: 0; }
 .attention-list li { padding: var(--sp-sm) var(--sp-md); border-radius: var(--r-sm); font-size: var(--fs-sm); margin-bottom: var(--sp-xs); }
 .attention-list--action li { background: var(--critical-bg); color: var(--critical); border-left: 3px solid var(--critical); }
+
+/* V4 Products list (weekly tab) */
+.products-list { list-style: none; padding: 0; margin: 0; }
+.products-row { padding: var(--sp-sm) var(--sp-md); border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: baseline; }
+.products-meta { font-size: var(--fs-xs); color: var(--text-muted); font-family: var(--font-mono); }
