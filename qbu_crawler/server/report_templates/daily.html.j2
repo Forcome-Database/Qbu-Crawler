@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+{% include "_partials/head.html.j2" %}
+<body>
+  {% include "_partials/kpi_bar.html.j2" %}
+  {% include "_partials/mode_strip.html.j2" %}
+
+  <main class="report-main">
+    {% include "_partials/hero.html.j2" %}
+
+    {% if mode != "quiet" %}
+    <section class="section-divider">
+      <span class="section-divider-num">01</span>
+      <span class="section-divider-title">核心指标</span>
+      <span class="section-divider-hint">基于累积数据 · Δ vs 上期</span>
+    </section>
+    {% include "_partials/kpi_grid.html.j2" %}
+    {% endif %}
+
+    {% include "_partials/tab_nav.html.j2" %}
+
+    <section id="tab-overview" class="tab-panel tab-active" role="tabpanel">
+      {% if mode == "partial" %}
+      <div class="notice notice--info">
+        <strong>基线建立中</strong>：当前样本 {{ analytics.kpis_normalized.own_review_rows or 0 }} 条，
+        未达到贝叶斯先验阈值（30 条）；健康指数已向先验值 50 收缩以避免小样本虚高。
+        预计 Day 7 之后转为完整置信度。
+      </div>
+      {% elif mode == "quiet" %}
+      <div class="notice notice--quiet">
+        <strong>静默期 · 连续 {{ mode_context.quiet_days or 0 }} 天无新评论</strong>
+      </div>
+      {% include "_partials/kpi_grid.html.j2" %}
+      {% endif %}
+
+      {% if window_reviews %}
+      <section class="section-divider">
+        <span class="section-divider-num">02</span>
+        <span class="section-divider-title">今日变化</span>
+        <span class="section-divider-hint">新评论 {{ window_reviews|length }} 条</span>
+      </section>
+      {% for r in window_reviews[:15] %}
+      {% include "_partials/review_quote.html.j2" %}
+      {% endfor %}
+      {% endif %}
+
+      {% if changes and (changes.price_changes or changes.stock_changes or changes.rating_changes) %}
+      <section class="section-divider">
+        <span class="section-divider-num">03</span>
+        <span class="section-divider-title">产品数据变动</span>
+      </section>
+      <div class="changes-list">
+        {% if changes.price_changes %}
+        <p class="changes-sub">价格变化（{{ changes.price_changes|length }}）</p>
+        {% for c in changes.price_changes %}
+        <div class="changes-row">{{ c.name }}: ${{ c.old }} → {% if c.new is not none %}${{ c.new }}{% else %}已下架{% endif %}</div>
+        {% endfor %}
+        {% endif %}
+        {% if changes.stock_changes %}
+        <p class="changes-sub">库存变化（{{ changes.stock_changes|length }}）</p>
+        {% for c in changes.stock_changes %}
+        <div class="changes-row">{{ c.name }}: {{ "有货" if c.old == "in_stock" else "缺货" }} → {{ "有货" if c.new == "in_stock" else "缺货" }}</div>
+        {% endfor %}
+        {% endif %}
+        {% if changes.rating_changes %}
+        <p class="changes-sub">评分变化（{{ changes.rating_changes|length }}）</p>
+        {% for c in changes.rating_changes %}
+        <div class="changes-row">{{ c.name }}: {{ c.old if c.old is not none else "—" }} → {{ c.new if c.new is not none else "已下架" }}</div>
+        {% endfor %}
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if action_signals %}
+      <section class="section-divider">
+        <span class="section-divider-num">04</span>
+        <span class="section-divider-title">需行动</span>
+      </section>
+      <ul class="attention-list attention-list--action">
+        {% for s in action_signals %}<li>{{ s.title }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    <section id="tab-changes" class="tab-panel" role="tabpanel">
+      {% if window_reviews %}
+      {% for r in window_reviews %}
+      {% include "_partials/review_quote.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="本日无新增评论", body="所有产品在当前窗口内无新评论记录。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-issues" class="tab-panel" role="tabpanel">
+      {% if analytics.issue_cards %}
+      {% for card in analytics.issue_cards %}
+      {% include "_partials/issue_card.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="暂无活跃问题", body="当前无已归档的问题集群。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-panorama" class="tab-panel" role="tabpanel">
+      {% with title="全景图表待接入", body="V4 Phase 3.2/3.3 将加入 Chart.js 图表。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+    </section>
+
+  </main>
+  {% include "_partials/footer.html.j2" %}
+</body>
+</html>

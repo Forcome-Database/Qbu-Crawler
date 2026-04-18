@@ -79,6 +79,54 @@ def _inject_meta(snapshot: dict, tier: str = "daily",
     return snapshot
 
 
+def _compute_quiet_days(run_id):
+    """Count consecutive prior daily runs with 0 window reviews (P3)."""
+    try:
+        conn = models.get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT id, reviews_count FROM workflow_runs
+                   WHERE report_tier='daily' AND id < ?
+                   ORDER BY id DESC LIMIT 30""",
+                (run_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        n = 0
+        for r in rows:
+            if (r["reviews_count"] or 0) == 0:
+                n += 1
+            else:
+                break
+        return n
+    except Exception:
+        return 0
+
+
+def _compute_day_index(run_id, logical_date):
+    """Day N/7 for the partial-mode kicker (P7).
+    N = (logical_date - first_ever_daily_run.logical_date).days + 1, capped at 7.
+    Returns 1 on any error or when no prior runs exist."""
+    try:
+        from datetime import date as _date
+        today = _date.fromisoformat(str(logical_date)[:10])
+        conn = models.get_conn()
+        try:
+            row = conn.execute(
+                """SELECT MIN(logical_date) AS first_date
+                   FROM workflow_runs
+                   WHERE report_tier='daily' AND logical_date IS NOT NULL""",
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row or not row["first_date"]:
+            return 1
+        first = _date.fromisoformat(row["first_date"][:10])
+        return min(max((today - first).days + 1, 1), 7)
+    except Exception:
+        return 1
+
+
 def _get_email_recipients() -> list[str]:
     """Unified email recipient loader.
 
@@ -921,14 +969,51 @@ def _generate_daily_briefing(snapshot, send_email=True):
     html_path = None
     try:
         html_output = os.path.join(config.REPORT_DIR, f"daily-{logical_date}.html")
-        html_path = report_html.render_daily_briefing(
-            snapshot=snapshot,
-            cumulative_kpis=cumulative_kpis,
-            window_reviews=enriched_reviews,
-            attention_signals=attention_signals,
-            changes=changes,
-            output_path=html_output,
-        )
+        if config.REPORT_DS_VERSION == "v4":
+            # Determine daily mode (partial / full / change / quiet)
+            run_row = models.get_workflow_run(run_id) or {}
+            is_partial = bool(run_row.get("is_partial"))
+            has_reviews = bool(window_reviews)
+            has_changes = bool(changes and (
+                changes.get("price_changes") or changes.get("stock_changes")
+                or changes.get("rating_changes")
+            ))
+            if is_partial:
+                daily_mode = "partial"
+            elif has_reviews:
+                daily_mode = "full"
+            elif has_changes:
+                daily_mode = "change"
+            else:
+                daily_mode = "quiet"
+
+            quiet_days = _compute_quiet_days(run_id) if daily_mode == "quiet" else 0
+            day_index = _compute_day_index(run_id, logical_date) if daily_mode == "partial" else 0
+
+            html_path = report_html.render_daily_v4(
+                snapshot=snapshot,
+                analytics=cum_analytics or {},
+                cumulative_kpis=cumulative_kpis,
+                window_reviews=enriched_reviews,
+                attention_signals=attention_signals,
+                changes=changes,
+                output_path=html_output,
+                mode=daily_mode,
+                mode_context={
+                    "is_partial": is_partial,
+                    "quiet_days": quiet_days,
+                    "day_index": day_index,
+                },
+            )
+        else:
+            html_path = report_html.render_daily_briefing(
+                snapshot=snapshot,
+                cumulative_kpis=cumulative_kpis,
+                window_reviews=enriched_reviews,
+                attention_signals=attention_signals,
+                changes=changes,
+                output_path=html_output,
+            )
     except Exception:
         _logger.exception("Daily briefing HTML generation failed")
 
@@ -945,6 +1030,11 @@ def _generate_daily_briefing(snapshot, send_email=True):
             email_result = {"success": False, "error": str(e), "recipients": []}
     elif not do_send:
         email_result = {"success": True, "error": "Smart send: no content", "recipients": []}
+
+    try:
+        models.update_workflow_run(run_id, reviews_count=len(window_reviews or []))
+    except Exception:
+        pass
 
     try:
         models.update_workflow_run(
