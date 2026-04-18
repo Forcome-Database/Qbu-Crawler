@@ -416,12 +416,22 @@ def test_email_daily_template_renders():
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
     template = env.get_template("email_daily.html.j2")
     html = template.render(
-        logical_date="2026-04-17",
-        cumulative_kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%",
-                         "high_risk_count": 1, "own_review_rows": 42},
-        window_reviews=[],
-        attention_signals=[],
+        page_title="QBU 日报 2026-04-17",
+        mode="full",
+        kicker="日常播报",
+        brand="QBU 网评监控",
+        kpi_items=[
+            {"label": "健康指数", "value": 72.3},
+            {"label": "差评率", "value": "4.2%"},
+            {"label": "高风险产品", "value": 1},
+        ],
+        report_url="",
+        generated_at="2026-04-17",
         threshold=2,
+        window_reviews=[],
+        changes={},
+        action_signals=[],
+        mode_context={},
     )
     assert "72.3" in html
     assert "QBU" in html

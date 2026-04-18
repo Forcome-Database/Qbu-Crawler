@@ -1,72 +1,34 @@
-<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>QBU 月报 {{ month_label }}</title></head>
-<body style="margin:0;padding:0;background:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a202c;font-size:14px;line-height:1.6;">
-<div style="max-width:720px;margin:0 auto;padding:16px;">
-
-  <div style="background:linear-gradient(135deg,#1a365d 0%,#2c5282 100%);color:#fff;border-radius:12px;padding:24px;margin-bottom:16px;">
-    <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:0.75;
-      {% if executive.stance == 'urgent' %}color:#fed7d7;
-      {% elif executive.stance == 'needs_attention' %}color:#fefcbf;
-      {% else %}color:#c6f6d5;{% endif %}">
-      月度态势 · {{ {"stable":"稳中向好","needs_attention":"需要关注","urgent":"紧急行动"}.get(executive.stance, "") }}
-    </div>
-    <div style="font-size:20px;font-weight:700;margin:6px 0 18px;">{{ executive.stance_text }}</div>
-
-    <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-      <div style="flex:1;min-width:140px;background:rgba(255,255,255,0.1);padding:12px;border-radius:6px;">
-        <div style="font-size:11px;opacity:0.75;">健康指数</div>
-        <div style="font-size:26px;font-weight:700;">{{ kpis.health_index }}</div>
-        {% if kpi_delta.health_index is defined and kpi_delta.health_index is not none %}
-        <div style="font-size:11px;opacity:0.85;">{{ "+" if kpi_delta.health_index > 0 else "" }}{{ kpi_delta.health_index }} vs 上月</div>
-        {% endif %}
-      </div>
-      <div style="flex:1;min-width:140px;background:rgba(255,255,255,0.1);padding:12px;border-radius:6px;">
-        <div style="font-size:11px;opacity:0.75;">差评率</div>
-        <div style="font-size:26px;font-weight:700;">{{ kpis.own_negative_review_rate_display }}</div>
-      </div>
-      <div style="flex:1;min-width:140px;background:rgba(255,255,255,0.1);padding:12px;border-radius:6px;">
-        <div style="font-size:11px;opacity:0.75;">高风险</div>
-        <div style="font-size:26px;font-weight:700;">{{ kpis.high_risk_count }}</div>
-        {% if kpi_delta.high_risk_count is defined %}
-        <div style="font-size:11px;opacity:0.85;">{{ "+" if kpi_delta.high_risk_count > 0 else "" }}{{ kpi_delta.high_risk_count }} vs 上月</div>
-        {% endif %}
-      </div>
-    </div>
-
-    <ul style="margin:0 0 16px;padding-left:20px;">
-      {% for b in executive.bullets %}<li style="margin-bottom:6px;">{{ b }}</li>{% endfor %}
-    </ul>
-
-    {% if executive.actions %}
-    <div style="background:rgba(255,255,255,0.08);padding:12px 16px;border-radius:6px;border-left:3px solid #fefcbf;">
-      <div style="font-size:12px;opacity:0.85;margin-bottom:8px;">建议行动</div>
-      <ul style="margin:0;padding-left:20px;">
-        {% for a in executive.actions %}<li>{{ a }}</li>{% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-
-    {% if safety_incidents %}
-    <div style="margin-top:16px;padding:12px 16px;background:rgba(229,62,62,0.25);border-radius:6px;">
-      <strong>⚠ 本月安全事件 {{ safety_incidents|length }} 起</strong>
-      <ul style="margin:8px 0 0;padding-left:20px;font-size:13px;">
-        {% for s in safety_incidents[:5] %}
-        <li>[{{ s.safety_level }}] {{ s.product_sku }} · {{ s.failure_mode or "未分类" }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% endif %}
-  </div>
-
-  {% if report_url %}
-  <div style="text-align:center;margin-bottom:16px;">
-    <a href="{{ report_url }}" style="display:inline-block;padding:12px 28px;background:#2b6cb0;color:#fff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">查看完整月报</a>
-  </div>
-  <div style="text-align:center;font-size:12px;color:#a0aec0;">完整报告含品类对标 · SKU 计分卡 · 问题生命周期 · Excel 数据表</div>
+{% extends "_email_base.html.j2" %}
+{% block content %}
+  {% if stance_label %}
+  <p style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#8e8ea0;margin:0 0 4px;">
+    月度态势 · {{ stance_label }}
+  </p>
+  {% endif %}
+  {% if headline %}
+  <h2 style="font-family:Georgia,serif;font-size:22px;margin:0 0 4px;line-height:1.25;">{{ headline }}</h2>
   {% endif %}
 
-  <div style="text-align:center;font-size:11px;color:#a0aec0;padding:16px;">内部资料 · AI 自动生成</div>
-</div>
-</body>
-</html>
+  {% if bullets %}
+  <ul style="font-size:14px;margin:16px 0;padding-left:20px;">
+    {% for b in bullets %}<li>{{ b }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if actions %}
+  <div style="margin:20px 0;padding:14px 16px;background:#eef2ff;border-left:3px solid #4f46e5;border-radius:4px;">
+    <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#4338ca;margin-bottom:8px;font-weight:600;">
+      建议行动 Top {{ actions|length }}
+    </div>
+    <ol style="font-size:13px;margin:0;padding-left:20px;">
+      {% for a in actions %}<li>{{ a }}</li>{% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+
+  {% if safety_count and safety_count > 0 %}
+  <p style="background:rgba(185,28,28,0.08);padding:10px 14px;border-radius:6px;color:#b91c1c;font-size:13px;margin-top:16px;">
+    ⚠ 本月 {{ safety_count }} 起安全事件（详情见完整报告）
+  </p>
+  {% endif %}
+{% endblock %}

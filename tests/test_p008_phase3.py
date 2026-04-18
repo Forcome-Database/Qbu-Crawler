@@ -347,15 +347,25 @@ def test_email_weekly_template_renders():
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
     template = env.get_template("email_weekly.html.j2")
     html = template.render(
-        logical_date="2026-04-20",
-        kpis={"health_index": 75.0, "own_negative_review_rate_display": "3.5%", "high_risk_count": 1},
+        page_title="QBU 周报 2026-04-20",
+        mode="weekly",
+        kicker="周度汇总",
+        brand="QBU 网评监控",
+        kpi_items=[
+            {"label": "健康指数", "value": 75.0},
+            {"label": "差评率", "value": "3.5%"},
+            {"label": "高风险产品", "value": 1},
+        ],
         report_url="https://reports.example.com/weekly-2026-04-20.html",
-        reviews_count=15,
+        generated_at="2026-04-20",
         threshold=2,
+        headline="本周新增评论 15 条",
+        bullets=["健康指数 75.0 · 保持稳定"],
+        issue_cards=[],
     )
     assert "75.0" in html
     assert "周报" in html
-    assert "查看完整周报" in html
+    assert "查看完整报告" in html
 
 
 # ── Task 11: V3 template enhancements ───────────────────────────

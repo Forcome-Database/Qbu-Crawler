@@ -731,21 +731,27 @@ def test_email_monthly_template_renders():
     env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "j2"]))
     template = env.get_template("email_monthly.html.j2")
     html = template.render(
-        month_label="2026年04月",
-        executive={
-            "stance": "needs_attention",
-            "stance_text": "本月需要关注质量稳定性问题",
-            "bullets": ["健康指数 72.3", "差评率 4.2%", "TOP 问题：质量稳定性 8 条"],
-            "actions": ["核查 #22 Grinder 投诉"],
-        },
-        kpis={"health_index": 72.3, "own_negative_review_rate_display": "4.2%", "high_risk_count": 2},
-        kpi_delta={"health_index": -1.5, "high_risk_count": +1},
-        safety_incidents=[],
+        page_title="QBU 月报 2026年04月",
+        mode="monthly",
+        kicker="月度总览",
+        brand="QBU 网评监控",
+        kpi_items=[
+            {"label": "健康指数", "value": 72.3},
+            {"label": "差评率", "value": "4.2%"},
+            {"label": "高风险产品", "value": 2},
+        ],
         report_url="https://reports.example.com/monthly-2026-04.html",
+        generated_at="2026年04月",
+        threshold=2,
+        stance_label="需要关注",
+        headline="本月需要关注质量稳定性问题",
+        bullets=["健康指数 72.3", "差评率 4.2%", "TOP 问题：质量稳定性 8 条"],
+        actions=["核查 #22 Grinder 投诉"],
+        safety_count=0,
     )
     assert "需要关注" in html
     assert "72.3" in html
-    assert "查看完整月报" in html
+    assert "查看完整报告" in html
 
 
 # ── Task 12: _generate_monthly_report routing ───────────────────

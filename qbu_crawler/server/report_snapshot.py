@@ -604,6 +604,73 @@ def _change_report_subject_prefix(changes):
     return "[数据变化]"
 
 
+def _build_email_base_context(
+    snapshot: dict,
+    analytics: dict | None,
+    *,
+    mode: str,
+    tier: str = "daily",
+    report_url: str = "",
+) -> dict:
+    """Build the shared `_email_base.html.j2` context.
+
+    Produces the variables defined by the base template contract:
+    page_title, mode, kicker, brand, kpi_items, report_url, generated_at,
+    threshold.
+
+    Args:
+        snapshot: report snapshot dict
+        analytics: normalized analytics dict (may be None/empty for
+            quiet/partial modes)
+        mode: one of partial / full / change / quiet / weekly / monthly
+        tier: daily / weekly / monthly (used for page title wording)
+        report_url: optional link to the full HTML report
+    """
+    logical_date = snapshot.get("logical_date", "")
+
+    tier_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(tier, "日报")
+    kicker_map = {
+        "partial": "基线建立中",
+        "full":    "日常播报",
+        "change":  "数据变动",
+        "quiet":   "平稳日",
+        "weekly":  "周度汇总",
+        "monthly": "月度总览",
+    }
+    kicker = kicker_map.get(mode, tier_label)
+    page_title = f"QBU {tier_label} {logical_date}"
+
+    # Top 3 KPI cards from normalized analytics
+    kpi_items: list[dict] = []
+    if analytics:
+        cards = analytics.get("kpi_cards") or []
+        for c in cards[:3]:
+            kpi_items.append({
+                "label": c.get("label", ""),
+                "value": c.get("value", "—"),
+            })
+        if not kpi_items:
+            # Fallback to raw KPIs when kpi_cards absent (legacy analytics)
+            kpis = analytics.get("kpis") or analytics.get("cumulative_kpis") or {}
+            if kpis:
+                kpi_items = [
+                    {"label": "健康指数", "value": kpis.get("health_index", "—")},
+                    {"label": "差评率", "value": kpis.get("own_negative_review_rate_display", "—")},
+                    {"label": "高风险产品", "value": kpis.get("high_risk_count", 0)},
+                ]
+
+    return {
+        "page_title": page_title,
+        "mode": mode,
+        "kicker": kicker,
+        "brand": "QBU 网评监控",
+        "kpi_items": kpi_items,
+        "report_url": report_url or "",
+        "generated_at": logical_date,
+        "threshold": config.NEGATIVE_THRESHOLD,
+    }
+
+
 def _render_quiet_or_change_html(snapshot, prev_analytics, changes=None, cumulative_kpis=None):
     """Render the quiet day or change report HTML using the quiet day template."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -689,29 +756,40 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
     else:
         subject = f"[无变化] 产品监控简报 {logical_date}"
 
-    # Render email template
-    template_name = f"email_{mode}.html.j2"
+    # V4 collapsed templates: change/quiet/full all route through email_daily.html.j2
+    # with mode dispatching base-template banner color + block content variants.
+    template_name = "email_daily.html.j2"
     try:
         template = env.get_template(template_name)
     except Exception:
         _logger.warning("Email template %s not found, skipping", template_name)
         return {"success": False, "error": f"Template {template_name} not found", "recipients": []}
 
+    effective_analytics = analytics or prev_analytics or {}
+    base_ctx = _build_email_base_context(
+        snapshot, effective_analytics, mode=mode, tier="daily", report_url=report_url or "",
+    )
+
+    # Block-level context per mode (email_daily.html.j2 reads:
+    # window_reviews, changes, action_signals, mode_context)
+    window_reviews = (snapshot.get("window") or {}).get("new_reviews") or snapshot.get("reviews") or []
+    # Promote executive_bullets → action_signals-ish signal when mode=full
+    action_signals = []
+    if mode == "full":
+        bullets = (effective_analytics.get("report_copy") or {}).get("executive_bullets") or []
+        action_signals = [{"title": b} for b in bullets[:3]]
+
+    mode_context = {}
+    if mode == "quiet":
+        mode_context["quiet_days"] = consecutive_quiet
+
     try:
         body_html = template.render(
-            logical_date=logical_date,
-            snapshot=snapshot,
-            analytics=analytics or prev_analytics or {},
-            previous_analytics=prev_analytics,
-            changes=changes,
-            report_url=report_url,
-            risk_products=risk_products or [],
-            threshold=config.NEGATIVE_THRESHOLD,
-            alert_level=(analytics or {}).get("alert_level", ("green", ""))[0] if analytics else "green",
-            alert_text=(analytics or {}).get("alert_level", ("green", ""))[1] if analytics else "",
-            report_copy=(analytics or {}).get("report_copy", {}),
-            translate_stats=models.get_translate_stats() if mode == "quiet" else None,
-            consecutive_quiet_days=consecutive_quiet,
+            **base_ctx,
+            window_reviews=window_reviews,
+            changes=changes or {},
+            action_signals=action_signals,
+            mode_context=mode_context,
         )
     except Exception as e:
         _logger.exception("Email template rendering failed for mode %s", mode)
@@ -1074,13 +1152,27 @@ def _send_daily_briefing_email(snapshot, cumulative_kpis, window_reviews,
     template = env.get_template("email_daily.html.j2")
     logical_date = snapshot.get("logical_date", "")
 
+    # Build base context from cumulative KPIs (no full analytics available here)
+    analytics_stub = {"cumulative_kpis": cumulative_kpis or {}, "kpis": cumulative_kpis or {}}
+    is_partial = (snapshot.get("_meta") or {}).get("is_partial", False)
+    mode = "partial" if is_partial else "full"
+    base_ctx = _build_email_base_context(
+        snapshot, analytics_stub, mode=mode, tier="daily",
+    )
+
+    # Derive action_signals from attention_signals with urgency == "action"
+    action_signals = [
+        {"title": s.get("title") or s.get("label") or ""}
+        for s in (attention_signals or [])
+        if (s.get("urgency") or "").lower() == "action"
+    ]
+
     body_html = template.render(
-        logical_date=logical_date,
-        cumulative_kpis=cumulative_kpis,
+        **base_ctx,
         window_reviews=window_reviews,
-        attention_signals=attention_signals,
-        changes=changes,
-        threshold=config.NEGATIVE_THRESHOLD,
+        changes=changes or {},
+        action_signals=action_signals,
+        mode_context={},
     )
 
     recipients = _get_email_recipients()
@@ -1287,12 +1379,17 @@ def _send_weekly_email(snapshot, full_result, logical_date):
 
     kpis = analytics.get("kpis", {})
     template = env.get_template("email_weekly.html.j2")
+
+    base_ctx = _build_email_base_context(
+        snapshot, analytics, mode="weekly", tier="weekly", report_url=report_url,
+    )
+    report_copy = analytics.get("report_copy") or {}
+    headline = report_copy.get("hero_headline") or f"本周新增评论 {full_result.get('reviews_count', 0)} 条"
+    bullets = report_copy.get("executive_bullets_human") or report_copy.get("executive_bullets") or []
+    issue_cards = (analytics.get("self") or {}).get("issue_cards", [])[:3]
+
     body_html = template.render(
-        logical_date=logical_date,
-        kpis=kpis,
-        report_url=report_url,
-        reviews_count=full_result.get("reviews_count", 0),
-        threshold=config.NEGATIVE_THRESHOLD,
+        **base_ctx, headline=headline, bullets=bullets, issue_cards=issue_cards,
     )
 
     recipients = _get_email_recipients()
@@ -1813,13 +1910,27 @@ def _send_monthly_email(snapshot, executive, kpi_delta, safety_incidents, html_p
     if config.REPORT_HTML_PUBLIC_URL and html_path:
         report_url = f"{config.REPORT_HTML_PUBLIC_URL}/{Path(html_path).name}"
 
+    # V4 collapsed: email_monthly.html.j2 extends _email_base with block vars
+    # (stance_label, headline, bullets, actions, safety_count).
+    monthly_kpis = snapshot.get("cumulative_kpis") or {}
+    analytics_stub = {"kpis": monthly_kpis, "cumulative_kpis": monthly_kpis}
+    base_ctx = _build_email_base_context(
+        snapshot, analytics_stub, mode="monthly", tier="monthly", report_url=report_url,
+    )
+    # Monthly emails show the month label rather than the logical date.
+    base_ctx["page_title"] = f"QBU 月报 {month_label}"
+    base_ctx["generated_at"] = month_label
+
+    stance_map = {"stable": "稳中向好", "needs_attention": "需要关注", "urgent": "紧急行动"}
+    stance_label = stance_map.get((executive or {}).get("stance"), "")
+
     body_html = template.render(
-        month_label=month_label,
-        executive=executive,
-        kpis=snapshot.get("cumulative_kpis") or {},
-        kpi_delta=kpi_delta,
-        safety_incidents=safety_incidents,
-        report_url=report_url,
+        **base_ctx,
+        stance_label=stance_label,
+        headline=(executive or {}).get("stance_text") or "",
+        bullets=(executive or {}).get("bullets") or [],
+        actions=(executive or {}).get("actions") or [],
+        safety_count=len(safety_incidents or []),
     )
 
     recipients = config.EMAIL_RECIPIENTS_EXEC or _get_email_recipients()
@@ -2014,24 +2125,58 @@ def _render_full_email_html(snapshot, analytics, *, report_tier: str | None = No
     merged_changes["rating_changes"] = changes.get("rating_changes", [])
     merged_changes["has_changes"] = changes.get("has_changes", False)
 
-    tpl = env.get_template("email_full.html.j2")
-    return tpl.render(
-        logical_date=snapshot.get("logical_date", ""),
-        snapshot=snapshot,
-        analytics=normalized,
-        alert_level=alert_level,
-        alert_text=alert_text,
-        report_copy=normalized.get("report_copy") or analytics.get("report_copy") or {},
-        risk_products=(normalized.get("self") or {}).get("risk_products", [])[:3],
-        threshold=config.NEGATIVE_THRESHOLD,
-        # New dual-perspective variables
-        cumulative_kpis=cumulative_kpis,
-        window=window,
-        health_confidence=health_confidence,
-        changes=merged_changes,
-        new_review_summary=new_review_summary,
-        report_url=report_url,
+    # Route to new V4 collapsed templates: daily → email_daily, weekly → email_weekly,
+    # monthly → email_monthly. All extend _email_base.html.j2.
+    tier_to_template = {
+        "daily":   ("email_daily.html.j2",   "full"),
+        "weekly":  ("email_weekly.html.j2",  "weekly"),
+        "monthly": ("email_monthly.html.j2", "monthly"),
+    }
+    template_name, default_mode = tier_to_template.get(
+        report_tier, ("email_daily.html.j2", "full"),
     )
+    # Override mode to "partial" for cold-start snapshots (daily tier only)
+    is_partial = (snapshot.get("_meta") or {}).get("is_partial", False)
+    email_mode = "partial" if (report_tier == "daily" and is_partial) else default_mode
+
+    base_ctx = _build_email_base_context(
+        snapshot, normalized, mode=email_mode, tier=report_tier, report_url=report_url,
+    )
+
+    tpl = env.get_template(template_name)
+    report_copy = normalized.get("report_copy") or analytics.get("report_copy") or {}
+    bullets = report_copy.get("executive_bullets_human") or report_copy.get("executive_bullets") or []
+    headline = report_copy.get("hero_headline") or ""
+
+    if report_tier == "weekly":
+        issue_cards = (normalized.get("self") or {}).get("issue_cards", [])[:3]
+        return tpl.render(
+            **base_ctx, headline=headline, bullets=bullets, issue_cards=issue_cards,
+        )
+    elif report_tier == "monthly":
+        executive = normalized.get("executive") or {}
+        stance_map = {"stable": "稳中向好", "needs_attention": "需要关注", "urgent": "紧急行动"}
+        stance_label = stance_map.get(executive.get("stance"), "")
+        actions = executive.get("actions") or []
+        safety_count = len(normalized.get("safety_incidents") or [])
+        return tpl.render(
+            **base_ctx,
+            stance_label=stance_label,
+            headline=executive.get("stance_text") or headline,
+            bullets=executive.get("bullets") or bullets,
+            actions=actions,
+            safety_count=safety_count,
+        )
+    else:
+        # daily tier: email_daily.html.j2 with window_reviews, changes, action_signals
+        action_signals = [{"title": b} for b in bullets[:3]]
+        return tpl.render(
+            **base_ctx,
+            window_reviews=window_reviews,
+            changes=merged_changes,
+            action_signals=action_signals,
+            mode_context={},
+        )
 
 
 def generate_full_report_from_snapshot(
