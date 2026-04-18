@@ -1,0 +1,77 @@
+{#
+  Base email template — all daily/weekly/monthly emails inherit via extends.
+  Caller overrides {% block content %}.
+  Context vars:
+    page_title (str)
+    mode (str: partial/full/change/quiet/weekly/monthly)
+    kicker (str, uppercase section label)
+    brand (str, default "QBU 网评监控")
+    kpi_items (list of {label, value}, max 3)
+    report_url (str | "", link to full HTML report)
+    generated_at (str)
+    threshold (int, negative-star threshold)
+#}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{ page_title }}</title>
+  <style>
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; background:#f7f7f5; color:#1a1a2e; }
+    .email-container { max-width:640px; margin:0 auto; background:#fff; }
+    .email-banner { display:flex; align-items:center; justify-content:space-between; padding:20px 28px; color:#fff; }
+    .email-banner-brand { font-weight:700; letter-spacing:0.06em; font-size:14px; }
+    .email-banner-date { font-family:"DM Mono", monospace; font-size:11px; opacity:0.85; }
+    .email-kicker { font-family:"DM Mono", monospace; font-size:11px; letter-spacing:0.14em; text-transform:uppercase; padding:10px 28px; color:#fff; }
+    .email-body { padding:28px; }
+    .email-kpi-row { display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
+    .email-kpi { flex:1; min-width:140px; background:#f0efed; padding:12px 14px; border-radius:8px; }
+    .email-kpi-label { font-size:11px; color:#555770; }
+    .email-kpi-value { font-family:"DM Mono", monospace; font-size:22px; font-weight:700; margin-top:4px; }
+    .email-btn { display:inline-block; padding:10px 22px; background:#4f46e5; color:#fff !important; text-decoration:none; border-radius:6px; font-size:13px; font-weight:600; }
+    .email-footer { padding:16px 28px; background:#f0efed; color:#8e8ea0; font-size:11px; text-align:center; }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    {% set _mode_color = {
+      "partial": "#8e8ea0",
+      "full":    "#4f46e5",
+      "change":  "#c2410c",
+      "quiet":   "#047857",
+      "weekly":  "#4338ca",
+      "monthly": "#1e1b4b"
+    }.get(mode, "#4f46e5") %}
+    <div class="email-banner" style="background: {{ _mode_color }};">
+      <span class="email-banner-brand">{{ brand or "QBU 网评监控" }}</span>
+      <span class="email-banner-date">{{ generated_at }}</span>
+    </div>
+    <div class="email-kicker" style="background: {{ _mode_color }};">{{ kicker }}</div>
+
+    <div class="email-body">
+      {% if kpi_items %}
+      <div class="email-kpi-row">
+        {% for it in kpi_items[:3] %}
+        <div class="email-kpi">
+          <div class="email-kpi-label">{{ it.label }}</div>
+          <div class="email-kpi-value">{{ it.value }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+
+      {% if report_url %}
+      <p style="text-align:center;margin-top:24px;">
+        <a class="email-btn" href="{{ report_url }}">查看完整报告 →</a>
+      </p>
+      {% endif %}
+    </div>
+
+    <div class="email-footer">
+      差评定义：评分 ≤ {{ threshold }} 星 · AI 自动生成 · QBU 网评监控
+    </div>
+  </div>
+</body>
+</html>

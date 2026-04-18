@@ -131,3 +131,36 @@ def test_issue_card_renders_lifecycle_and_quotes():
     assert "活跃" in out
     assert "质量稳定性" in out
     assert "Alice" in out  # review_quote rendered inside
+
+
+def test_email_base_renders_mode_color():
+    """Email base must map mode → banner color."""
+    env = _env()
+    # email_base uses {% block content %} so we test via a minimal extending child
+    from jinja2 import Template
+    out = env.get_template("_email_base.html.j2").render(
+        page_title="TestEmail",
+        mode="monthly",
+        kicker="MONTHLY EXECUTIVE BRIEF · 2026年04月",
+        brand="QBU 网评监控",
+        kpi_items=[{"label": "健康", "value": 68}, {"label": "差评", "value": "5.9%"}],
+        report_url="https://example.com/report",
+        generated_at="2026-05-01T10:00:00",
+        threshold=2,
+    )
+    # monthly maps to #1e1b4b
+    assert "#1e1b4b" in out
+    assert "MONTHLY EXECUTIVE BRIEF" in out
+    assert "68" in out
+    assert "https://example.com/report" in out
+
+
+def test_email_base_no_content_when_block_empty():
+    env = _env()
+    out = env.get_template("_email_base.html.j2").render(
+        page_title="X", mode="full", kicker="K", brand="B",
+        kpi_items=[], report_url="", generated_at="t", threshold=2,
+    )
+    # Must still produce a valid-looking shell even with empty content block
+    assert "<html" in out and "</html>" in out
+    assert "K" in out
