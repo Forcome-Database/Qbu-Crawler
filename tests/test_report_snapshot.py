@@ -1224,3 +1224,37 @@ def test_full_report_persists_normalized_kpis(tmp_path, monkeypatch):
     assert payload.get("_schema_version") == "v4"
     assert payload["kpis_normalized"]["health_index"] is not None
     assert "own_negative_review_rate_display" in payload["kpis_normalized"]
+
+
+def test_is_partial_propagates_to_workflow_runs(snapshot_db, monkeypatch):
+    """D4: freeze_report_snapshot must write is_partial to workflow_runs."""
+    from qbu_crawler import models
+    from qbu_crawler.server import report_snapshot
+
+    # Stub query_report_data to return a tiny dataset
+    monkeypatch.setattr(
+        report_snapshot.report, "query_report_data",
+        lambda since, until=None: ([{"id": 1, "sku": "X", "ownership": "own"}], []),
+    )
+
+    # "First run ever" means the reviews table is empty at freeze time —
+    # clear fixture-seeded reviews so cold-start detection in _inject_meta
+    # flags the deployment as younger than the window.
+    conn = _get_test_conn(snapshot_db["db_file"])
+    conn.execute("DELETE FROM reviews")
+    conn.commit()
+    conn.close()
+
+    run = models.create_workflow_run({
+        "workflow_type": "daily", "status": "running", "report_phase": "none",
+        "logical_date": "2026-04-01",
+        "data_since": "2026-04-01T00:00:00+08:00",
+        "data_until": "2026-04-02T00:00:00+08:00",
+        "trigger_key": "test-partial",
+    })
+    models.update_workflow_run(run["id"], report_tier="daily")
+
+    report_snapshot.freeze_report_snapshot(run["id"])
+    updated = models.get_workflow_run(run["id"])
+    # First run ever → is_partial should be True
+    assert updated.get("is_partial") in (1, True)

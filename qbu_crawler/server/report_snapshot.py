@@ -470,12 +470,31 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         encoding="utf-8",
     )
 
-    return models.update_workflow_run(
-        run_id,
-        snapshot_at=snapshot_at,
-        snapshot_path=snapshot_path,
-        snapshot_hash=snapshot_hash,
-    )
+    # D4: propagate is_partial + reviews_count from snapshot._meta to workflow_runs
+    # so downstream templates and queries can read it without re-parsing snapshot JSON.
+    _meta = snapshot.get("_meta") or {}
+    _is_partial_val = 1 if _meta.get("is_partial") else 0
+    try:
+        return models.update_workflow_run(
+            run_id,
+            snapshot_at=snapshot_at,
+            snapshot_path=snapshot_path,
+            snapshot_hash=snapshot_hash,
+            is_partial=_is_partial_val,
+            reviews_count=int(snapshot.get("reviews_count") or 0),
+        )
+    except Exception:
+        _logger.debug(
+            "failed to persist is_partial/reviews_count for run %s",
+            run_id,
+            exc_info=True,
+        )
+        return models.update_workflow_run(
+            run_id,
+            snapshot_at=snapshot_at,
+            snapshot_path=snapshot_path,
+            snapshot_hash=snapshot_hash,
+        )
 
 
 def load_report_snapshot(path: str) -> dict:

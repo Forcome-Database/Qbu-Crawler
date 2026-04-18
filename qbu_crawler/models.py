@@ -265,6 +265,8 @@ def init_db():
         "ALTER TABLE review_analysis ADD COLUMN label_anomaly_flags TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN report_tier TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN category_synced INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE workflow_runs ADD COLUMN is_partial INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE workflow_runs ADD COLUMN reviews_count INTEGER NOT NULL DEFAULT 0",
         """
     DELETE FROM safety_incidents
     WHERE id NOT IN (
@@ -700,6 +702,8 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         "report_mode",
         "report_tier",
         "category_synced",
+        "is_partial",
+        "reviews_count",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
