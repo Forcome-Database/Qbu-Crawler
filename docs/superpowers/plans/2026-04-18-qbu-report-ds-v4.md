@@ -16,6 +16,8 @@
 
 **目标**：D1/D2/D3/D4 全部修复；模拟器 `verify` 对 M1 不再报 KPI 空值、对 S01 不再报 is_partial=None。
 
+**E2 · 回归测试纪律**：每个 Task（1.1–1.5）的最后一个 Step commit 之前，**必须**先跑 `uv run pytest -q` 确认全绿，再 commit。单独测试通过不代表不破坏其他 test。
+
 **前置验证命令**：
 
 ```bash
@@ -75,10 +77,24 @@ def test_envelope_persists_normalized_derived_fields(tmp_path):
     assert loaded["kpis_normalized"]["health_index"] is not None
 
 
-def test_envelope_legacy_fallback_reads_kpis_key():
-    legacy = {"kpis": {"own_review_rows": 10, "competitor_review_rows": 0}}
-    loaded = load_analytics_envelope.__wrapped__(legacy) if hasattr(load_analytics_envelope, "__wrapped__") else legacy
-    assert "kpis" in loaded
+def test_envelope_legacy_fallback_from_raw_dict():
+    """P1 fix: pass a legacy (no _schema_version) dict; loader must wrap it."""
+    legacy = {
+        "kpis": {
+            "own_review_rows": 10,
+            "own_positive_review_rows": 8,
+            "own_negative_review_rows": 1,
+            "competitor_review_rows": 0,
+            "own_negative_review_rate": 0.1,
+            "ingested_review_rows": 10,
+            "product_count": 2, "own_product_count": 2, "competitor_product_count": 0,
+        },
+        "self": {"risk_products": []},
+        "competitor": {},
+    }
+    wrapped = load_analytics_envelope(legacy)
+    assert wrapped["_schema_version"] == "v4"
+    assert wrapped["kpis_normalized"]["health_index"] is not None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -181,7 +197,8 @@ def test_full_report_persists_normalized_kpis(tmp_path, monkeypatch):
     """D1: analytics.json must contain health_index/own_negative_review_rate_display
     after write; monthly re-render depends on this."""
     import json
-    from qbu_crawler.server import report_snapshot, config as cfg
+    from qbu_crawler import config as cfg   # P2 fix: config lives at qbu_crawler.config
+    from qbu_crawler.server import report_snapshot
     monkeypatch.setattr(cfg, "REPORT_DIR", str(tmp_path))
 
     snapshot = {
@@ -276,16 +293,31 @@ if analytics_path and os.path.isfile(analytics_path):
     for k, v in envelope.items():
         if k not in analytics and k not in ("kpis_raw", "kpis_normalized", "_schema_version"):
             analytics.setdefault(k, v)
+    # P10 fix — surface mode_context so downstream monthly/daily consumers
+    # can read is_partial / quiet_days without walking nested keys
+    _ctx = envelope.get("mode_context") or {}
+    analytics.setdefault("is_partial", _ctx.get("is_partial", False))
+    analytics.setdefault("mode", envelope.get("mode", "full"))
 ```
 
-- [ ] **Step 5: Run tests, expect PASS**
+- [ ] **Step 5: P11 fix — verify Excel generation still reads analytics correctly**
+
+Excel generators (`generate_excel`, `_generate_analytical_excel`, `_generate_monthly_excel`) call `analytics.get("kpis")`. After Task 1.2 the in-memory `analytics` dict is unchanged during a single run; only the on-disk JSON shape changed. Run:
+
+```bash
+uv run pytest tests/test_report_excel.py -v
+```
+
+All existing tests should remain PASS. If any fail due to expecting a specific kpis dict shape, update the test fixture to match envelope-flattened form (`kpis` = normalized).
+
+- [ ] **Step 6: Run full test suite, expect PASS**
 
 ```bash
 uv run pytest tests/test_report_snapshot.py::test_full_report_persists_normalized_kpis tests/test_analytics_envelope.py -v
-uv run pytest tests/test_report_snapshot.py -q   # no regressions
+uv run pytest -q   # E2 — full regression sweep, no failures allowed
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add qbu_crawler/server/report_snapshot.py tests/test_report_snapshot.py
@@ -338,12 +370,13 @@ def test_is_partial_propagates_to_workflow_runs(snapshot_db, monkeypatch):
 uv run pytest tests/test_report_snapshot.py::test_is_partial_propagates_to_workflow_runs -v
 ```
 
-- [ ] **Step 3: Add migration to `qbu_crawler/models.py`**
+- [ ] **Step 3: Add migrations to `qbu_crawler/models.py`**
 
-Insert before line 275 (`CREATE UNIQUE INDEX ... safety_incidents ...`):
+Insert before line 275 (`CREATE UNIQUE INDEX ... safety_incidents ...`). We add two columns: `is_partial` (D4) and `reviews_count` (P3 — used by `_compute_quiet_days` in Task 3.1):
 
 ```python
         "ALTER TABLE workflow_runs ADD COLUMN is_partial INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE workflow_runs ADD COLUMN reviews_count INTEGER NOT NULL DEFAULT 0",
 ```
 
 - [ ] **Step 4: Update `freeze_report_snapshot` to persist is_partial**
@@ -361,9 +394,20 @@ In `report_snapshot.py`, after the block around line 72-73 that sets `meta["is_p
         _logger.debug("failed to persist is_partial for run %s", run_id, exc_info=True)
 ```
 
-- [ ] **Step 5: Update `models.update_workflow_run` whitelist to accept is_partial**
+- [ ] **Step 5: Update `models.update_workflow_run` whitelist (P4 — exact location)**
 
-Find the allowlist in `models.py` (search for `update_workflow_run`) and add `"is_partial"` to the allowed keys set.
+In `models.py:683-703`, the `allowed` set. Immediately after the line `"category_synced",` add:
+
+```python
+        "is_partial",
+        "reviews_count",
+```
+
+so the updated block contains both new fields. Verify with:
+
+```bash
+uv run python -c "from qbu_crawler import models; print({'is_partial','reviews_count'} <= set(models.update_workflow_run.__code__.co_consts[1]) if hasattr(models.update_workflow_run.__code__.co_consts[1], '__iter__') else 'n/a'); print('allowlist import OK')"
+```
 
 - [ ] **Step 6: Run, expect PASS**
 
@@ -384,7 +428,7 @@ git commit -m "feat(db): workflow_runs.is_partial + propagate from _meta (D4)"
 
 **Files:**
 - Modify: `qbu_crawler/models.py`（migrations 区追加）
-- Test: `tests/test_review_analysis.py`（新增）
+- Create: `tests/test_safety_dedup.py`
 
 - [ ] **Step 1: Inspect existing safety_incidents schema and index**
 
@@ -394,34 +438,61 @@ uv run python -c "import sqlite3,os; c=sqlite3.connect(os.environ.get('QBU_DATA_
 
 Record column names (expect `id`, `review_id`, `safety_level`, `failure_mode`, `evidence_hash`, ...).
 
-- [ ] **Step 2: Write failing test**
+- [ ] **Step 2: Write failing test (P5 fix — reuse existing snapshot_db fixture)**
 
-Append to `tests/test_review_analysis.py` (or new `tests/test_safety_dedup.py`):
+Create `tests/test_safety_dedup.py`:
 
 ```python
-def test_safety_incidents_dedup_by_review_level_mode(tmp_path, monkeypatch):
-    """D3: inserting same (review_id, safety_level, failure_mode) twice must not double-count."""
-    import sqlite3, os
-    from qbu_crawler import models, config
-    dbp = tmp_path / "products.db"
-    monkeypatch.setattr(config, "DB_PATH", str(dbp))
-    models.init_db()
+"""D3: safety_incidents must not double-count same (review_id, level, mode).
 
-    conn = models.get_conn()
+Note: evidence_hash UNIQUE index already exists (models.py:232). The new
+composite index coexists — they enforce two different dedup dimensions:
+  - evidence_hash: exact payload identity
+  - (review_id, safety_level, failure_mode): logical identity per review
+"""
+import sqlite3
+import pytest
+
+
+def _open_db_with_schema(tmp_path, monkeypatch):
+    """Stand up a fresh DB using the project's init helper."""
+    from qbu_crawler import models
+    # models.DB_PATH is the project-defined path; override before init.
+    db_file = str(tmp_path / "products.db")
+    monkeypatch.setattr(models, "DB_PATH", db_file, raising=False)
+    # init_db() reads DB_PATH each call; also insert a placeholder review for FK
+    models.init_db()
+    conn = sqlite3.connect(db_file)
+    conn.execute("INSERT INTO products (id, url, name) VALUES (1, 'u', 'n')")
+    conn.execute("INSERT INTO reviews (id, product_id, body) VALUES (1, 1, 'x')")
+    conn.commit()
+    conn.close()
+    return db_file
+
+
+def test_safety_incidents_dedup_by_review_level_mode(tmp_path, monkeypatch):
+    db_file = _open_db_with_schema(tmp_path, monkeypatch)
+    conn = sqlite3.connect(db_file)
     try:
         conn.execute(
-            """INSERT INTO safety_incidents (review_id, safety_level, failure_mode, evidence_hash)
-               VALUES (1, 'critical', 'foreign_object', 'h1')"""
+            """INSERT INTO safety_incidents
+               (review_id, product_sku, safety_level, failure_mode,
+                evidence_snapshot, evidence_hash, detected_at)
+               VALUES (1, 'SKU-X', 'critical', 'foreign_object',
+                       's1', 'h1', '2026-04-18')"""
         )
         conn.commit()
-        try:
+        # Second insert: same logical identity (review_id, level, mode) but
+        # different evidence_hash — composite index must block it.
+        with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                """INSERT INTO safety_incidents (review_id, safety_level, failure_mode, evidence_hash)
-                   VALUES (1, 'critical', 'foreign_object', 'h2')"""
+                """INSERT INTO safety_incidents
+                   (review_id, product_sku, safety_level, failure_mode,
+                    evidence_snapshot, evidence_hash, detected_at)
+                   VALUES (1, 'SKU-X', 'critical', 'foreign_object',
+                           's2', 'h2', '2026-04-18')"""
             )
             conn.commit()
-        except sqlite3.IntegrityError:
-            pass  # expected
         count = conn.execute(
             "SELECT COUNT(*) FROM safety_incidents WHERE review_id=1"
         ).fetchone()[0]
@@ -433,7 +504,7 @@ def test_safety_incidents_dedup_by_review_level_mode(tmp_path, monkeypatch):
 - [ ] **Step 3: Run, expect FAIL (count == 2)**
 
 ```bash
-uv run pytest tests/test_review_analysis.py::test_safety_incidents_dedup_by_review_level_mode -v
+uv run pytest tests/test_safety_dedup.py -v
 ```
 
 - [ ] **Step 4: Add composite unique index migration**
@@ -455,13 +526,13 @@ Append to migrations in `models.py`:
 - [ ] **Step 5: Run, expect PASS**
 
 ```bash
-uv run pytest tests/test_review_analysis.py::test_safety_incidents_dedup_by_review_level_mode -v
+uv run pytest tests/test_safety_dedup.py -v
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add qbu_crawler/models.py tests/test_review_analysis.py
+git add qbu_crawler/models.py tests/test_safety_dedup.py
 git commit -m "fix(db): safety_incidents unique by (review_id, level, mode) (D3)"
 ```
 
@@ -1143,7 +1214,7 @@ REPORT_DS_VERSION = os.getenv("REPORT_DS_VERSION", "v3").lower()
 'v4' = new unified Editorial Intelligence (daily/weekly/monthly shared partials)."""
 ```
 
-- [ ] **Step 2: Smoke test**
+- [ ] **Step 2: Smoke test env var**
 
 ```bash
 uv run python -c "from qbu_crawler import config; print('REPORT_DS_VERSION=', config.REPORT_DS_VERSION)"
@@ -1152,11 +1223,62 @@ REPORT_DS_VERSION=v4 uv run python -c "from qbu_crawler import config; print('RE
 
 Expected: `v3` then `v4`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: P12 fix — write a v3 fallback regression test**
+
+Create `tests/test_report_ds_flag.py`:
+
+```python
+"""P12 — prove REPORT_DS_VERSION=v3 path still renders (no regression on rollback)."""
+from importlib import reload
+
+
+def test_v3_is_default_when_env_unset(monkeypatch):
+    monkeypatch.delenv("REPORT_DS_VERSION", raising=False)
+    from qbu_crawler import config
+    reload(config)
+    assert config.REPORT_DS_VERSION == "v3"
+
+
+def test_v4_opt_in_via_env(monkeypatch):
+    monkeypatch.setenv("REPORT_DS_VERSION", "v4")
+    from qbu_crawler import config
+    reload(config)
+    assert config.REPORT_DS_VERSION == "v4"
+
+
+def test_v3_fallback_renders_daily_briefing(tmp_path, monkeypatch):
+    """Flag=v3 must still invoke the legacy render_daily_briefing path."""
+    monkeypatch.setenv("REPORT_DS_VERSION", "v3")
+    from qbu_crawler import config
+    reload(config)
+    from qbu_crawler.server import report_html
+
+    out = tmp_path / "daily.html"
+    report_html.render_daily_briefing(
+        snapshot={"logical_date": "2026-04-18", "run_id": 1, "reviews": []},
+        cumulative_kpis={"health_index": 88, "own_negative_review_rate_display": "2.0%",
+                         "high_risk_count": 0, "own_review_rows": 100},
+        window_reviews=[], attention_signals=[], changes={},
+        output_path=str(out),
+    )
+    assert out.exists()
+    html = out.read_text(encoding="utf-8")
+    # Legacy briefing uses inline layout — confirm by absence of V4 mode strip
+    assert "mode-strip--" not in html
+    assert "累积快照" in html
+```
 
 ```bash
-git add qbu_crawler/config.py
-git commit -m "feat(config): REPORT_DS_VERSION flag for v3/v4 rollout"
+uv run pytest tests/test_report_ds_flag.py -v
+```
+
+Expected: all 3 PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add qbu_crawler/config.py tests/test_report_ds_flag.py
+git commit -m "feat(config): REPORT_DS_VERSION flag + v3 fallback regression test"
 ```
 
 ---
@@ -1164,6 +1286,17 @@ git commit -m "feat(config): REPORT_DS_VERSION flag for v3/v4 rollout"
 ## Phase 3 — PR 3：三张报告重构（装配式）
 
 **目标**：daily/weekly/monthly 都用 `_partials/` 组装；Mode 视觉语言落地；`REPORT_DS_VERSION=v4` 启用后 S01-S11 + W0-W5 + M1 的 HTML 视觉可辨、样式统一。
+
+**E1 · 任务顺序硬依赖**：Task 3.1 引入 `_write_template` helper，Task 3.2 / 3.3 都复用。**必须按 3.1 → 3.2 → 3.3 → 3.4 顺序执行**，不可并发。
+
+**E3 · Baseline 备份**（在 Task 3.1 开始前执行一次）：
+
+```bash
+# 备份 v3 产物，供后续 diff 对照
+cp -r "C:/Users/leo/Desktop/报告/reports/scenarios" "C:/Users/leo/Desktop/报告/reports-v3-baseline"
+```
+
+Phase 3 结束后，用脚本对 v3 baseline 和 v4 新产物做字段级 diff（至少比 manifest.json 的 verdict 字段 + HTML 体积变化 ±50% 范围内），及时发现"某个场景静默退化"。
 
 ---
 
@@ -1359,8 +1492,9 @@ if config.REPORT_DS_VERSION == "v4":
     else:
         daily_mode = "quiet"
 
-    # Compute quiet_days (for 'quiet' mode kicker)
+    # Compute quiet_days + day_index for kicker context
     quiet_days = _compute_quiet_days(run_id) if daily_mode == "quiet" else 0
+    day_index = _compute_day_index(run_id, snapshot.get("logical_date", "")) if daily_mode == "partial" else 0
 
     html_path = report_html.render_daily_v4(
         snapshot=snapshot,
@@ -1372,7 +1506,7 @@ if config.REPORT_DS_VERSION == "v4":
         output_path=html_output,
         mode=daily_mode,
         mode_context={"is_partial": is_partial, "quiet_days": quiet_days,
-                      "day_index": run_row.get("day_index", 1)},
+                      "day_index": day_index},
     )
 else:
     html_path = report_html.render_daily_briefing(
@@ -1382,13 +1516,14 @@ else:
     )
 ```
 
-- [ ] **Step 4: Add `_compute_quiet_days` helper in `report_snapshot.py`**
+- [ ] **Step 4: Add `_compute_quiet_days` + `_compute_day_index` helpers in `report_snapshot.py`**
 
-Search for existing helpers and add:
+Both helpers live near `_generate_daily_briefing`. `reviews_count` column was added in Task 1.3 Step 3, so the quiet query is safe.
 
 ```python
 def _compute_quiet_days(run_id):
-    """Count consecutive prior daily runs with 0 window reviews."""
+    """P3 — count consecutive prior daily runs with 0 window reviews.
+    Depends on workflow_runs.reviews_count (added in Task 1.3)."""
     try:
         conn = models.get_conn()
         try:
@@ -1409,9 +1544,44 @@ def _compute_quiet_days(run_id):
         return n
     except Exception:
         return 0
+
+
+def _compute_day_index(run_id, logical_date):
+    """P7 — day N/7 for the partial-mode kicker.
+    N = (logical_date - first_ever_daily_run.logical_date).days + 1, capped at 7.
+    Returns 1 on any error or when no prior runs exist."""
+    try:
+        from datetime import date as _date
+        today = _date.fromisoformat(str(logical_date)[:10])
+        conn = models.get_conn()
+        try:
+            row = conn.execute(
+                """SELECT MIN(logical_date) AS first_date
+                   FROM workflow_runs
+                   WHERE report_tier='daily' AND logical_date IS NOT NULL""",
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row or not row["first_date"]:
+            return 1
+        first = _date.fromisoformat(row["first_date"][:10])
+        return min(max((today - first).days + 1, 1), 7)
+    except Exception:
+        return 1
 ```
 
-Note: if `workflow_runs.reviews_count` does not yet exist, skip and return `mode_context.quiet_days=0`; the UI degrades gracefully.
+- [ ] **Step 4b: Write reviews_count on every daily run**
+
+Inside `_generate_daily_briefing`, just before the `models.update_workflow_run(...)` call that sets `report_mode="standard"`, add:
+
+```python
+try:
+    models.update_workflow_run(run_id, reviews_count=len(window_reviews or []))
+except Exception:
+    pass
+```
+
+This makes `_compute_quiet_days` return correct values on subsequent days.
 
 - [ ] **Step 5: Run simulator with v4 flag**
 
@@ -1619,6 +1789,11 @@ git commit -m "feat(templates): V4 weekly.html.j2 assembled from partials"
 
 **Files:**
 - Create: `qbu_crawler/server/report_templates/monthly.html.j2`
+- Create: `qbu_crawler/server/analytics_safety.py` (P6 — new module for safety grouping helper)
+- Create: `qbu_crawler/server/report_templates/_partials/scorecard.html.j2`
+- Create: `qbu_crawler/server/report_templates/_partials/category_benchmark.html.j2`
+- Create: `qbu_crawler/server/report_templates/_partials/competitor.html.j2`
+- Create: `qbu_crawler/server/report_templates/_partials/panorama.html.j2`
 - Modify: `qbu_crawler/server/report_html.py`（新增 `render_monthly_v4`）
 - Modify: `qbu_crawler/server/report_snapshot.py:1539-1592`（`_render_monthly_html` 分支）
 
@@ -2106,7 +2281,25 @@ git commit -m "feat(email): unified email base template (1 base + 3 variants fou
 {% endblock %}
 ```
 
-- [ ] **Step 4: Delete obsolete templates**
+- [ ] **Step 3b: P9 fix — purge code references to obsolete templates before `git rm`**
+
+```bash
+grep -rn "email_full\|email_change\|email_quiet\|daily_report_email" qbu_crawler/ --include="*.py"
+```
+
+For every hit, change the `get_template(...)` call to use the new base + variant. Typical sites:
+
+- `report_snapshot.py::_render_full_email_html` — currently loads `email_full.html.j2`; change to `email_daily.html.j2` or `email_weekly.html.j2` depending on `report_tier`, and pass the new context contract (`mode`, `kicker`, `brand`, `kpi_items`, `report_url`, `generated_at`, `threshold`, plus block-specific vars).
+- `report_snapshot.py::_generate_change_report` / `_generate_quiet_report` — both load their own templates; route through `email_daily.html.j2` with `mode="change"` / `mode="quiet"`.
+- `report.py::render_daily_email_html` + `build_daily_deep_report_email` — currently load `daily_report_email.html.j2` / `.txt.j2`; this path is only reached by the legacy `generate_report` function. If that function is still called, either (a) migrate it to `email_daily.html.j2` or (b) leave the legacy files in place as a fallback. Decision: **leave `daily_report_email.*` alone** in this PR (it is outside the V4 scope), but ensure the main pipeline no longer calls it.
+
+After all edits:
+
+```bash
+uv run pytest tests/test_report_snapshot.py tests/test_report.py -q   # no regressions
+```
+
+- [ ] **Step 4: Delete obsolete templates (only after Step 3b is green)**
 
 ```bash
 git rm qbu_crawler/server/report_templates/email_full.html.j2 qbu_crawler/server/report_templates/email_change.html.j2 qbu_crawler/server/report_templates/email_quiet.html.j2
@@ -2201,6 +2394,26 @@ _KPI_TOOLTIPS = {
 
 def _resolve_tooltip(label):
     return _KPI_TOOLTIPS.get(label, "")
+```
+
+- [ ] **Step 2b: P8 fix — make multi-line tooltips render**
+
+Append to `daily_report_v3.css` so `\n` in `data-tip` breaks visually:
+
+```css
+.tip-trigger[data-tip] { position: relative; cursor: help; }
+.tip-trigger[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; bottom: 100%; left: 0;
+  min-width: 220px; max-width: 360px;
+  padding: 10px 12px;
+  background: var(--text); color: var(--text-inverse);
+  font-size: 12px; line-height: 1.5;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  white-space: pre-line;     /* honor \n in the tooltip string */
+  z-index: 1000;
+}
 ```
 
 - [ ] **Step 3: Add confidence field to each kpi_card**
@@ -2450,3 +2663,25 @@ EOF
 | §10 验收对照表 | Task 3.4 / 4.5 |
 
 All spec requirements mapped to concrete tasks. No placeholders. Type names (`AnalyticsEnvelope`, `render_daily_v4`, `render_weekly_v4`, `render_monthly_v4`) consistent across tasks.
+
+---
+
+## Self-Review Revision Log (2026-04-18)
+
+Applied after second-pass review:
+
+- **P1** — Task 1.1: replaced broken `__wrapped__` hack with dict-based legacy test
+- **P2** — Task 1.2: fixed `config` import path (`qbu_crawler.config`, not `qbu_crawler.server.config`)
+- **P3** — Task 1.3: added `workflow_runs.reviews_count` migration (required by `_compute_quiet_days`)
+- **P4** — Task 1.3 Step 5: concrete Edit for `models.py:683-703` allowlist
+- **P5** — Task 1.4: test moved to new `tests/test_safety_dedup.py`, uses `sqlite3.IntegrityError`, clarifies coexistence with existing `evidence_hash UNIQUE`
+- **P6** — Task 3.3: `analytics_safety.py` + 4 tab partials added to Files list
+- **P7** — Task 3.1: new `_compute_day_index` helper + Step 4b writes `reviews_count` per run
+- **P8** — Task 4.3 Step 2b: CSS `white-space: pre-line` for multi-line tooltip
+- **P9** — Task 4.2 Step 3b: grep-and-migrate references before `git rm`
+- **P10** — Task 1.2 Step 4: envelope flatten surfaces `is_partial` / `mode` at top level
+- **P11** — Task 1.2 Step 5: explicit Excel regression check
+- **P12** — Task 2.5: `tests/test_report_ds_flag.py` guards v3 rollback path
+- **E1** — Phase 3 header: hard dependency ordering declared
+- **E2** — Phase 1 header: full pytest sweep before every commit
+- **E3** — Phase 3 header: v3 baseline backup + diff cadence
