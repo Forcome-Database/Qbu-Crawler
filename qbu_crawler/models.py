@@ -274,6 +274,15 @@ def init_db():
     )
 """,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_incidents_hash ON safety_incidents(evidence_hash)",
+        """
+    DELETE FROM safety_incidents
+    WHERE id NOT IN (
+        SELECT MIN(id) FROM safety_incidents
+        GROUP BY review_id, safety_level, failure_mode
+    )
+""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_incidents_review_level_mode "
+        "ON safety_incidents(review_id, safety_level, failure_mode)",
     ]
     for sql in migrations:
         try:
