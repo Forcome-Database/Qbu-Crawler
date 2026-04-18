@@ -1266,3 +1266,115 @@ details summary:hover { color: var(--accent); }
 
   @page { size: A4; margin: 1.5cm; }
 }
+
+/* ==========================================================================
+   V4 EXTENSIONS — Mode colors + Confidence badges + Section dividers
+   ========================================================================== */
+
+:root {
+  /* Mode colors — 6 tier/mode combinations */
+  --mode-partial:  #8e8ea0;
+  --mode-full:     #4f46e5;
+  --mode-change:   #c2410c;
+  --mode-quiet:    #047857;
+  --mode-weekly:   #4338ca;
+  --mode-monthly:  #1e1b4b;
+
+  /* Confidence badge colors */
+  --conf-high:     #047857;
+  --conf-medium:   #a16207;
+  --conf-low:      #b91c1c;
+  --conf-none:     #8e8ea0;
+}
+
+/* Mode strip — top ribbon identifying report mode */
+.mode-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  padding: var(--sp-md) var(--sp-xl);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-inverse);
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.mode-strip--partial  { background: var(--mode-partial); }
+.mode-strip--full     { background: var(--mode-full); }
+.mode-strip--change   { background: var(--mode-change); }
+.mode-strip--quiet    { background: var(--mode-quiet); }
+.mode-strip--weekly   { background: var(--mode-weekly); }
+.mode-strip--monthly  { background: var(--mode-monthly); }
+.mode-strip-kicker { font-weight: 700; }
+.mode-strip-meta { margin-left: auto; opacity: 0.7; font-weight: 400; }
+
+/* Confidence badge — small pill next to any computed KPI */
+.conf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.conf-badge--high    { background: color-mix(in srgb, var(--conf-high) 12%, white); color: var(--conf-high); }
+.conf-badge--medium  { background: color-mix(in srgb, var(--conf-medium) 14%, white); color: var(--conf-medium); }
+.conf-badge--low     { background: color-mix(in srgb, var(--conf-low) 12%, white); color: var(--conf-low); }
+.conf-badge--none    { background: color-mix(in srgb, var(--conf-none) 12%, white); color: var(--conf-none); }
+
+/* Section divider — Serif numeral eyebrow */
+.section-divider {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-md);
+  margin: var(--sp-2xl) 0 var(--sp-lg);
+  padding-bottom: var(--sp-sm);
+  border-bottom: 1px solid var(--border);
+}
+.section-divider-num {
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+.section-divider-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+.section-divider-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* Three-band rate bar: positive / neutral / negative */
+.rate-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  margin-top: 6px;
+}
+.rate-bar-seg--positive { background: var(--positive); }
+.rate-bar-seg--neutral  { background: var(--medium); }
+.rate-bar-seg--negative { background: var(--negative); }
+
+/* KPI Delta helpers (missing baseline, stable) */
+.kpi-delta--missing { color: var(--text-muted); font-style: italic; }
+
+/* Quiet / change / partial tab pattern — grey empty tabs */
+.tab-btn.tab-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  font-style: italic;
+}
