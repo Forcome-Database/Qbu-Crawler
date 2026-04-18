@@ -391,13 +391,36 @@ CODE_TO_DIMENSION = {
 # Used by PDF and email templates to render hover/title tooltips.
 
 METRIC_TOOLTIPS = {
-    # KPI cards (P1)
-    "健康指数": "综合评分 = 20%站点评分 + 25%样本评分 + 35%(1−差评率) + 20%(1−高风险占比)，满分100",
-    "差评率": "自有产品 ≤{threshold}星评论数 ÷ 自有评论总数",
-    "自有评论": "本期采集窗口内入库的自有产品评论行数（按抓取时间计）",
-    "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
-    "竞品差距指数": "各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
-    "样本覆盖率": "实际入库评论数 ÷ 站点展示总评论数。受 MAX_REVIEWS 上限和翻页限制影响，部分产品覆盖率 <100% 属正常",
+    # KPI cards (P1) — expanded with 公式/数据源/置信度 (Task 4.3)
+    "健康指数": (
+        "公式：(好评数 - 差评数) / 评论总数 × 50 + 50\n"
+        "数据源：累积自有评论\n"
+        "置信度：样本 ≥30 可信；<30 向先验值 50 收缩"
+    ),
+    "差评率": (
+        "公式：差评数 ÷ 自有评论总数\n"
+        "差评 = 评分 ≤ {threshold} 星\n"
+        "3 星中评不计入好评也不计入差评"
+    ),
+    "自有评论": "累积抓取到的自有产品评论总数（已去重）",
+    "好评率": "自有产品 ≥4 星评论占比（3 星为中评，不计入好评）",
+    "高风险产品": (
+        "公式：risk_score ≥ {high_risk} 的自有产品数\n"
+        "risk_score 由差评率、评分、近期差评数加权\n"
+        "数据源：累积"
+    ),
+    "竞品差距指数": (
+        "公式：各维度 (comp_pos_rate + own_neg_rate) / 2 平均 × 100\n"
+        "样本门槛：自有+竞品评论 ≥ 20 才展示\n"
+        "数据源：累积"
+    ),
+    "样本覆盖率": (
+        "公式：ingested_review_rows ÷ site_reported_review_total_current\n"
+        "注：MAX_REVIEWS=200 截断每产品最多采集 200 条最新评论\n"
+        "数据源：累积全量对比"
+    ),
+    "翻译完成度": "累积评论中 translate_status='done' 的比例",
+    "安全事件": "本期新增 safety_incidents 记录数（按 review_id 去重）",
     # Product health matrix (P2)
     "评分": "站点展示的综合评分（历史累积，非本期样本）",
     "差评率_产品": "该产品 ≤{low_rating}星评论数 ÷ 该产品采集评论总数",
@@ -1246,6 +1269,41 @@ def normalize_deep_report_analytics(analytics):
     own_pos = kpis.get("own_positive_review_rows", 0)
     own_total = kpis.get("own_review_rows", 0) or 1
     positive_rate = own_pos / own_total
+
+    # Task 4.3 — confidence badges (derived from health_confidence + sample sizes)
+    _health_conf = kpis.get("health_confidence", "no_data")
+    _health_conf_badge = {"high": "high", "medium": "medium", "low": "low", "no_data": "low"}.get(_health_conf, "none")
+    _own_reviews = kpis.get("own_review_rows", 0) or 0
+    _competitor_reviews = kpis.get("competitor_review_rows", 0) or 0
+    _review_sample_conf = "high" if _own_reviews >= 30 else ("medium" if _own_reviews >= 10 else "low")
+
+    # Task 4.4 — rate bands for 差评率 card (好/中/差)
+    _own_pos_val = kpis.get("own_positive_review_rows", 0) or 0
+    _own_neg_val = kpis.get("own_negative_review_rows", 0) or 0
+    _own_total_val = max(_own_reviews, 1)
+    _neu = max(_own_total_val - _own_pos_val - _own_neg_val, 0)
+    _rate_bands = {
+        "positive": round(_own_pos_val / _own_total_val * 100, 1),
+        "neutral":  round(_neu / _own_total_val * 100, 1),
+        "negative": round(_own_neg_val / _own_total_val * 100, 1),
+    }
+
+    # D12 — competitive gap index sample status when <20
+    _total_for_gap = _own_reviews + _competitor_reviews
+    if _total_for_gap < 20:
+        _gap_value = f"累积中 {_total_for_gap}/20"
+        _gap_class = "kpi-delta--missing"
+        _gap_conf = "low"
+    else:
+        _gap_value = kpis.get("competitive_gap_index") if kpis.get("competitive_gap_index") is not None else "—"
+        _gap_class = "delta-flat"
+        _gap_conf = "medium"
+
+    # D5 — unclassified reviews count for "自有评论" tooltip
+    _ingested = kpis.get("ingested_review_rows", 0) or 0
+    _classified = _own_reviews + _competitor_reviews
+    _unclassified = max(_ingested - _classified, 0)
+
     kpi_cards = [
         {
             "label": "健康指数",
@@ -1273,7 +1331,7 @@ def normalize_deep_report_analytics(analytics):
             "value": f"{positive_rate * 100:.1f}%",
             "delta_display": "",
             "delta_class": "delta-flat",
-            "tooltip": "自有产品 ≥4 星评论占比（3 星为中评，不计入好评）",
+            "tooltip": _resolve_tooltip("好评率"),
             "value_class": "severity-low" if positive_rate >= 0.7 else "",
         },
         {
@@ -1291,6 +1349,26 @@ def normalize_deep_report_analytics(analytics):
             "tooltip": _resolve_tooltip("竞品差距指数"),
         },
     ]
+
+    # Task 4.3/4.4 — attach confidence badges + rate bands + unclassified note
+    for c in kpi_cards:
+        if c.get("label") == "健康指数":
+            c["confidence"] = _health_conf_badge
+        elif c.get("label") == "差评率":
+            c["confidence"] = _review_sample_conf
+            c["rate_bands"] = _rate_bands
+        elif c.get("label") == "自有评论":
+            c["confidence"] = _review_sample_conf
+            if _unclassified > 0:
+                c["tooltip"] = (c.get("tooltip") or "") + f"\n注：当前 {_unclassified} 条评论 ownership 未分类"
+        elif c.get("label") == "高风险产品":
+            c["confidence"] = _review_sample_conf
+        elif c.get("label") == "好评率":
+            c["confidence"] = _review_sample_conf
+        elif c.get("label") == "竞品差距指数":
+            c["value"] = _gap_value
+            c["delta_class"] = _gap_class
+            c["confidence"] = _gap_conf
 
     # Coverage rate card
     site_total = kpis.get("site_reported_review_total_current", 0) or 0

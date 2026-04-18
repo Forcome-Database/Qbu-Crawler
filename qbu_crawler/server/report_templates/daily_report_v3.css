@@ -1486,3 +1486,19 @@ details summary:hover { color: var(--accent); }
 .safety-mode { font-size: var(--fs-xs); color: var(--text-muted); margin-left: var(--sp-sm); }
 .safety-excerpt { font-size: var(--fs-sm); color: var(--text-secondary); margin-top: var(--sp-xs); font-style: italic; }
 .safety-meta { font-size: var(--fs-xs); color: var(--text-muted); margin-top: var(--sp-xs); font-family: var(--font-mono); }
+
+/* P8 — multi-line tooltip rendering for KPI cards */
+.tip-trigger[data-tip] { position: relative; cursor: help; }
+.tip-trigger[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; bottom: 100%; left: 0;
+  min-width: 220px; max-width: 360px;
+  padding: 10px 12px;
+  background: var(--text); color: var(--text-inverse);
+  font-size: 12px; line-height: 1.5;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  white-space: pre-line;
+  z-index: 1000;
+  pointer-events: none;
+}
