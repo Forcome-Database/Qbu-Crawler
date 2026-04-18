@@ -1394,3 +1394,45 @@ details summary:hover { color: var(--accent); }
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* V4 Issue card */
+.issue-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--sp-lg) var(--sp-xl);
+  margin-bottom: var(--sp-md);
+  box-shadow: var(--shadow-sm);
+}
+.issue-card-header { display: flex; align-items: baseline; gap: var(--sp-sm); flex-wrap: wrap; margin-bottom: var(--sp-sm); }
+.issue-card-title { font-family: var(--font-display); font-size: var(--fs-md); }
+.issue-card-meta { font-size: var(--fs-xs); color: var(--text-muted); margin-left: auto; }
+.issue-card-history summary { font-size: var(--fs-xs); color: var(--text-secondary); cursor: pointer; padding: var(--sp-xs) 0; }
+.issue-card-history ul { font-size: var(--fs-xs); margin: var(--sp-xs) 0 0 var(--sp-lg); }
+.issue-card-quotes-label,
+.issue-card-competitor-label { font-size: var(--fs-xs); color: var(--text-secondary); margin: var(--sp-sm) 0 var(--sp-xs); letter-spacing: 0.04em; }
+.issue-card-competitor {
+  margin-top: var(--sp-sm);
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--accent-soft);
+  border-radius: var(--r-md);
+  border-left: 2px solid var(--accent);
+}
+/* V4 Lifecycle badges */
+.lifecycle-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-family: var(--font-mono); }
+.ls-active { background: var(--critical-bg); color: var(--critical); }
+.ls-receding { background: var(--medium-bg); color: var(--medium); }
+.ls-dormant { background: var(--surface-sunken); color: var(--text-muted); }
+.ls-recurrent { background: var(--critical); color: var(--text-inverse); }
+
+/* V4 Empty state */
+.empty-state {
+  text-align: center;
+  padding: var(--sp-3xl) var(--sp-xl);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--r-xl);
+}
+.empty-state-icon { font-family: var(--font-display); font-size: 48px; color: var(--text-muted); opacity: 0.4; }
+.empty-state-title { font-family: var(--font-display); font-size: var(--fs-md); margin-top: var(--sp-sm); color: var(--text-secondary); }
+.empty-state-body { font-size: var(--fs-sm); margin-top: var(--sp-xs); max-width: 520px; margin-left: auto; margin-right: auto; }

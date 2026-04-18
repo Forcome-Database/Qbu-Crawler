@@ -1,0 +1,14 @@
+{#
+  Review quote block. Caller context must provide `r` (a review dict with
+  headline_cn/headline, body_cn/body, author, rating, product_name, date_published_parsed).
+#}
+<div class="quote-block {% if r.rating is defined and r.rating and r.rating <= 2 %}quote-negative{% elif r.rating is defined and r.rating and r.rating >= 4 %}quote-positive{% else %}quote-neutral{% endif %}">
+  <div class="quote-cn">{{ r.get("headline_cn") or r.get("headline", "") }}</div>
+  <div class="quote-en">{{ (r.get("body_cn") or r.get("body", ""))[:280] }}{% if (r.get("body","") or "")|length > 280 %}…{% endif %}</div>
+  <div class="quote-meta">
+    <span>{{ "★" * ((r.rating|int) if r.rating else 0) }}</span>
+    <span>{{ r.get("author", "Anonymous") }}</span>
+    <span>{{ r.get("product_name", r.get("product_sku", "")) }}</span>
+    {% if r.get("date_published_parsed") %}<span>{{ r["date_published_parsed"] }}</span>{% endif %}
+  </div>
+</div>

@@ -1,0 +1,11 @@
+{#
+  Empty-state placeholder with friendly copy. Caller passes:
+    - icon    (str, optional single glyph, defaults to serif section symbol)
+    - title   (str)
+    - body    (str — human-readable reason)
+#}
+<div class="empty-state">
+  <div class="empty-state-icon">{{ icon or "§" }}</div>
+  <div class="empty-state-title">{{ title }}</div>
+  <div class="empty-state-body">{{ body }}</div>
+</div>

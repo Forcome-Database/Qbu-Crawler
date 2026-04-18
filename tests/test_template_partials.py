@@ -85,3 +85,49 @@ def test_hero_renders_confidence_badge_and_bullets():
     assert "可信" in out
     assert "新评论 12 条" in out
     assert 'data-health="88"' in out
+
+
+def test_review_quote_renders_polarity_class():
+    env = _env()
+    r = {"headline": "Great grinder", "body": "Love it", "author": "Bob",
+         "rating": 5, "product_name": "X", "date_published_parsed": "2026-04-18"}
+    out = env.get_template("_partials/review_quote.html.j2").render(r=r)
+    assert "quote-positive" in out
+    assert "★★★★★" in out
+    assert "Bob" in out
+
+    r["rating"] = 1
+    out = env.get_template("_partials/review_quote.html.j2").render(r=r)
+    assert "quote-negative" in out
+
+
+def test_empty_state_defaults():
+    env = _env()
+    out = env.get_template("_partials/empty_state.html.j2").render(
+        title="暂无数据", body="本周期无新评论记录。"
+    )
+    assert "§" in out  # default icon
+    assert "暂无数据" in out
+    assert "本周期无新评论记录。" in out
+
+
+def test_issue_card_renders_lifecycle_and_quotes():
+    env = _env()
+    card = {
+        "label_display": "质量稳定性",
+        "state": "active",
+        "review_count": 8,
+        "first_seen": "2026-04-01",
+        "last_seen": "2026-04-17",
+        "history": [],
+        "example_reviews": [
+            {"headline": "Broken", "body": "Stopped working",
+             "author": "Alice", "rating": 1, "product_name": "G1"}
+        ],
+        "competitor_reference": None,
+    }
+    out = env.get_template("_partials/issue_card.html.j2").render(card=card)
+    assert "ls-active" in out
+    assert "活跃" in out
+    assert "质量稳定性" in out
+    assert "Alice" in out  # review_quote rendered inside

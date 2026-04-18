@@ -1,0 +1,46 @@
+{#
+  Issue cluster card used by weekly/monthly problem-diagnosis tab.
+  Caller passes a `card` dict with keys matching analytics_lifecycle output:
+    label_display, state, review_count, first_seen, last_seen, history,
+    example_reviews, competitor_reference
+#}
+<article class="issue-card">
+  <header class="issue-card-header">
+    <strong class="issue-card-title">{{ card.label_display }}</strong>
+    <span class="lifecycle-badge ls-{{ card.state }}">
+      {{ {"active":"活跃","receding":"收敛中","dormant":"沉默","recurrent":"复发"}.get(card.state, card.state) }}
+    </span>
+    <span class="issue-card-meta">
+      {{ card.review_count }} 条 · 首现 {{ card.first_seen or "—" }} · 末现 {{ card.last_seen or "—" }}
+    </span>
+  </header>
+
+  {% if card.history %}
+  <details class="issue-card-history">
+    <summary>状态变迁时间线（{{ card.history|length }} 次）</summary>
+    <ul>
+      {% for h in card.history %}<li>{{ h.date }} · {{ h.transition }} · {{ h.reason }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  {% if card.example_reviews %}
+  <section class="issue-card-quotes">
+    <div class="issue-card-quotes-label">自有关键评论</div>
+    {% for r in card.example_reviews[:3] %}
+    {% include "_partials/review_quote.html.j2" with context %}
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if card.competitor_reference and card.competitor_reference.review_count > 0 %}
+  <section class="issue-card-competitor">
+    <div class="issue-card-competitor-label">
+      竞品参照（{{ card.competitor_reference.review_count }} 条竞品负面）
+    </div>
+    {% for r in card.competitor_reference.top_examples[:3] %}
+    {% include "_partials/review_quote.html.j2" with context %}
+    {% endfor %}
+  </section>
+  {% endif %}
+</article>
