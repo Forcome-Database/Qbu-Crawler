@@ -1446,3 +1446,63 @@ def load_category_map(path: str | None = None) -> dict[str, dict]:
             return mapping
     except (FileNotFoundError, _csv.Error, OSError):
         return {}
+
+
+# ── AnalyticsEnvelope persistence contract (V4) ──────────────────────────────
+
+_ENVELOPE_SCHEMA_VERSION = "v4"
+
+
+def build_analytics_envelope(
+    raw_analytics: dict,
+    *,
+    mode: str,
+    mode_context: dict | None = None,
+) -> dict:
+    """Build V4 analytics envelope: raw + normalized + mode metadata.
+
+    Persisted to `analytics.json` so later consumers (monthly re-render,
+    kpi_delta lookup) can read normalized derived fields (health_index,
+    own_negative_review_rate_display, high_risk_count, kpi_cards, ...)
+    without re-running normalize.
+    """
+    import copy
+    normalized = normalize_deep_report_analytics(copy.deepcopy(raw_analytics))
+    envelope = {
+        "_schema_version": _ENVELOPE_SCHEMA_VERSION,
+        "kpis_raw": raw_analytics.get("kpis", {}),
+        "kpis_normalized": normalized.get("kpis", {}),
+        "self": normalized.get("self", {}),
+        "competitor": normalized.get("competitor", {}),
+        "report_copy": normalized.get("report_copy", {}),
+        "kpi_cards": normalized.get("kpi_cards", []),
+        "issue_cards": normalized.get("issue_cards", []),
+        "mode": mode,
+        "mode_context": mode_context or {},
+        "logical_date": raw_analytics.get("logical_date", ""),
+        "run_id": raw_analytics.get("run_id", 0),
+    }
+    # Preserve any other top-level keys the legacy pipeline attached
+    for k, v in raw_analytics.items():
+        if k not in envelope and not k.startswith("_"):
+            envelope.setdefault(k, v)
+    return envelope
+
+
+def load_analytics_envelope(path_or_dict) -> dict:
+    """Load an analytics envelope from disk or return as-is if dict.
+
+    Back-compat: if file is legacy (no `_schema_version`), wrap it so
+    callers can always read `envelope["kpis_normalized"]`.
+    """
+    if isinstance(path_or_dict, dict):
+        data = path_or_dict
+    else:
+        with open(path_or_dict, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    if data.get("_schema_version") == _ENVELOPE_SCHEMA_VERSION:
+        return data
+    # Legacy shim: normalize on read
+    kpis = data.get("kpis")
+    raw = {"kpis": kpis if isinstance(kpis, dict) else {}, **data}
+    return build_analytics_envelope(raw, mode=data.get("mode", "full"), mode_context={})
