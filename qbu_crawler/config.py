@@ -170,6 +170,9 @@ HIGH_RISK_THRESHOLD = int(os.getenv("REPORT_HIGH_RISK_THRESHOLD", "35"))
 REPORT_OFFLINE_MODE = os.getenv("REPORT_OFFLINE_MODE", "false").lower() == "true"
 REPORT_HTML_PUBLIC_URL = os.getenv("REPORT_HTML_PUBLIC_URL", "")
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
+REPORT_DS_VERSION = os.getenv("REPORT_DS_VERSION", "v3").lower()
+"""Design system version for HTML reports. 'v3' (default) = legacy templates,
+'v4' = new unified Editorial Intelligence (daily/weekly/monthly shared partials)."""
 REPORT_CLUSTER_ANALYSIS = os.getenv("REPORT_CLUSTER_ANALYSIS", "true").lower() == "true"
 REPORT_MAX_CLUSTER_ANALYSIS = int(os.getenv("REPORT_MAX_CLUSTER_ANALYSIS", "3"))
 SAFETY_TIERS_PATH = os.getenv("SAFETY_TIERS_PATH", os.path.join(DATA_DIR, "safety_tiers.json"))
