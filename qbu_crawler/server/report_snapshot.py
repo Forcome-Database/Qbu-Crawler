@@ -350,13 +350,37 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
     existing_path = run.get("snapshot_path") or ""
     if existing_path and os.path.isfile(existing_path):
         snapshot = load_report_snapshot(existing_path)
-        models.update_workflow_run(
-            run_id,
-            snapshot_at=snapshot.get("snapshot_at"),
-            snapshot_path=existing_path,
-            snapshot_hash=snapshot.get("snapshot_hash"),
-            report_phase=run.get("report_phase") or "none",
-        )
+        # D4 symmetry fix: also propagate is_partial + reviews_count on the
+        # idempotent cache-hit path; otherwise the first freeze writes these
+        # columns but any subsequent re-freeze (triggered by _advance_run,
+        # snapshot replay, etc.) would leave them at whatever the row had
+        # before, which on a fresh run is the DEFAULT 0.
+        _meta = snapshot.get("_meta") or {}
+        _is_partial_val = 1 if _meta.get("is_partial") else 0
+        _reviews_count_val = int(snapshot.get("reviews_count") or 0)
+        try:
+            models.update_workflow_run(
+                run_id,
+                snapshot_at=snapshot.get("snapshot_at"),
+                snapshot_path=existing_path,
+                snapshot_hash=snapshot.get("snapshot_hash"),
+                report_phase=run.get("report_phase") or "none",
+                is_partial=_is_partial_val,
+                reviews_count=_reviews_count_val,
+            )
+        except Exception:
+            # Fallback if is_partial/reviews_count columns not yet migrated
+            _logger.debug(
+                "failed to propagate is_partial/reviews_count on cache-hit for run %s",
+                run_id, exc_info=True,
+            )
+            models.update_workflow_run(
+                run_id,
+                snapshot_at=snapshot.get("snapshot_at"),
+                snapshot_path=existing_path,
+                snapshot_hash=snapshot.get("snapshot_hash"),
+                report_phase=run.get("report_phase") or "none",
+            )
         return models.get_workflow_run(run_id) or run
 
     products, reviews = report.query_report_data(run["data_since"], until=run["data_until"])

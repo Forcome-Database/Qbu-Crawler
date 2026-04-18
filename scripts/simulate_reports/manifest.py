@@ -122,12 +122,18 @@ def collect_actual(
         actual["report_mode"] = run["report_mode"]
         actual["status"] = run["status"]
         actual["report_phase"] = run["report_phase"]
-    # is_partial / lifecycle_states_seen: pull from analytics json
+        # is_partial was persisted to workflow_runs in Task 1.3 (D4);
+        # previously pulled from analytics_tree which only exists for
+        # full-pipeline runs — workflow_runs is authoritative now.
+        try:
+            actual["is_partial"] = bool(run["is_partial"])
+        except (IndexError, KeyError):
+            actual["is_partial"] = False
+    # lifecycle_states_seen: pull from analytics envelope (v4) or raw tree
     analytics_path = scenario_dir / "debug" / "analytics_tree.json"
     if analytics_path.exists():
         try:
             tree = json.loads(analytics_path.read_text(encoding="utf-8"))
-            actual["is_partial"] = bool(tree.get("is_partial"))
             states = set()
             for lc in (tree.get("lifecycle") or {}).values():
                 if isinstance(lc, dict) and lc.get("state"):
