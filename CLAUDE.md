@@ -375,6 +375,27 @@ KPI Delta 计算：
 - **通用性**：不局限于某个站点，其他爬虫项目也会遇到
 - **重要性**：能避免重大踩坑或显著提升效率
 
+## 报告模拟器（离线，不改业务代码）
+
+详见 `scripts/simulate_reports/README.md`。用 42 天时间轴 + 事件注入 + 业务代码真实调用，生成每种日/周/月报形态的真实产物 + 逐场景 debug + expected vs actual verdict 对照。
+
+```bash
+# 首次：克隆桌面基线 DB + 重分布 scraped_at + 回填 labels
+uv run python -m scripts.simulate_reports prepare
+
+# 跑完整 42 天时间轴
+uv run python -m scripts.simulate_reports run
+
+# 生成顶层 index.html + 汇总 issues.md
+uv run python -m scripts.simulate_reports index
+uv run python -m scripts.simulate_reports verify
+
+# 改业务代码后快速复验单场景
+uv run python -m scripts.simulate_reports run-one S07
+```
+
+产物路径：`C:\Users\leo\Desktop\报告\reports\index.html` + `scenarios/<SID>/{manifest.json, *.html, *.xlsx, debug/, emails/}`。
+
 ## 文档规范
 
 项目文档存放在 `docs/` 目录下：
