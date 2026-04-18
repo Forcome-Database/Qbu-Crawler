@@ -1,0 +1,15 @@
+{#
+  Unified tab navigation. Caller passes:
+    - tabs   (list of {id, label, badge?, disabled?})
+    - active (str — id of active tab)
+#}
+<nav class="tab-nav" role="tablist">
+  {% for tab in tabs %}
+  <button data-tab="{{ tab.id }}"
+          class="tab-btn {{ 'tab-active' if tab.id == active else '' }} {{ 'tab-disabled' if tab.disabled else '' }}"
+          role="tab">
+    {{ tab.label }}
+    {% if tab.badge is defined and tab.badge is not none %}<span class="tab-badge">{{ tab.badge }}</span>{% endif %}
+  </button>
+  {% endfor %}
+</nav>

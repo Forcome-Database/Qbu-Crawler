@@ -1,0 +1,48 @@
+{#
+  Editorial hero: Gauge + Serif title + kicker + headline + bullets.
+  Callers pass:
+    - kicker        (str, small eyebrow)
+    - title         (str, big serif)
+    - headline      (str, hero subtitle — LLM-generated or deterministic)
+    - meta          (str, run metadata)
+    - health_index  (float or None)
+    - confidence    ("high" | "medium" | "low" | "no_data")
+    - bullets       (list[str])
+    - actions       (list[str] | None, top 3 recommended actions)
+#}
+<section class="hero">
+  <div class="gauge-wrapper" data-health="{{ health_index if health_index is not none else 50 }}">
+    <div class="gauge-arc">
+      <div class="gauge-fill"></div>
+      <div class="gauge-mask"></div>
+      <div class="gauge-value">0</div>
+    </div>
+    <div class="gauge-label">健康指数
+      {% if confidence %}
+        <span class="conf-badge conf-badge--{{ 'high' if confidence=='high' else ('medium' if confidence=='medium' else ('low' if confidence in ('low','no_data') else 'none')) }}">
+          {{ {"high":"可信","medium":"参考","low":"样本不足","no_data":"无数据"}.get(confidence, confidence) }}
+        </span>
+      {% endif %}
+    </div>
+    <div class="gauge-scale"><span>0</span><span>50</span><span>100</span></div>
+  </div>
+  <div class="hero-text">
+    {% if kicker %}<p class="hero-kicker">{{ kicker }}</p>{% endif %}
+    <h1 class="hero-title">{{ title }}</h1>
+    {% if headline %}<p class="hero-headline">{{ headline }}</p>{% endif %}
+    {% if meta %}<p class="hero-meta">{{ meta }}</p>{% endif %}
+    {% if bullets %}
+    <ul class="hero-bullets">
+      {% for b in bullets %}<li>{{ b }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if actions %}
+    <div class="hero-actions">
+      <div class="hero-actions-label">建议行动</div>
+      <ol>
+        {% for a in actions %}<li>{{ a }}</li>{% endfor %}
+      </ol>
+    </div>
+    {% endif %}
+  </div>
+</section>

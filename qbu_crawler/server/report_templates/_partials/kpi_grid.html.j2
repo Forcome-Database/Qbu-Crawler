@@ -1,0 +1,32 @@
+{#
+  9-card KPI grid. Caller passes:
+    - cards   (list of dict — each with label, value, delta_display, delta_class,
+               confidence ("high|medium|low|none"), tooltip, value_class)
+#}
+<div class="kpi-grid">
+  {% for card in (cards or []) %}
+  <div class="kpi-card reveal">
+    <span class="kpi-label">{{ card.label }}
+      {% if card.confidence and card.confidence != "none" %}
+        <span class="conf-badge conf-badge--{{ card.confidence }}">
+          {{ {"high":"可信","medium":"参考","low":"样本不足"}.get(card.confidence, "") }}
+        </span>
+      {% endif %}
+      {% if card.tooltip %}<span class="tip-trigger" data-tip="{{ card.tooltip }}">?</span>{% endif %}
+    </span>
+    <strong class="kpi-value {{ card.value_class or '' }}">{{ card.value }}</strong>
+    {% if card.delta_display %}
+      <span class="kpi-delta {{ card.delta_class or '' }}">{{ card.delta_display }}</span>
+    {% elif card.delta_missing %}
+      <span class="kpi-delta kpi-delta--missing">基线建立中</span>
+    {% endif %}
+    {% if card.rate_bands %}
+    <div class="rate-bar">
+      <span class="rate-bar-seg rate-bar-seg--positive" style="width: {{ card.rate_bands.positive }}%"></span>
+      <span class="rate-bar-seg rate-bar-seg--neutral" style="width: {{ card.rate_bands.neutral }}%"></span>
+      <span class="rate-bar-seg rate-bar-seg--negative" style="width: {{ card.rate_bands.negative }}%"></span>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
