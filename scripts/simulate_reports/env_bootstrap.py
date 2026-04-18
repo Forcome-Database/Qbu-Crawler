@@ -31,6 +31,10 @@ def set_env():
     os.environ["OPENCLAW_HOOK_URL"] = ""
     os.environ["OPENCLAW_BRIDGE_URL"] = ""
 
+    # V4 by default in simulator (production still defaults to v3 unless
+    # REPORT_DS_VERSION is set in env before the service starts).
+    os.environ.setdefault("REPORT_DS_VERSION", "v4")
+
 
 def load_business():
     """Lazy import business modules and return a namespace handle."""
