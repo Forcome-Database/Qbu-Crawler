@@ -1452,12 +1452,35 @@ def _generate_monthly_report(snapshot, send_email=True):
             encoding="utf-8",
         )
 
-    # Render monthly HTML
-    html_path = _render_monthly_html(
-        snapshot, analytics, executive, kpi_delta, category_benchmark,
-        scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
-        weekly_summaries, weekly_trend_config, safety_incidents, full_result,
-    )
+    # V4 flag: use render_monthly_v4 with grouped safety incidents (D3 + D11)
+    from qbu_crawler.server.analytics_safety import group_safety_incidents
+    safety_grouped = group_safety_incidents(safety_incidents)
+
+    if config.REPORT_DS_VERSION == "v4":
+        from qbu_crawler.server import report_html as _report_html_mod
+        from datetime import date as _date_v4, timedelta as _td_v4
+        try:
+            _ld_v4 = _date_v4.fromisoformat(logical_date[:10])
+            _prev_month_v4 = _ld_v4.replace(day=1) - _td_v4(days=1)
+            _month_label_v4 = _prev_month_v4.strftime("%Y年%m月")
+        except (ValueError, TypeError):
+            _month_label_v4 = logical_date[:7]
+        html_path = _report_html_mod.render_monthly_v4(
+            snapshot=snapshot, analytics=analytics, executive=executive,
+            kpi_delta=kpi_delta, category_benchmark=category_benchmark,
+            scorecard=scorecard, lifecycle_cards=lifecycle_cards,
+            lifecycle_insufficient=lifecycle_insufficient,
+            history_days=history_days, weekly_summaries=weekly_summaries,
+            weekly_trend_config=weekly_trend_config,
+            safety_incidents=safety_grouped,
+            output_path=str(Path(config.REPORT_DIR) / f"monthly-{_month_label_v4.replace('年','-').replace('月','')}.html"),
+        )
+    else:
+        html_path = _render_monthly_html(
+            snapshot, analytics, executive, kpi_delta, category_benchmark,
+            scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+            weekly_summaries, weekly_trend_config, safety_incidents, full_result,
+        )
 
     # Generate 6-sheet monthly Excel (evaluates category benchmark + scorecard into sheets 5+6)
     from qbu_crawler.server import report as report_mod

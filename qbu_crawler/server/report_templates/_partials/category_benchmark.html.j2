@@ -1,0 +1,44 @@
+{#
+  Category benchmark tab. Caller context: category_benchmark (dict with
+  `categories` or `pairings` fallback + `fallback_mode` / `unmapped_count`).
+#}
+{% if category_benchmark and category_benchmark.fallback_mode %}
+<div class="notice notice--info">品类映射数据未配置，下方采用直接竞品配对模式。</div>
+{% if category_benchmark.pairings %}
+<table class="data-table">
+  <thead><tr><th>自有 SKU</th><th>评分</th><th>最接近竞品</th><th>评分</th><th>差距</th><th>价差</th></tr></thead>
+  <tbody>
+  {% for pair in category_benchmark.pairings %}
+  <tr>
+    <td>{{ pair.own_name }}</td><td>{{ pair.own_rating }}</td>
+    <td>{{ pair.competitor_name }}</td><td>{{ pair.competitor_rating }}</td>
+    <td>{{ pair.rating_gap }}</td><td>{{ pair.price_diff }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% elif category_benchmark and category_benchmark.categories %}
+{% for cat, data in category_benchmark.categories.items() %}
+<div class="category-card">
+  <h3>{{ cat }}</h3>
+  {% if data.status == "insufficient_samples" %}
+  <div class="notice">样本不足（自有 {{ data.own_sku_count }} · 竞品 {{ data.competitor_sku_count }}，最低需 {{ data.min_required }}）。</div>
+  {% else %}
+  <table class="data-table">
+    <tr><th></th><th>SKU 数</th><th>平均评分</th><th>评论总量</th><th>平均价</th></tr>
+    <tr><td>自有</td><td>{{ data.own.sku_count }}</td><td>{{ data.own.avg_rating }}</td><td>{{ data.own.total_reviews }}</td><td>${{ data.own.avg_price }}</td></tr>
+    <tr><td>竞品</td><td>{{ data.competitor.sku_count }}</td><td>{{ data.competitor.avg_rating }}</td><td>{{ data.competitor.total_reviews }}</td><td>${{ data.competitor.avg_price }}</td></tr>
+  </table>
+  <p>评分差距：<strong>{{ data.rating_gap }}</strong></p>
+  {% endif %}
+</div>
+{% endfor %}
+{% if category_benchmark.get('unmapped_count', 0) > 0 %}
+<div class="notice">{{ category_benchmark.get('unmapped_count', 0) }} 个 SKU 未映射，未参与品类对标。</div>
+{% endif %}
+{% else %}
+{% with title="暂无品类对标", body="需要在 category_map.csv 中配置 SKU 品类映射后才能生成对标数据。" %}
+{% include "_partials/empty_state.html.j2" %}
+{% endwith %}
+{% endif %}

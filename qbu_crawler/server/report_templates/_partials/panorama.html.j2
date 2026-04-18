@@ -1,0 +1,27 @@
+{#
+  Panorama / chart placeholder. V4 Phase-3 does not ship Chart.js yet; this is
+  a deterministic placeholder that renders zero charts but clearly indicates
+  where they will land.
+#}
+<div class="panorama-wrapper">
+  {% if charts and charts.heatmap and charts.heatmap.y_labels and charts.heatmap.y_labels|length >= 3 %}
+  <table class="heatmap-table">
+    <thead><tr><th></th>{% for x in charts.heatmap.x_labels %}<th>{{ x[:5] }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for y_idx in range(charts.heatmap.y_labels|length) %}
+      <tr>
+        <th>{{ charts.heatmap.y_labels[y_idx][:20] }}</th>
+        {% for x_idx in range(charts.heatmap.x_labels|length) %}
+        {% set val = charts.heatmap.z[y_idx][x_idx] if y_idx < charts.heatmap.z|length and x_idx < charts.heatmap.z[y_idx]|length else 0 %}
+        <td>{{ val }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  {% with title="全景图表待接入", body="V4 Phase 4 将加入情感分布 / 趋势曲线 / 热力图。" %}
+  {% include "_partials/empty_state.html.j2" %}
+  {% endwith %}
+  {% endif %}
+</div>

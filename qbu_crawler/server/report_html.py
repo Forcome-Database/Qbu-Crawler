@@ -265,3 +265,87 @@ def render_weekly_v4(snapshot, analytics, output_path=None, changes=None):
         generated_at=(snapshot.get("snapshot_at") or "")[:19],
         version="v4",
     )
+
+
+def render_monthly_v4(
+    snapshot, analytics, executive, kpi_delta, category_benchmark,
+    scorecard, lifecycle_cards, lifecycle_insufficient, history_days,
+    weekly_summaries, weekly_trend_config, safety_incidents, output_path,
+):
+    """V4 monthly renderer using shared partials."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)),
+                      autoescape=select_autoescape(["html", "j2"]))
+    css_path = template_dir / "daily_report_v3.css"
+    js_path = template_dir / "daily_report_v3.js"
+    css_text = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+    js_text = js_path.read_text(encoding="utf-8") if js_path.exists() else ""
+
+    normalized = normalize_deep_report_analytics(analytics or {})
+
+    logical_date = snapshot.get("logical_date", "")
+    from datetime import date as _date, timedelta as _td
+    try:
+        ld = _date.fromisoformat(logical_date[:10])
+        prev_month = ld.replace(day=1) - _td(days=1)
+        month_label = prev_month.strftime("%Y年%m月")
+    except (ValueError, TypeError):
+        month_label = logical_date[:7]
+
+    charts = {}
+    if weekly_trend_config:
+        charts["weekly_trend"] = weekly_trend_config
+
+    tabs = [
+        {"id": "overview", "label": "高管视图"},
+        {"id": "changes", "label": "本月变化",
+         "badge": len(snapshot.get("reviews") or []) or None},
+        {"id": "issues", "label": "问题生命周期"},
+        {"id": "categories", "label": "品类对标"},
+        {"id": "scorecard", "label": "产品计分卡"},
+        {"id": "competitor", "label": "竞品对标"},
+        {"id": "panorama", "label": "全景数据"},
+    ]
+
+    actions = ((executive or {}).get("actions") or [])[:3]
+
+    return _write_template(
+        env, "monthly.html.j2", output_path,
+        page_title=f"QBU 网评监控 · 月报 {month_label}",
+        css_text=css_text, js_text=js_text,
+        brand="QBU 网评监控",
+        kpi_items=[
+            {"label": "健康", "value": normalized["kpis"].get("health_index", "—")},
+            {"label": "差评", "value": normalized["kpis"].get("own_negative_review_rate_display", "—")},
+            {"label": "高风险", "value": normalized["kpis"].get("high_risk_count", 0)},
+        ],
+        mode="monthly",
+        kicker=f"MONTHLY EXECUTIVE BRIEF · {month_label}",
+        meta=f"Run #{snapshot.get('run_id','?')}",
+        title="QBU 网评监控 月度报告",
+        headline=(executive or {}).get("stance_text") or "",
+        health_index=normalized["kpis"].get("health_index"),
+        confidence=normalized["kpis"].get("health_confidence", "no_data"),
+        bullets=(executive or {}).get("bullets") or [],
+        actions=actions,
+        cards=normalized.get("kpi_cards", []),
+        tabs=tabs, active="overview",
+        analytics=normalized, snapshot=snapshot,
+        window_reviews=snapshot.get("reviews", []),
+        lifecycle_cards=lifecycle_cards,
+        lifecycle_insufficient=lifecycle_insufficient,
+        history_days=history_days,
+        category_benchmark=category_benchmark,
+        scorecard=scorecard,
+        weekly_summaries=weekly_summaries,
+        safety_incidents=safety_incidents,
+        charts=charts,
+        kpis=normalized["kpis"],
+        kpi_delta=kpi_delta,
+        threshold=config.NEGATIVE_THRESHOLD,
+        generated_at=(snapshot.get("snapshot_at") or "")[:19],
+        version="v4",
+    )

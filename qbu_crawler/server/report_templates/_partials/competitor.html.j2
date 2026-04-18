@@ -1,0 +1,16 @@
+{#
+  Competitor benchmark tab. Caller: analytics.competitor.benchmark_examples
+#}
+{% set bench = analytics.competitor.benchmark_examples if analytics.competitor is defined else [] %}
+{% if bench %}
+{% for b in bench %}
+<div class="bench-card">
+  <strong>{{ b.dimension_display }}</strong>
+  <p>{{ b.description }}</p>
+</div>
+{% endfor %}
+{% else %}
+{% with title="本月无新增竞品基准案例", body="竞品评论未出现新的显著差异维度。" %}
+{% include "_partials/empty_state.html.j2" %}
+{% endwith %}
+{% endif %}

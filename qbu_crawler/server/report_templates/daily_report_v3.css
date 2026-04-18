@@ -1456,3 +1456,33 @@ details summary:hover { color: var(--accent); }
 .products-list { list-style: none; padding: 0; margin: 0; }
 .products-row { padding: var(--sp-sm) var(--sp-md); border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: baseline; }
 .products-meta { font-size: var(--fs-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+/* V4 Monthly-specific components */
+.week-summary {
+  background: var(--surface-sunken);
+  padding: var(--sp-sm) var(--sp-md);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-xs);
+  border-left: 3px solid var(--accent);
+  font-size: var(--fs-sm);
+}
+.category-card { margin-bottom: var(--sp-lg); padding: var(--sp-md); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.scorecard-summary { font-family: var(--font-mono); font-size: var(--fs-sm); margin-bottom: var(--sp-md); }
+.scorecard-light { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.light-green { background: var(--low); }
+.light-yellow { background: var(--medium); }
+.light-red { background: var(--critical); }
+.bench-card { padding: var(--sp-md); border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: var(--sp-md); background: var(--surface); }
+.bench-card strong { font-family: var(--font-display); font-size: var(--fs-md); }
+.heatmap-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.heatmap-table th, .heatmap-table td { padding: 4px 8px; border: 1px solid var(--border-subtle); text-align: center; }
+
+/* V4 Safety list (monthly) */
+.safety-list { list-style: none; padding: 0; margin: 0; }
+.safety-item { padding: var(--sp-md) var(--sp-lg); border-radius: var(--r-md); margin-bottom: var(--sp-sm); border-left: 4px solid var(--critical); background: var(--critical-bg); }
+.safety-item--high { border-left-color: var(--high); background: var(--high-bg); }
+.safety-item--medium { border-left-color: var(--medium); background: var(--medium-bg); }
+.safety-level { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--critical); font-weight: 700; margin-right: var(--sp-sm); }
+.safety-mode { font-size: var(--fs-xs); color: var(--text-muted); margin-left: var(--sp-sm); }
+.safety-excerpt { font-size: var(--fs-sm); color: var(--text-secondary); margin-top: var(--sp-xs); font-style: italic; }
+.safety-meta { font-size: var(--fs-xs); color: var(--text-muted); margin-top: var(--sp-xs); font-family: var(--font-mono); }

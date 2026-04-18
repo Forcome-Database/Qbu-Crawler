@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+{% include "_partials/head.html.j2" %}
+<body>
+  {% include "_partials/kpi_bar.html.j2" %}
+  {% include "_partials/mode_strip.html.j2" %}
+
+  <main class="report-main">
+    {% include "_partials/hero.html.j2" %}
+
+    <section class="section-divider">
+      <span class="section-divider-num">01</span>
+      <span class="section-divider-title">扩展指标</span>
+      <span class="section-divider-hint">本月累积 · Δ vs 上月</span>
+    </section>
+    {% include "_partials/kpi_grid.html.j2" %}
+
+    {% include "_partials/tab_nav.html.j2" %}
+
+    <section id="tab-overview" class="tab-panel tab-active" role="tabpanel">
+      {% if weekly_summaries %}
+      <section class="section-divider">
+        <span class="section-divider-num">02</span>
+        <span class="section-divider-title">本月逐周态势</span>
+      </section>
+      {% for ws in weekly_summaries %}
+      <div class="week-summary">{{ ws }}</div>
+      {% endfor %}
+      {% endif %}
+    </section>
+
+    <section id="tab-changes" class="tab-panel" role="tabpanel">
+      {% if window_reviews %}
+      <p class="changes-sub">本月新增评论 Top 30（共 {{ window_reviews|length }} 条）</p>
+      {% for r in window_reviews[:30] %}
+      {% include "_partials/review_quote.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="本月无新增评论", body="所有产品在当前月度周期内无新评论记录。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+    </section>
+
+    <section id="tab-issues" class="tab-panel" role="tabpanel">
+      {% if lifecycle_insufficient %}
+      <div class="notice notice--info">
+        <strong>数据积累中</strong>：当前 {{ history_days }} 天历史（生命周期分析需 ≥30 天），下月报告将完整展示。
+      </div>
+      {% else %}
+      {% if lifecycle_cards %}
+      {% for card in lifecycle_cards %}
+      {% include "_partials/issue_card.html.j2" %}
+      {% endfor %}
+      {% else %}
+      {% with title="暂无生命周期卡片", body="本月所有问题标签均无状态变化。" %}
+      {% include "_partials/empty_state.html.j2" %}
+      {% endwith %}
+      {% endif %}
+      {% endif %}
+    </section>
+
+    <section id="tab-categories" class="tab-panel" role="tabpanel">
+      {% include "_partials/category_benchmark.html.j2" %}
+    </section>
+
+    <section id="tab-scorecard" class="tab-panel" role="tabpanel">
+      {% include "_partials/scorecard.html.j2" %}
+    </section>
+
+    <section id="tab-competitor" class="tab-panel" role="tabpanel">
+      {% include "_partials/competitor.html.j2" %}
+    </section>
+
+    <section id="tab-panorama" class="tab-panel" role="tabpanel">
+      {% include "_partials/panorama.html.j2" %}
+    </section>
+
+    {% if safety_incidents %}
+    <section class="section-divider">
+      <span class="section-divider-num">09</span>
+      <span class="section-divider-title">本月安全事件</span>
+      <span class="section-divider-hint">按 review_id 去重分组（{{ safety_incidents|length }} 组）</span>
+    </section>
+    <ul class="safety-list">
+      {% for inc in safety_incidents %}
+      <li class="safety-item safety-item--{{ inc.safety_level }}">
+        <span class="safety-level">[{{ inc.safety_level }}]</span>
+        <strong>{{ inc.product_name or inc.product_sku or "—" }}</strong>
+        <span class="safety-mode">{{ inc.failure_mode or "未分类" }}</span>
+        {% if inc.review_excerpt %}<div class="safety-excerpt">"{{ inc.review_excerpt[:200] }}…"</div>{% endif %}
+        <div class="safety-meta">{{ inc.first_seen or "—" }} · {{ inc.review_count }} 条相关</div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </main>
+  {% include "_partials/footer.html.j2" %}
+  {% if js_text %}<script>{{ js_text|safe }}</script>{% endif %}
+</body>
+</html>

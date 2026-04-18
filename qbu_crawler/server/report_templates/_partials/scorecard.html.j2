@@ -1,0 +1,32 @@
+{#
+  Monthly SKU scorecard tab content. Caller context:
+    - scorecard (dict with summary.green/yellow/red and scorecards[])
+#}
+{% if scorecard and scorecard.scorecards %}
+<div class="scorecard-summary">
+  🟢 {{ scorecard.summary.green or 0 }} ·
+  🟡 {{ scorecard.summary.yellow or 0 }} ·
+  🔴 {{ scorecard.summary.red or 0 }}
+  {% if scorecard.summary.with_safety_flag %} · ⚠ 安全标记 {{ scorecard.summary.with_safety_flag }}{% endif %}
+</div>
+<table class="data-table">
+  <thead><tr><th></th><th>产品</th><th>评分</th><th>评论数</th><th>风险分</th><th>差评率</th><th>趋势</th></tr></thead>
+  <tbody>
+  {% for s in scorecard.scorecards %}
+  <tr>
+    <td><span class="scorecard-light light-{{ s.light }}"></span></td>
+    <td>{{ s.name }}{% if s.safety_flag %} ⚠{% endif %}</td>
+    <td>{{ s.rating or "—" }}</td>
+    <td>{{ s.review_count or 0 }}</td>
+    <td>{{ s.risk_score or 0 }}</td>
+    <td>{{ (s.negative_rate * 100)|round(1) if s.negative_rate else 0 }}%</td>
+    <td>{{ {"improving":"↘ 改善","steady":"→ 稳定","worsening":"↗ 恶化","new":"新增"}.get(s.trend, "—") }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+{% with title="暂无 SKU 计分卡", body="数据未就绪或本月无自有 SKU 有效评论。" %}
+{% include "_partials/empty_state.html.j2" %}
+{% endwith %}
+{% endif %}
