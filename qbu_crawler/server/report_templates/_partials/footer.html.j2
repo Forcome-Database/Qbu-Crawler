@@ -1,0 +1,11 @@
+{#
+  Caller passes: threshold, generated_at, version
+#}
+<footer class="report-footer">
+  <div class="report-footer-inner">
+    <span>差评定义：评分 ≤ {{ threshold }} 星</span>
+    <span>生成时间：{{ generated_at }}</span>
+    {% if version %}<span>· 报告版本 {{ version }}</span>{% endif %}
+    <span>· AI 自动生成</span>
+  </div>
+</footer>

@@ -1,0 +1,19 @@
+{#
+  Sticky top KPI bar. Callers pass:
+    - brand       (str, default "QBU 网评监控")
+    - kpi_items   (list of {label, value})  — 5 items max
+    - show_print  (bool)
+#}
+<header class="kpi-bar">
+  <div class="kpi-bar-inner">
+    <span class="kpi-bar-brand">{{ brand or "QBU 网评监控" }}</span>
+    <div class="kpi-bar-metrics">
+      {% for it in (kpi_items or [])[:5] %}
+      <span class="kpi-bar-item">{{ it.label }} <strong>{{ it.value }}</strong></span>
+      {% endfor %}
+    </div>
+    {% if show_print %}
+    <button id="btn-print" class="btn-icon" title="打印 / 导出PDF">⎙</button>
+    {% endif %}
+  </div>
+</header>

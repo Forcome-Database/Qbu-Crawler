@@ -1,0 +1,10 @@
+{#
+  Mode strip ribbon. Callers pass:
+    - mode   ("partial" | "full" | "change" | "quiet" | "weekly" | "monthly")
+    - kicker (str — e.g. "DAILY INTELLIGENCE · Day 12")
+    - meta   (str — right-aligned, e.g. "Run #123 · 2026-04-18")
+#}
+<div class="mode-strip mode-strip--{{ mode or 'full' }}">
+  <span class="mode-strip-kicker">{{ kicker }}</span>
+  {% if meta %}<span class="mode-strip-meta">{{ meta }}</span>{% endif %}
+</div>
