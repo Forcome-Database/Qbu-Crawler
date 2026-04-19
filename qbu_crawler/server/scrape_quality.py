@@ -45,7 +45,7 @@ def should_raise_alert(quality: dict, threshold: float) -> bool:
     if (quality.get("total") or 0) == 0:
         return False
     return any(
-        (quality.get(key) or 0.0) >= threshold
+        quality.get(key, 0.0) >= threshold
         for key in ("missing_rating_ratio",
                     "missing_stock_ratio",
                     "missing_review_count_ratio")

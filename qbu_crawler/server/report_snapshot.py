@@ -19,7 +19,7 @@ _RECIPIENTS_FILE_PATH = os.path.join(
 )
 
 
-def _get_email_recipients() -> list[str]:
+def get_email_recipients() -> list[str]:
     """Unified email recipient loader.
 
     Priority: config.EMAIL_RECIPIENTS (env var) > openclaw file > empty list.
@@ -538,7 +538,7 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
         return {"success": False, "error": f"Template render error: {e}", "recipients": []}
 
     # Load recipients and send
-    recipients = _get_email_recipients()
+    recipients = get_email_recipients()
 
     if not recipients:
         return {"success": True, "error": "No recipients configured", "recipients": []}
@@ -754,7 +754,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         _logger.exception("Report generation failed for run %d", run_id)
         # Send failure notification
         try:
-            recipients = _get_email_recipients()
+            recipients = get_email_recipients()
             if recipients:
                 report.send_email(
                     recipients=recipients,
@@ -1011,7 +1011,7 @@ def generate_full_report_from_snapshot(
             body_html = report.render_daily_email_html(snapshot, analytics)
         try:
             email_result = report.send_email(
-                recipients=_get_email_recipients(),
+                recipients=get_email_recipients(),
                 subject=subject,
                 body_text=body,
                 body_html=body_html,

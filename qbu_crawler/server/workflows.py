@@ -629,7 +629,10 @@ class WorkflowWorker:
             run = freeze_report_snapshot(run_id, now=now)
             changed = True
 
-            # ── 数据质量统计与独立告警（P008 Task 6） ────────────────────
+        # ── 数据质量统计与独立告警（P008 Task 6） ────────────────────
+        # Gate by persisted scrape_quality rather than snapshot_path, so that
+        # a transient failure on first attempt is re-tried on subsequent ticks.
+        if models.get_scrape_quality(run_id) is None:
             try:
                 from qbu_crawler.server.scrape_quality import (
                     summarize_scrape_quality, should_raise_alert,
@@ -815,10 +818,10 @@ def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -
 
     recipients = (
         config.SCRAPE_QUALITY_ALERT_RECIPIENTS
-        or _rs._get_email_recipients()
+        or _rs.get_email_recipients()
     )
     if not recipients:
-        logger.info("Data-quality alert skipped: no recipients configured")
+        logger.warning("Data-quality alert skipped: no recipients configured")
         return
 
     subject = f"[数据质量告警] 采集缺失率超阈值 {logical_date} (run #{run_id})"

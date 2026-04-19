@@ -69,3 +69,44 @@ def test_update_and_readback_scrape_quality(tmp_path, monkeypatch):
     models.update_scrape_quality(rid, q)
     loaded = models.get_scrape_quality(rid)
     assert loaded == q
+
+
+def test_data_quality_alert_integration_sends_email(tmp_path, monkeypatch):
+    """End-to-end: a snapshot with >threshold missing rating triggers
+    _send_data_quality_alert, which renders the template and calls report.send_email."""
+    import sqlite3
+    from qbu_crawler import config, models
+    from qbu_crawler.server import workflows
+    # Isolated DB
+    db = tmp_path / "t.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db))
+    monkeypatch.setattr(models, "DB_PATH", str(db))
+    monkeypatch.setattr(config, "SCRAPE_QUALITY_ALERT_RATIO", 0.10)
+    monkeypatch.setattr(config, "SCRAPE_QUALITY_ALERT_RECIPIENTS", ["ops@example.com"])
+    models.init_db()
+
+    captured = {}
+    def fake_send_email(*, recipients, subject, body_text, body_html):
+        captured["recipients"] = recipients
+        captured["subject"] = subject
+        captured["body_html"] = body_html
+        return {"success": True, "recipients": recipients}
+
+    # Patch the exact `report.send_email` the workflow helper imports lazily
+    from qbu_crawler.server import report as _report
+    monkeypatch.setattr(_report, "send_email", fake_send_email)
+
+    quality = {"total": 10, "missing_rating": 2, "missing_stock": 0,
+               "missing_review_count": 0,
+               "missing_rating_ratio": 0.20, "missing_stock_ratio": 0.0,
+               "missing_review_count_ratio": 0.0}
+
+    workflows._send_data_quality_alert(
+        run_id=42, logical_date="2026-04-19", quality=quality)
+
+    assert captured["recipients"] == ["ops@example.com"]
+    assert "数据质量告警" in captured["subject"]
+    assert "2026-04-19" in captured["subject"]
+    # Template rendered with the threshold-driven highlight
+    assert "20.0%" in captured["body_html"]  # rating ratio as %
+    assert "QBU 采集数据质量告警" in captured["body_html"]
