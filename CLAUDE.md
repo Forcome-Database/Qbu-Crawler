@@ -232,6 +232,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **reviews** 表：增量 INSERT，用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重；已存在评论如有新图片则回填 `images` 字段（解决首次无图入库后图片丢失问题）
 - **tasks** 表：记录通过 API/MCP 提交的爬虫任务历史，params/progress/result 为 JSON 字段
 - **products.ownership**：产品归属字段，值为 `own`（自有）或 `competitor`（竞品），通过任务参数传入，爬虫不感知
+- **snapshot 变动检测使用"有效值闭区间"语义**：`detect_snapshot_changes` 仅在双侧字段都不是 `None`/`""`/`"unknown"` 时判定业务变动；采集缺失（数据质量事件）由独立告警通道处理（见 Task 6 章节），不污染 change 邮件。
 
 ### HTTP API + MCP 服务架构
 
