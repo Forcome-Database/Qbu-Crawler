@@ -34,10 +34,12 @@
   </tr>
 
   <!-- ===== 3. KPI SNAPSHOT (4 cards — 2x2) ===== -->
-  {% set _kpis = (previous_analytics or {}).get("kpis", {}) %}
+  {# KPI 快照优先取当日 analytics（effective_analytics）；
+     仅当当日 analytics 生成失败时回退到昨日，避免展示空白。 #}
+  {% set _kpis = (analytics or previous_analytics or {}).get("kpis", {}) %}
   <tr>
     <td style="padding:20px 24px 8px;">
-      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">健康快照（上期数据）</div>
+      <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">健康快照</div>
       <!-- Row 1 -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td width="49%" style="padding:14px 12px;background:#f7f7f5;border:1px solid #e5e4e0;border-radius:8px;text-align:center;vertical-align:top;">
