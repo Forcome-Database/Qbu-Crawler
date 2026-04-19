@@ -219,6 +219,85 @@ class TestDetectSnapshotChangesMissingValueGuard:
         assert result["price_changes"][0]["new"] == 12.50
 
 
+class TestFullReportAnalyticsPersistsNormalizedKpis:
+    """Bug B regression — full report JSON 必须含 normalize 后的 KPI。"""
+
+    def test_full_analytics_json_contains_health_index(self, tmp_path, monkeypatch):
+        """Full report 落盘的 analytics JSON 应包含 normalize 产物，
+        否则下一日 change/quiet 的 KPI 区块会全部回退成 '—'。"""
+        from qbu_crawler import config
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        import json
+        from pathlib import Path
+        from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+        snapshot = _build_minimal_full_snapshot(run_id=999, with_cumulative=True)
+
+        # 屏蔽邮件与 LLM（测试只关心 JSON 落盘内容）
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_snapshot.report.send_email",
+            lambda **kw: {"success": True, "recipients": []})
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_llm.generate_report_insights",
+            lambda *a, **kw: {"hero_headline": "", "executive_bullets": []})
+
+        result = generate_full_report_from_snapshot(snapshot, send_email=False)
+
+        analytics_path = result.get("analytics_path")
+        assert analytics_path and Path(analytics_path).exists()
+        data = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+        kpis = data.get("kpis") or {}
+        # 这些字段都是 normalize_deep_report_analytics 的产物
+        assert "health_index" in kpis, \
+            f"kpis 应含 health_index，当前 keys={sorted(kpis.keys())}"
+        assert "high_risk_count" in kpis
+        assert "own_negative_review_rate_display" in kpis
+        # 同时应有 normalize 产物的顶层字段（用作可回归对照）
+        assert "mode_display" in data
+        assert "kpi_cards" in data
+
+
+def _build_minimal_full_snapshot(run_id: int, with_cumulative: bool):
+    """最小可用 snapshot factory — 能跑通 build_report_analytics。"""
+    products = [
+        {"sku": f"OWN{i}", "name": f"Own {i}", "site": "waltons",
+         "url": f"https://x/{i}", "price": 10.0, "stock_status": "in_stock",
+         "rating": 4.6, "review_count": 20, "ownership": "own"}
+        for i in range(5)
+    ] + [
+        {"sku": f"CMP{i}", "name": f"Comp {i}", "site": "basspro",
+         "url": f"https://y/{i}", "price": 12.0, "stock_status": "in_stock",
+         "rating": 4.0, "review_count": 30, "ownership": "competitor"}
+        for i in range(3)
+    ]
+    reviews = [
+        {"id": idx, "product_id": None, "product_sku": p["sku"],
+         "product_name": p["name"], "site": p["site"], "ownership": p["ownership"],
+         "rating": 5, "headline": "ok", "body": "great",
+         "body_cn": "不错", "headline_cn": "还行",
+         "author": f"u{idx}", "date_published": "2026-04-16",
+         "scraped_at": "2026-04-16T12:00:00+08:00", "images": []}
+        for idx, p in enumerate(products)
+    ]
+    snap = {
+        "run_id": run_id, "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "snapshot_at": "2026-04-16T15:00:00+08:00",
+        "snapshot_hash": "test-hash",
+        "products": products, "products_count": len(products),
+        "reviews": reviews, "reviews_count": len(reviews),
+        "translated_count": len(reviews), "untranslated_count": 0,
+    }
+    if with_cumulative:
+        snap["cumulative"] = {
+            "products": products, "products_count": len(products),
+            "reviews": reviews, "reviews_count": len(reviews),
+            "translated_count": len(reviews), "untranslated_count": 0,
+        }
+    return snap
+
+
 from qbu_crawler.server.report_snapshot import determine_report_mode, compute_cluster_changes
 
 

@@ -930,8 +930,27 @@ def generate_full_report_from_snapshot(
                 r.get("id") for r in snapshot.get("reviews", []) if r.get("id")
             ]
 
+        # Write the normalized analytics (with health_index / high_risk_count /
+        # own_negative_review_rate_display etc.). The raw `analytics` object is
+        # kept in memory for downstream Excel/V3-HTML calls, but the on-disk
+        # JSON must match what the next run's `prev_analytics` consumer
+        # (email_change.html.j2 / quiet_day_report.html.j2) expects.
+        # `pre_normalized` was computed before LLM insights / cluster deep
+        # analysis / window_review_ids were attached to the raw analytics,
+        # so re-attach those post-normalization fields here instead of
+        # normalizing a second time.
+        pre_normalized["report_copy"] = analytics.get("report_copy", pre_normalized.get("report_copy"))
+        if "window_review_ids" in analytics:
+            pre_normalized["window_review_ids"] = analytics["window_review_ids"]
+        # Cluster deep_analysis was mutated onto analytics["self"]["top_negative_clusters"][*];
+        # propagate it onto pre_normalized's equivalent list (same label_code ordering).
+        _norm_clusters = (pre_normalized.get("self") or {}).get("top_negative_clusters") or []
+        _raw_clusters = (analytics.get("self") or {}).get("top_negative_clusters") or []
+        for _nc, _rc in zip(_norm_clusters, _raw_clusters):
+            if isinstance(_rc, dict) and "deep_analysis" in _rc and isinstance(_nc, dict):
+                _nc["deep_analysis"] = _rc["deep_analysis"]
         Path(analytics_path).write_text(
-            json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
+            json.dumps(pre_normalized, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
 
