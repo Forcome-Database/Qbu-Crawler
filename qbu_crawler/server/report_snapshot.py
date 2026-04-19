@@ -766,6 +766,33 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         raise
 
 
+def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
+    """Copy post-normalize mutations from raw analytics onto the already-normalized copy.
+
+    After generate_full_report_from_snapshot calls normalize_deep_report_analytics(),
+    it mutates raw analytics further (adds LLM insights as report_copy, cluster
+    deep_analysis, window_review_ids). Those mutations need to ride along on the
+    on-disk JSON. Matches clusters by label_code (not position) to survive future
+    reordering / filtering in normalize_deep_report_analytics.
+    """
+    normalized["report_copy"] = raw.get("report_copy", normalized.get("report_copy"))
+    if "window_review_ids" in raw:
+        normalized["window_review_ids"] = raw["window_review_ids"]
+
+    raw_clusters = (raw.get("self") or {}).get("top_negative_clusters") or []
+    raw_by_label = {
+        c.get("label_code"): c
+        for c in raw_clusters
+        if isinstance(c, dict)
+    }
+    for nc in (normalized.get("self") or {}).get("top_negative_clusters") or []:
+        if not isinstance(nc, dict):
+            continue
+        match = raw_by_label.get(nc.get("label_code"))
+        if match and "deep_analysis" in match:
+            nc["deep_analysis"] = match["deep_analysis"]
+
+
 def _render_full_email_html(snapshot, analytics):
     """Render email_full.html.j2 for the full-mode email body."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -938,17 +965,9 @@ def generate_full_report_from_snapshot(
         # `pre_normalized` was computed before LLM insights / cluster deep
         # analysis / window_review_ids were attached to the raw analytics,
         # so re-attach those post-normalization fields here instead of
-        # normalizing a second time.
-        pre_normalized["report_copy"] = analytics.get("report_copy", pre_normalized.get("report_copy"))
-        if "window_review_ids" in analytics:
-            pre_normalized["window_review_ids"] = analytics["window_review_ids"]
-        # Cluster deep_analysis was mutated onto analytics["self"]["top_negative_clusters"][*];
-        # propagate it onto pre_normalized's equivalent list (same label_code ordering).
-        _norm_clusters = (pre_normalized.get("self") or {}).get("top_negative_clusters") or []
-        _raw_clusters = (analytics.get("self") or {}).get("top_negative_clusters") or []
-        for _nc, _rc in zip(_norm_clusters, _raw_clusters):
-            if isinstance(_rc, dict) and "deep_analysis" in _rc and isinstance(_nc, dict):
-                _nc["deep_analysis"] = _rc["deep_analysis"]
+        # normalizing a second time. Cluster deep_analysis is matched by
+        # label_code (not position) to survive future reordering in normalize.
+        _merge_post_normalize_mutations(pre_normalized, analytics)
         Path(analytics_path).write_text(
             json.dumps(pre_normalized, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",

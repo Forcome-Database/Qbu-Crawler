@@ -256,6 +256,33 @@ class TestFullReportAnalyticsPersistsNormalizedKpis:
         assert "mode_display" in data
         assert "kpi_cards" in data
 
+    def test_deep_analysis_reattached_by_label_code_not_position(self):
+        """Regression — if normalize ever reorders clusters, deep_analysis must still
+        land on the cluster with the matching label_code, not a positional neighbor."""
+        from qbu_crawler.server.report_snapshot import _merge_post_normalize_mutations
+
+        raw = {
+            "self": {"top_negative_clusters": [
+                {"label_code": "A", "deep_analysis": {"marker": "analysis-A"}},
+                {"label_code": "B", "deep_analysis": {"marker": "analysis-B"}},
+            ]},
+            "report_copy": {"hero_headline": "x"},
+        }
+        # Normalize "reordered" the clusters (B before A) — position-based zip
+        # would have misaligned; label-code match must still be correct.
+        normalized = {
+            "self": {"top_negative_clusters": [
+                {"label_code": "B"},
+                {"label_code": "A"},
+            ]},
+        }
+        _merge_post_normalize_mutations(normalized, raw)
+
+        by_label = {c["label_code"]: c for c in normalized["self"]["top_negative_clusters"]}
+        assert by_label["A"]["deep_analysis"] == {"marker": "analysis-A"}
+        assert by_label["B"]["deep_analysis"] == {"marker": "analysis-B"}
+        assert normalized["report_copy"] == {"hero_headline": "x"}
+
 
 def _build_minimal_full_snapshot(run_id: int, with_cumulative: bool):
     """最小可用 snapshot factory — 能跑通 build_report_analytics。"""
