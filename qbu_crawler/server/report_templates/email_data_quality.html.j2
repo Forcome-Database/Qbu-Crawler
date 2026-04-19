@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f7f7f5;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f7f5;"><tr><td align="center" style="padding:20px 10px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+
+  <tr><td style="background:#b45309;padding:16px 24px;color:#fff;">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 采集数据质量告警</div>
+    <div style="font-size:11px;opacity:0.75;margin-top:4px;">{{ logical_date }} · run #{{ run_id }}</div>
+  </td></tr>
+
+  <tr><td style="padding:20px 24px;">
+    <p style="margin:0 0 12px;font-size:13px;color:#1a1a2e;line-height:1.6;">
+      本次采集共 <strong>{{ quality.total }}</strong> 个产品，存在字段缺失超过阈值
+      <strong>{{ '%.0f' % (threshold * 100) }}%</strong>，可能由反爬命中、选择器失效或目标站改版导致。
+      请检查爬虫日志后决定是否重跑。
+    </p>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-top:8px;">
+      <tr style="background:#f0efed;color:#555770;">
+        <td style="padding:8px 10px;font-weight:700;border-radius:4px 0 0 0;">字段</td>
+        <td style="padding:8px 10px;font-weight:700;text-align:center;">缺失数</td>
+        <td style="padding:8px 10px;font-weight:700;text-align:center;border-radius:0 4px 0 0;">缺失率</td>
+      </tr>
+      {% for label, key_n, key_r in [
+          ("rating",        "missing_rating",        "missing_rating_ratio"),
+          ("stock_status",  "missing_stock",         "missing_stock_ratio"),
+          ("review_count",  "missing_review_count",  "missing_review_count_ratio"),
+      ] %}
+      {% set ratio = quality.get(key_r, 0.0) %}
+      <tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;">{{ label }}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-family:monospace;">{{ quality.get(key_n, 0) }}</td>
+        <td style="padding:8px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if ratio >= threshold %}#b91c1c{% else %}#8e8ea0{% endif %};">{{ '%.1f' % (ratio * 100) }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <p style="margin:12px 0 0;font-size:11px;color:#8e8ea0;line-height:1.6;">
+      该邮件由采集数据质量守护自动发出，不等于业务数据变动。业务变动邮件另行推送。
+    </p>
+  </td></tr>
+
+</table>
+</td></tr></table>
+</body></html>

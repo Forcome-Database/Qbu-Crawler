@@ -629,6 +629,25 @@ class WorkflowWorker:
             run = freeze_report_snapshot(run_id, now=now)
             changed = True
 
+            # ── 数据质量统计与独立告警（P008 Task 6） ────────────────────
+            try:
+                from qbu_crawler.server.scrape_quality import (
+                    summarize_scrape_quality, should_raise_alert,
+                )
+                snapshot = load_report_snapshot(run["snapshot_path"])
+                quality = summarize_scrape_quality(snapshot.get("products", []))
+                models.update_scrape_quality(run_id, quality)
+                if should_raise_alert(quality, config.SCRAPE_QUALITY_ALERT_RATIO):
+                    _send_data_quality_alert(
+                        run_id=run_id,
+                        logical_date=run["logical_date"],
+                        quality=quality,
+                    )
+            except Exception:
+                logger.exception(
+                    "WorkflowWorker: scrape-quality summary/alert failed "
+                    "(non-fatal, run %s continues)", run_id)
+
         if run.get("report_phase") == "none":
             snapshot = load_report_snapshot(run["snapshot_path"])
             if snapshot.get("reviews_count", 0) == 0:
@@ -773,6 +792,43 @@ class WorkflowWorker:
             },
             dedupe_key=f"workflow:{run['id']}:attention:{updated['report_phase']}",
         )
+
+
+def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -> None:
+    """独立于业务报告的数据质量告警。"""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    from pathlib import Path
+    from qbu_crawler.server import report as _report
+    from qbu_crawler.server import report_snapshot as _rs
+
+    template_dir = Path(__file__).parent / "report_templates"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    body_html = env.get_template("email_data_quality.html.j2").render(
+        logical_date=logical_date,
+        run_id=run_id,
+        quality=quality,
+        threshold=config.SCRAPE_QUALITY_ALERT_RATIO,
+    )
+
+    recipients = (
+        config.SCRAPE_QUALITY_ALERT_RECIPIENTS
+        or _rs._get_email_recipients()
+    )
+    if not recipients:
+        logger.info("Data-quality alert skipped: no recipients configured")
+        return
+
+    subject = f"[数据质量告警] 采集缺失率超阈值 {logical_date} (run #{run_id})"
+    try:
+        _report.send_email(
+            recipients=recipients, subject=subject,
+            body_text=subject, body_html=body_html,
+        )
+    except Exception:
+        logger.exception("Data-quality alert email send failed")
 
 
 def _enqueue_workflow_notification(kind: str, target: str, payload: dict, dedupe_key: str):

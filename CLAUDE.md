@@ -318,6 +318,10 @@ KPI Delta 计算：
 
 评论图片下载后上传到 MinIO，路径格式 `images/YYYY-MM/{url_md5_hash}.{ext}`，存储桶 `qbu-crawler`。
 
+### 数据质量监控（P008）
+
+每次 workflow run 在 snapshot 持久化后计算 `scrape_quality`（rating/stock/review_count 缺失数与比率），写入 `workflow_runs.scrape_quality`。任一字段缺失率超过 `SCRAPE_QUALITY_ALERT_RATIO`（默认 0.10）触发独立的 **数据质量告警邮件**（模板 `email_data_quality.html.j2`），与业务变动邮件完全解耦——后者只消费 `detect_snapshot_changes` 产出的真实业务事件。
+
 ## DrissionPage 通用开发注意事项
 
 - **不要用 `ele.text` 读取 `<script>` 标签**：DrissionPage 对 script 标签的 `.text` 可能返回空，必须用 `tab.run_js()` 通过 `s.textContent` 提取
