@@ -778,3 +778,40 @@ class TestChangeEmailKpiBindsToCurrentAnalytics:
         assert ">100<" not in html
         assert ">92<" in html
         assert ">80<" not in html
+
+
+class TestStockStatusThreeStateDisplay:
+    """Bug D regression — stock 模板不再把 unknown 显示为'缺货'。"""
+
+    def _render_change_email(self, stock_changes):
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        return env.get_template("email_change.html.j2").render(
+            logical_date="2026-04-16",
+            snapshot={"logical_date": "2026-04-16",
+                      "snapshot_at": "2026-04-16T15:00:00+08:00"},
+            analytics={"kpis": {"own_review_rows": 100, "health_index": 80}},
+            previous_analytics=None,
+            changes={"stock_changes": stock_changes,
+                     "price_changes": [], "rating_changes": []},
+            threshold=2)
+
+    def test_out_of_stock_to_in_stock_shows_huoqi_green(self):
+        html = self._render_change_email([
+            {"sku": "S1", "name": "P1",
+             "old": "out_of_stock", "new": "in_stock"}])
+        assert "有货" in html
+        assert "缺货" in html   # 旧状态展示
+
+    def test_unknown_old_state_renders_as_weizhi(self):
+        """如果因为历史数据带着 unknown 走到模板，应显示'未知'。"""
+        html = self._render_change_email([
+            {"sku": "S1", "name": "P1",
+             "old": "unknown", "new": "in_stock"}])
+        assert "未知" in html
+        # 关键：不应出现"缺货"（这是 Bug D 的核心错误展示）
+        assert "缺货" not in html

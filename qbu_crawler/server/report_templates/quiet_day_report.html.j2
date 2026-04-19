@@ -240,6 +240,7 @@
           {% endif %}
 
           {% if changes.stock_changes %}
+          {% set _stock_display = {"in_stock": "有货", "out_of_stock": "缺货"} %}
           <div class="briefing-table-label stock">📦 库存变化（{{ changes.stock_changes | length }}个）</div>
           <div class="briefing-table">
             <div class="table-wrap">
@@ -249,8 +250,8 @@
                 {% for c in changes.stock_changes %}
                 <tr>
                   <td>{{ c.name }}</td>
-                  <td style="text-align:center;color:var(--text-muted);">{{ "有货" if c.old == "in_stock" else "缺货" }}</td>
-                  <td style="text-align:center;font-weight:700;color:{% if c.new == 'in_stock' %}var(--positive){% else %}var(--critical){% endif %};">{{ "有货" if c.new == "in_stock" else "缺货" }}</td>
+                  <td style="text-align:center;color:var(--text-muted);">{{ _stock_display.get(c.old, "未知") }}</td>
+                  <td style="text-align:center;font-weight:700;color:{% if c.new == 'in_stock' %}var(--positive){% elif c.new == 'out_of_stock' %}var(--critical){% else %}var(--text-muted){% endif %};">{{ _stock_display.get(c.new, "未知") }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
