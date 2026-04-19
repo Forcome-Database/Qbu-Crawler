@@ -140,6 +140,85 @@ class TestDetectSnapshotChanges:
         assert len(result["rating_changes"]) == 1
 
 
+class TestDetectSnapshotChangesMissingValueGuard:
+    """Bug A regression — 采集缺失不应被当作业务变动。"""
+
+    def test_rating_none_to_real_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": None,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["rating_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_rating_real_to_none_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": None,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["rating_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_stock_unknown_to_in_stock_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "unknown",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["stock_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_stock_in_stock_to_out_of_stock_is_a_real_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "out_of_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert len(result["stock_changes"]) == 1
+        assert result["stock_changes"][0]["old"] == "in_stock"
+        assert result["stock_changes"][0]["new"] == "out_of_stock"
+        assert result["has_changes"] is True
+
+    def test_price_none_to_real_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": None, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 19.99, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["price_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_price_real_to_real_crosses_threshold(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.00, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 12.50, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert len(result["price_changes"]) == 1
+        assert result["price_changes"][0]["old"] == 10.00
+        assert result["price_changes"][0]["new"] == 12.50
+
+
 from qbu_crawler.server.report_snapshot import determine_report_mode, compute_cluster_changes
 
 
