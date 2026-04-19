@@ -187,7 +187,9 @@
       <div class="briefing-body">
 
         <!-- ── KPI Snapshot ── -->
-        {% set kpis = (previous_analytics or {}).get("kpis", {}) %}
+        {# KPI 快照优先取当日 analytics（effective_analytics）；
+           仅当当日 analytics 生成失败时回退到昨日，避免展示空白。 #}
+        {% set kpis = (analytics or previous_analytics or {}).get("kpis", {}) %}
         <div class="briefing-section">
           <div class="briefing-section-label">当前健康快照 · 上期数据</div>
           <div class="briefing-kpi-grid">

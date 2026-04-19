@@ -708,3 +708,41 @@ class TestShouldSendQuietEmail:
         send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False  # 5 consecutive quiet > threshold=3, not at day 7
         assert consecutive == 5
+
+
+class TestChangeEmailKpiBindsToCurrentAnalytics:
+    """Bug C regression — change 邮件 KPI 必须反映当日，而不是前一日。"""
+
+    def test_change_email_uses_current_own_review_rows(self, monkeypatch, tmp_path):
+        from qbu_crawler import config
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+        # 前一日 own=100，当日 cumulative own=250
+        prev = {"kpis": {"own_review_rows": 100, "health_index": 80,
+                         "own_negative_review_rate_display": "2.0%",
+                         "high_risk_count": 0}}
+        cur = {"kpis": {"own_review_rows": 250, "health_index": 92,
+                        "own_negative_review_rate_display": "1.2%",
+                        "high_risk_count": 1}}
+        snapshot = {"logical_date": "2026-04-16",
+                    "snapshot_at": "2026-04-16T15:00:00+08:00"}
+        changes = {"rating_changes": [], "price_changes": [],
+                   "stock_changes": []}
+
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        template = env.get_template("email_change.html.j2")
+        html = template.render(
+            logical_date="2026-04-16",
+            snapshot=snapshot, analytics=cur, previous_analytics=prev,
+            changes=changes, threshold=2)
+
+        # 当日 own=250 应出现；昨天 own=100 不应出现
+        assert ">250<" in html, "评论总量应展示当日 250"
+        assert ">100<" not in html, "不应再展示昨天的 100"
+        # health_index 同理
+        assert ">92<" in html
+        assert ">80<" not in html

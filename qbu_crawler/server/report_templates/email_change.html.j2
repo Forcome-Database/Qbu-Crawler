@@ -30,7 +30,9 @@
   </tr>
 
   <!-- ===== 3. KPI SNAPSHOT ===== -->
-  {% set _kpis = (previous_analytics or {}).get("kpis", {}) %}
+  {# KPI 快照优先取当日 analytics（effective_analytics）；
+     仅当当日 analytics 生成失败时回退到昨日，避免展示空白。 #}
+  {% set _kpis = (analytics or previous_analytics or {}).get("kpis", {}) %}
   <tr>
     <td style="padding:20px 24px 8px;">
       <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">当前健康快照</div>
