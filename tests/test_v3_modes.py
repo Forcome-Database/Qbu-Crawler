@@ -815,3 +815,38 @@ class TestStockStatusThreeStateDisplay:
         assert "未知" in html
         # 关键：不应出现"缺货"（这是 Bug D 的核心错误展示）
         assert "缺货" not in html
+
+    def test_email_full_also_renders_three_state(self):
+        """Bug D defense-in-depth — email_full.html.j2 must share the same 3-state rendering."""
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        template = env.get_template("email_full.html.j2")
+        # Render only what the stock section needs; pad rest of vars with harmless defaults.
+        html = template.render(
+            logical_date="2026-04-16",
+            snapshot={"logical_date": "2026-04-16",
+                      "snapshot_at": "2026-04-16T15:00:00+08:00",
+                      "products_count": 1, "reviews_count": 0,
+                      "translated_count": 0, "untranslated_count": 0},
+            analytics={"kpis": {"own_review_rows": 100, "health_index": 80},
+                       "report_copy": {"hero_headline": "", "executive_bullets": []},
+                       "self": {"risk_products": [], "top_negative_clusters": [],
+                                "recommendations": []},
+                       "competitor": {"top_positive_themes": [],
+                                      "benchmark_examples": [],
+                                      "negative_opportunities": []}},
+            previous_analytics=None,
+            changes={"stock_changes": [
+                {"sku": "S1", "name": "P1",
+                 "old": "unknown", "new": "in_stock"}],
+                     "price_changes": [], "rating_changes": []},
+            risk_products=[], threshold=2,
+            alert_level="green", alert_text="",
+            report_copy={"hero_headline": "", "executive_bullets": []},
+            translate_stats=None)
+        assert "未知" in html
+        assert "缺货" not in html
