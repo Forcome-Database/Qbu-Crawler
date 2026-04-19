@@ -30,7 +30,9 @@
   </tr>
 
   <!-- ===== 3. KPI SNAPSHOT ===== -->
-  {% set _kpis = (previous_analytics or {}).get("kpis", {}) %}
+  {# KPI 快照优先取当日 analytics（effective_analytics）；
+     仅当当日 analytics 生成失败时回退到昨日，避免展示空白。 #}
+  {% set _kpis = (analytics or previous_analytics or {}).get("kpis", {}) %}
   <tr>
     <td style="padding:20px 24px 8px;">
       <div style="font-size:10px;color:#8e8ea0;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:12px;">当前健康快照</div>
@@ -90,6 +92,7 @@
       {% endif %}
 
       {% if _stock %}
+      {% set _stock_display = {"in_stock": "有货", "out_of_stock": "缺货"} %}
       <div style="font-size:10px;color:#555770;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;">📦 库存变动（{{ _stock | length }}个）</div>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:11px;margin-bottom:14px;">
         <tr>
@@ -100,8 +103,8 @@
         {% for item in _stock[:5] %}
         <tr style="background:{% if loop.index is odd %}#f7f7f5{% else %}#ffffff{% endif %};">
           <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;color:#1a1a2e;font-size:10px;">{{ item.get("name", item.get("sku", "")) }}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;">{{ "有货" if item.get("old") == "in_stock" else "缺货" }}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if item.get('new') == 'in_stock' %}#047857{% else %}#b91c1c{% endif %};">{{ "有货" if item.get("new") == "in_stock" else "缺货" }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;color:#8e8ea0;">{{ _stock_display.get(item.get("old"), "未知") }}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e4e0;text-align:center;font-weight:700;color:{% if item.get('new') == 'in_stock' %}#047857{% elif item.get('new') == 'out_of_stock' %}#b91c1c{% else %}#8e8ea0{% endif %};">{{ _stock_display.get(item.get("new"), "未知") }}</td>
         </tr>
         {% endfor %}
       </table>

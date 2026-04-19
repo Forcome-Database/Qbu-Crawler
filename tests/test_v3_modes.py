@@ -140,6 +140,191 @@ class TestDetectSnapshotChanges:
         assert len(result["rating_changes"]) == 1
 
 
+class TestDetectSnapshotChangesMissingValueGuard:
+    """Bug A regression — 采集缺失不应被当作业务变动。"""
+
+    def test_rating_none_to_real_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": None,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["rating_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_rating_real_to_none_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": None,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["rating_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_stock_unknown_to_in_stock_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "unknown",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["stock_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_stock_in_stock_to_out_of_stock_is_a_real_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.0, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 10.0, "stock_status": "out_of_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert len(result["stock_changes"]) == 1
+        assert result["stock_changes"][0]["old"] == "in_stock"
+        assert result["stock_changes"][0]["new"] == "out_of_stock"
+        assert result["has_changes"] is True
+
+    def test_price_none_to_real_is_not_a_change(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": None, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 19.99, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert result["price_changes"] == []
+        assert result["has_changes"] is False
+
+    def test_price_real_to_real_crosses_threshold(self):
+        previous = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                   "price": 10.00, "stock_status": "in_stock",
+                                   "review_count": 5}]}
+        current = {"products": [{"sku": "S1", "name": "P1", "rating": 4.8,
+                                  "price": 12.50, "stock_status": "in_stock",
+                                  "review_count": 5}]}
+        from qbu_crawler.server.report_snapshot import detect_snapshot_changes
+        result = detect_snapshot_changes(current, previous)
+        assert len(result["price_changes"]) == 1
+        assert result["price_changes"][0]["old"] == 10.00
+        assert result["price_changes"][0]["new"] == 12.50
+
+
+class TestFullReportAnalyticsPersistsNormalizedKpis:
+    """Bug B regression — full report JSON 必须含 normalize 后的 KPI。"""
+
+    def test_full_analytics_json_contains_health_index(self, tmp_path, monkeypatch):
+        """Full report 落盘的 analytics JSON 应包含 normalize 产物，
+        否则下一日 change/quiet 的 KPI 区块会全部回退成 '—'。"""
+        from qbu_crawler import config
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        import json
+        from pathlib import Path
+        from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+        snapshot = _build_minimal_full_snapshot(run_id=999, with_cumulative=True)
+
+        # 屏蔽邮件与 LLM（测试只关心 JSON 落盘内容）
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_snapshot.report.send_email",
+            lambda **kw: {"success": True, "recipients": []})
+        monkeypatch.setattr(
+            "qbu_crawler.server.report_llm.generate_report_insights",
+            lambda *a, **kw: {"hero_headline": "", "executive_bullets": []})
+
+        result = generate_full_report_from_snapshot(snapshot, send_email=False)
+
+        analytics_path = result.get("analytics_path")
+        assert analytics_path and Path(analytics_path).exists()
+        data = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+        kpis = data.get("kpis") or {}
+        # 这些字段都是 normalize_deep_report_analytics 的产物
+        assert "health_index" in kpis, \
+            f"kpis 应含 health_index，当前 keys={sorted(kpis.keys())}"
+        assert "high_risk_count" in kpis
+        assert "own_negative_review_rate_display" in kpis
+        # 同时应有 normalize 产物的顶层字段（用作可回归对照）
+        assert "mode_display" in data
+        assert "kpi_cards" in data
+
+    def test_deep_analysis_reattached_by_label_code_not_position(self):
+        """Regression — if normalize ever reorders clusters, deep_analysis must still
+        land on the cluster with the matching label_code, not a positional neighbor."""
+        from qbu_crawler.server.report_snapshot import _merge_post_normalize_mutations
+
+        raw = {
+            "self": {"top_negative_clusters": [
+                {"label_code": "A", "deep_analysis": {"marker": "analysis-A"}},
+                {"label_code": "B", "deep_analysis": {"marker": "analysis-B"}},
+            ]},
+            "report_copy": {"hero_headline": "x"},
+        }
+        # Normalize "reordered" the clusters (B before A) — position-based zip
+        # would have misaligned; label-code match must still be correct.
+        normalized = {
+            "self": {"top_negative_clusters": [
+                {"label_code": "B"},
+                {"label_code": "A"},
+            ]},
+        }
+        _merge_post_normalize_mutations(normalized, raw)
+
+        by_label = {c["label_code"]: c for c in normalized["self"]["top_negative_clusters"]}
+        assert by_label["A"]["deep_analysis"] == {"marker": "analysis-A"}
+        assert by_label["B"]["deep_analysis"] == {"marker": "analysis-B"}
+        assert normalized["report_copy"] == {"hero_headline": "x"}
+
+
+def _build_minimal_full_snapshot(run_id: int, with_cumulative: bool):
+    """最小可用 snapshot factory — 能跑通 build_report_analytics。"""
+    products = [
+        {"sku": f"OWN{i}", "name": f"Own {i}", "site": "waltons",
+         "url": f"https://x/{i}", "price": 10.0, "stock_status": "in_stock",
+         "rating": 4.6, "review_count": 20, "ownership": "own"}
+        for i in range(5)
+    ] + [
+        {"sku": f"CMP{i}", "name": f"Comp {i}", "site": "basspro",
+         "url": f"https://y/{i}", "price": 12.0, "stock_status": "in_stock",
+         "rating": 4.0, "review_count": 30, "ownership": "competitor"}
+        for i in range(3)
+    ]
+    reviews = [
+        {"id": idx, "product_id": None, "product_sku": p["sku"],
+         "product_name": p["name"], "site": p["site"], "ownership": p["ownership"],
+         "rating": 5, "headline": "ok", "body": "great",
+         "body_cn": "不错", "headline_cn": "还行",
+         "author": f"u{idx}", "date_published": "2026-04-16",
+         "scraped_at": "2026-04-16T12:00:00+08:00", "images": []}
+        for idx, p in enumerate(products)
+    ]
+    snap = {
+        "run_id": run_id, "logical_date": "2026-04-16",
+        "data_since": "2026-04-16T00:00:00+08:00",
+        "data_until": "2026-04-17T00:00:00+08:00",
+        "snapshot_at": "2026-04-16T15:00:00+08:00",
+        "snapshot_hash": "test-hash",
+        "products": products, "products_count": len(products),
+        "reviews": reviews, "reviews_count": len(reviews),
+        "translated_count": len(reviews), "untranslated_count": 0,
+    }
+    if with_cumulative:
+        snap["cumulative"] = {
+            "products": products, "products_count": len(products),
+            "reviews": reviews, "reviews_count": len(reviews),
+            "translated_count": len(reviews), "untranslated_count": 0,
+        }
+    return snap
+
+
 from qbu_crawler.server.report_snapshot import determine_report_mode, compute_cluster_changes
 
 
@@ -523,3 +708,145 @@ class TestShouldSendQuietEmail:
         send, mode, consecutive = should_send_quiet_email(run_id=999)
         assert send is False  # 5 consecutive quiet > threshold=3, not at day 7
         assert consecutive == 5
+
+
+class TestChangeEmailKpiBindsToCurrentAnalytics:
+    """Bug C regression — change 邮件 KPI 必须反映当日，而不是前一日。"""
+
+    def test_change_email_uses_current_own_review_rows(self, monkeypatch, tmp_path):
+        from qbu_crawler import config
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+        # 前一日 own=100，当日 cumulative own=250
+        prev = {"kpis": {"own_review_rows": 100, "health_index": 80,
+                         "own_negative_review_rate_display": "2.0%",
+                         "high_risk_count": 0}}
+        cur = {"kpis": {"own_review_rows": 250, "health_index": 92,
+                        "own_negative_review_rate_display": "1.2%",
+                        "high_risk_count": 1}}
+        snapshot = {"logical_date": "2026-04-16",
+                    "snapshot_at": "2026-04-16T15:00:00+08:00"}
+        changes = {"rating_changes": [], "price_changes": [],
+                   "stock_changes": []}
+
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        template = env.get_template("email_change.html.j2")
+        html = template.render(
+            logical_date="2026-04-16",
+            snapshot=snapshot, analytics=cur, previous_analytics=prev,
+            changes=changes, threshold=2)
+
+        # 当日 own=250 应出现；昨天 own=100 不应出现
+        assert ">250<" in html, "评论总量应展示当日 250"
+        assert ">100<" not in html, "不应再展示昨天的 100"
+        # health_index 同理
+        assert ">92<" in html
+        assert ">80<" not in html
+
+    def test_quiet_email_uses_current_own_review_rows(self, monkeypatch, tmp_path):
+        """Bug C regression — quiet 邮件模板也要绑当日 analytics。"""
+        from qbu_crawler import config
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+        prev = {"kpis": {"own_review_rows": 100, "health_index": 80,
+                         "own_negative_review_rate_display": "2.0%",
+                         "high_risk_count": 0}}
+        cur = {"kpis": {"own_review_rows": 250, "health_index": 92,
+                        "own_negative_review_rate_display": "1.2%",
+                        "high_risk_count": 1}}
+        snapshot = {"logical_date": "2026-04-16",
+                    "snapshot_at": "2026-04-16T15:00:00+08:00"}
+
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        template = env.get_template("email_quiet.html.j2")
+        html = template.render(
+            logical_date="2026-04-16",
+            snapshot=snapshot, analytics=cur, previous_analytics=prev,
+            changes=None, threshold=2,
+            consecutive_quiet_days=1,
+            translate_stats={"translated": 0, "untranslated": 0})
+
+        assert ">250<" in html, "quiet 邮件评论总量应展示当日 250"
+        assert ">100<" not in html
+        assert ">92<" in html
+        assert ">80<" not in html
+
+
+class TestStockStatusThreeStateDisplay:
+    """Bug D regression — stock 模板不再把 unknown 显示为'缺货'。"""
+
+    def _render_change_email(self, stock_changes):
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        return env.get_template("email_change.html.j2").render(
+            logical_date="2026-04-16",
+            snapshot={"logical_date": "2026-04-16",
+                      "snapshot_at": "2026-04-16T15:00:00+08:00"},
+            analytics={"kpis": {"own_review_rows": 100, "health_index": 80}},
+            previous_analytics=None,
+            changes={"stock_changes": stock_changes,
+                     "price_changes": [], "rating_changes": []},
+            threshold=2)
+
+    def test_out_of_stock_to_in_stock_shows_huoqi_green(self):
+        html = self._render_change_email([
+            {"sku": "S1", "name": "P1",
+             "old": "out_of_stock", "new": "in_stock"}])
+        assert "有货" in html
+        assert "缺货" in html   # 旧状态展示
+
+    def test_unknown_old_state_renders_as_weizhi(self):
+        """如果因为历史数据带着 unknown 走到模板，应显示'未知'。"""
+        html = self._render_change_email([
+            {"sku": "S1", "name": "P1",
+             "old": "unknown", "new": "in_stock"}])
+        assert "未知" in html
+        # 关键：不应出现"缺货"（这是 Bug D 的核心错误展示）
+        assert "缺货" not in html
+
+    def test_email_full_also_renders_three_state(self):
+        """Bug D defense-in-depth — email_full.html.j2 must share the same 3-state rendering."""
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        from pathlib import Path as _P
+        tpl_dir = _P("qbu_crawler/server/report_templates")
+        env = Environment(
+            loader=FileSystemLoader(str(tpl_dir)),
+            autoescape=select_autoescape(["html", "j2"]))
+        template = env.get_template("email_full.html.j2")
+        # Render only what the stock section needs; pad rest of vars with harmless defaults.
+        html = template.render(
+            logical_date="2026-04-16",
+            snapshot={"logical_date": "2026-04-16",
+                      "snapshot_at": "2026-04-16T15:00:00+08:00",
+                      "products_count": 1, "reviews_count": 0,
+                      "translated_count": 0, "untranslated_count": 0},
+            analytics={"kpis": {"own_review_rows": 100, "health_index": 80},
+                       "report_copy": {"hero_headline": "", "executive_bullets": []},
+                       "self": {"risk_products": [], "top_negative_clusters": [],
+                                "recommendations": []},
+                       "competitor": {"top_positive_themes": [],
+                                      "benchmark_examples": [],
+                                      "negative_opportunities": []}},
+            previous_analytics=None,
+            changes={"stock_changes": [
+                {"sku": "S1", "name": "P1",
+                 "old": "unknown", "new": "in_stock"}],
+                     "price_changes": [], "rating_changes": []},
+            risk_products=[], threshold=2,
+            alert_level="green", alert_text="",
+            report_copy={"hero_headline": "", "executive_bullets": []},
+            translate_stats=None)
+        assert "未知" in html
+        assert "缺货" not in html

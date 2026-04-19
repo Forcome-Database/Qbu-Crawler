@@ -245,6 +245,7 @@ def init_db():
         "ALTER TABLE workflow_runs ADD COLUMN report_mode TEXT",
         "ALTER TABLE review_analysis ADD COLUMN impact_category TEXT",
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
+        "ALTER TABLE workflow_runs ADD COLUMN scrape_quality TEXT",
     ]
     for sql in migrations:
         try:
@@ -701,6 +702,43 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         return dict(row)
     finally:
         conn.close()
+
+
+def update_scrape_quality(run_id: int, quality: dict) -> None:
+    """把字段缺失统计写入 workflow_runs.scrape_quality（JSON 字符串）。"""
+    import json as _json_local
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE workflow_runs SET scrape_quality = ?, updated_at = ? "
+            "WHERE id = ?",
+            (
+                _json_local.dumps(quality, ensure_ascii=False),
+                now_shanghai().isoformat(),
+                run_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_scrape_quality(run_id: int) -> dict | None:
+    import json as _json_local
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT scrape_quality FROM workflow_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        return None
+    try:
+        return _json_local.loads(row[0])
+    except (_json_local.JSONDecodeError, TypeError):
+        return None
 
 
 def replace_review_issue_labels(review_id: int, labels: list[dict]) -> None:

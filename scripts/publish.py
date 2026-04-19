@@ -158,6 +158,19 @@ def step_publish(test_pypi: bool = False):
         run_cmd("uv run twine upload dist/*")
 
 
+def _print_deploy_reminder(new_version: str) -> None:
+    print()
+    print("=" * 60)
+    print(f"  包已发布：qbu-crawler == {new_version}")
+    print("=" * 60)
+    print("⚠️  别忘了把生产服务器升级到同版本，并重启进程。")
+    print("    生产版本写在 workflow_runs.service_version 列。")
+    print("    部署后请查询：")
+    print("      sqlite3 $QBU_DATA_DIR/products.db \\")
+    print("        'SELECT id, service_version FROM workflow_runs ORDER BY id DESC LIMIT 3'")
+    print("=" * 60)
+
+
 def check_prerequisites():
     """检查前置条件"""
     print("检查前置条件...")
@@ -257,6 +270,10 @@ def main():
             print(f"  uvx qbu-crawler")
             print(f"  # 或")
             print(f"  pip install qbu-crawler")
+
+        # 部署提醒 — 生产服务器需同步升级并重启，否则 workflow_runs.service_version 会长期落后
+        if not test_pypi:
+            _print_deploy_reminder(new_version)
 
 
 if __name__ == "__main__":

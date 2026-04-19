@@ -232,6 +232,7 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - **reviews** 表：增量 INSERT，用 `product_id + author + headline + body_hash` 联合唯一键去重，`body_hash` 为 `MD5(body)[:16]`，防止 Anonymous 同标题评论误去重；已存在评论如有新图片则回填 `images` 字段（解决首次无图入库后图片丢失问题）
 - **tasks** 表：记录通过 API/MCP 提交的爬虫任务历史，params/progress/result 为 JSON 字段
 - **products.ownership**：产品归属字段，值为 `own`（自有）或 `competitor`（竞品），通过任务参数传入，爬虫不感知
+- **snapshot 变动检测使用"有效值闭区间"语义**：`detect_snapshot_changes` 仅在双侧字段都不是 `None`/`""`/`"unknown"` 时判定业务变动；采集缺失（数据质量事件）由独立告警通道处理（见 Task 6 章节），不污染 change 邮件。
 
 ### HTTP API + MCP 服务架构
 
@@ -317,6 +318,10 @@ KPI Delta 计算：
 
 评论图片下载后上传到 MinIO，路径格式 `images/YYYY-MM/{url_md5_hash}.{ext}`，存储桶 `qbu-crawler`。
 
+### 数据质量监控（P008）
+
+每次 workflow run 在 snapshot 持久化后计算 `scrape_quality`（rating/stock/review_count 缺失数与比率），写入 `workflow_runs.scrape_quality`。任一字段缺失率超过 `SCRAPE_QUALITY_ALERT_RATIO`（默认 0.10）触发独立的 **数据质量告警邮件**（模板 `email_data_quality.html.j2`），与业务变动邮件完全解耦——后者只消费 `detect_snapshot_changes` 产出的真实业务事件。
+
 ## DrissionPage 通用开发注意事项
 
 - **不要用 `ele.text` 读取 `<script>` 标签**：DrissionPage 对 script 标签的 `.text` 可能返回空，必须用 `tab.run_js()` 通过 `s.textContent` 提取
@@ -364,3 +369,14 @@ KPI Delta 计算：
 - **`docs/features/`** — 需求文档。命名：`F{序号}-{简述}.md`（如 `F001-basic-scraper.md`）
 - **`docs/plans/`** — 实施计划。命名：`P{序号}-{简述}.md`（如 `P001-basic-scraper.md`），与 feature 序号对应
 - **`docs/devlogs/`** — 开发日志。命名：`D{序号}-{简述}.md`（如 `D001-basic-scraper.md`），记录实现细节和踩坑
+
+## 发布与部署自检
+
+1. 本地改动合并进 master 后，用 `python scripts/publish.py patch|minor` 发布到 PyPI
+2. SSH 生产服务器，`pip install -U qbu-crawler`（或 uvx 拉新版），重启服务
+3. 触发一次手动 run 或等待次日定时 run 后，验证：
+   ```bash
+   sqlite3 $QBU_DATA_DIR/products.db \
+     "SELECT id, service_version, report_mode, report_phase FROM workflow_runs ORDER BY id DESC LIMIT 3"
+   ```
+4. `service_version` 应等于 `qbu_crawler/__init__.py` 里的 `__version__`；不一致说明没重启成功

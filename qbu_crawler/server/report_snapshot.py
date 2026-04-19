@@ -19,7 +19,7 @@ _RECIPIENTS_FILE_PATH = os.path.join(
 )
 
 
-def _get_email_recipients() -> list[str]:
+def get_email_recipients() -> list[str]:
     """Unified email recipient loader.
 
     Priority: config.EMAIL_RECIPIENTS (env var) > openclaw file > empty list.
@@ -99,25 +99,48 @@ def load_previous_report_context(run_id):
     return analytics, snapshot
 
 
-def _price_changed(a, b):
-    """Compare prices with float tolerance."""
-    if a is None and b is None:
+_MISSING_SENTINELS = (None, "", "unknown")
+
+
+def _is_missing(value) -> bool:
+    """判断字段值是否为"采集缺失"（不是真实业务状态）。
+
+    爬虫对三类缺失的约定：
+      - None：字段未被提取到（如 rating 无法解析）
+      - "unknown"：stock_status 的显式失败标记
+      - ""：极少数字段的默认空值
+    """
+    return value in _MISSING_SENTINELS
+
+
+def _price_changed(a, b) -> bool:
+    """只在双侧都是有效值且差值 >= 0.01 时判定变动。"""
+    if _is_missing(a) or _is_missing(b):
         return False
-    if a is None or b is None:
-        return True
     return abs(float(a) - float(b)) >= 0.01
 
 
+def _simple_changed(a, b) -> bool:
+    """stock / rating 通用：双侧都是有效值且不相等。"""
+    if _is_missing(a) or _is_missing(b):
+        return False
+    return a != b
+
+
 def detect_snapshot_changes(current_snapshot, previous_snapshot):
-    """Compare two snapshots for price/stock/rating changes.
+    """Compare two snapshots for real business changes.
+
+    Missing values (采集失败) are NOT treated as business changes.
+    Data-quality events are surfaced through a separate channel — see
+    qbu_crawler/server/scrape_quality.py and workflows.py.
 
     Returns dict with: has_changes, price_changes, stock_changes,
-    rating_changes, review_count_changes, new_products, removed_products.
+    rating_changes, new_products, removed_products.
     """
     changes = {
         "has_changes": False,
         "price_changes": [], "stock_changes": [], "rating_changes": [],
-        "review_count_changes": [], "new_products": [], "removed_products": [],
+        "new_products": [], "removed_products": [],
     }
 
     if previous_snapshot is None:
@@ -136,19 +159,22 @@ def detect_snapshot_changes(current_snapshot, previous_snapshot):
         name = product.get("name", sku)
 
         if _price_changed(product.get("price"), prev.get("price")):
-            changes["price_changes"].append({"sku": sku, "name": name, "old": prev.get("price"), "new": product.get("price")})
+            changes["price_changes"].append(
+                {"sku": sku, "name": name,
+                 "old": prev.get("price"), "new": product.get("price")})
             changes["has_changes"] = True
 
-        if product.get("stock_status") != prev.get("stock_status"):
-            changes["stock_changes"].append({"sku": sku, "name": name, "old": prev.get("stock_status"), "new": product.get("stock_status")})
+        if _simple_changed(product.get("stock_status"), prev.get("stock_status")):
+            changes["stock_changes"].append(
+                {"sku": sku, "name": name,
+                 "old": prev.get("stock_status"), "new": product.get("stock_status")})
             changes["has_changes"] = True
 
-        if product.get("rating") != prev.get("rating"):
-            changes["rating_changes"].append({"sku": sku, "name": name, "old": prev.get("rating"), "new": product.get("rating")})
+        if _simple_changed(product.get("rating"), prev.get("rating")):
+            changes["rating_changes"].append(
+                {"sku": sku, "name": name,
+                 "old": prev.get("rating"), "new": product.get("rating")})
             changes["has_changes"] = True
-
-        if product.get("review_count") != prev.get("review_count"):
-            changes["review_count_changes"].append({"sku": sku, "name": name, "old": prev.get("review_count"), "new": product.get("review_count")})
 
     current_skus = {p.get("sku") for p in current_snapshot.get("products", [])}
     for sku, prev_product in prev_by_sku.items():
@@ -512,7 +538,7 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
         return {"success": False, "error": f"Template render error: {e}", "recipients": []}
 
     # Load recipients and send
-    recipients = _get_email_recipients()
+    recipients = get_email_recipients()
 
     if not recipients:
         return {"success": True, "error": "No recipients configured", "recipients": []}
@@ -728,7 +754,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         _logger.exception("Report generation failed for run %d", run_id)
         # Send failure notification
         try:
-            recipients = _get_email_recipients()
+            recipients = get_email_recipients()
             if recipients:
                 report.send_email(
                     recipients=recipients,
@@ -738,6 +764,33 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         except Exception:
             _logger.exception("Failed to send failure notification")
         raise
+
+
+def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
+    """Copy post-normalize mutations from raw analytics onto the already-normalized copy.
+
+    After generate_full_report_from_snapshot calls normalize_deep_report_analytics(),
+    it mutates raw analytics further (adds LLM insights as report_copy, cluster
+    deep_analysis, window_review_ids). Those mutations need to ride along on the
+    on-disk JSON. Matches clusters by label_code (not position) to survive future
+    reordering / filtering in normalize_deep_report_analytics.
+    """
+    normalized["report_copy"] = raw.get("report_copy", normalized.get("report_copy"))
+    if "window_review_ids" in raw:
+        normalized["window_review_ids"] = raw["window_review_ids"]
+
+    raw_clusters = (raw.get("self") or {}).get("top_negative_clusters") or []
+    raw_by_label = {
+        c.get("label_code"): c
+        for c in raw_clusters
+        if isinstance(c, dict)
+    }
+    for nc in (normalized.get("self") or {}).get("top_negative_clusters") or []:
+        if not isinstance(nc, dict):
+            continue
+        match = raw_by_label.get(nc.get("label_code"))
+        if match and "deep_analysis" in match:
+            nc["deep_analysis"] = match["deep_analysis"]
 
 
 def _render_full_email_html(snapshot, analytics):
@@ -904,8 +957,19 @@ def generate_full_report_from_snapshot(
                 r.get("id") for r in snapshot.get("reviews", []) if r.get("id")
             ]
 
+        # Write the normalized analytics (with health_index / high_risk_count /
+        # own_negative_review_rate_display etc.). The raw `analytics` object is
+        # kept in memory for downstream Excel/V3-HTML calls, but the on-disk
+        # JSON must match what the next run's `prev_analytics` consumer
+        # (email_change.html.j2 / quiet_day_report.html.j2) expects.
+        # `pre_normalized` was computed before LLM insights / cluster deep
+        # analysis / window_review_ids were attached to the raw analytics,
+        # so re-attach those post-normalization fields here instead of
+        # normalizing a second time. Cluster deep_analysis is matched by
+        # label_code (not position) to survive future reordering in normalize.
+        _merge_post_normalize_mutations(pre_normalized, analytics)
         Path(analytics_path).write_text(
-            json.dumps(analytics, ensure_ascii=False, sort_keys=True, indent=2),
+            json.dumps(pre_normalized, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
 
@@ -947,7 +1011,7 @@ def generate_full_report_from_snapshot(
             body_html = report.render_daily_email_html(snapshot, analytics)
         try:
             email_result = report.send_email(
-                recipients=_get_email_recipients(),
+                recipients=get_email_recipients(),
                 subject=subject,
                 body_text=body,
                 body_html=body_html,
