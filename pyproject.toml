@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qbu-crawler"
-version = "0.1.55"
+version = "0.2.0"
 description = "多站点产品数据爬虫 — 基于 DrissionPage，支持 Bass Pro / Walton's / Meat Your Maker 等站点"
 readme = "README.md"
 license = {text = "MIT"}

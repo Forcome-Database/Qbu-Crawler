@@ -1,0 +1,212 @@
+<h2>P008 三层报告体系 — 整体架构</h2>
+<p class="subtitle">共享累积数据源 + 层级配置 + 分析模块化</p>
+
+<div class="section">
+<h3>架构总览</h3>
+<div class="mockup">
+<div class="mockup-header">Report Pipeline Architecture</div>
+<div class="mockup-body" style="font-family: 'DM Mono', monospace; font-size: 13px; line-height: 1.8; padding: 24px; background: #1a1a2e; color: #e0e0e0;">
+
+<div style="text-align:center; margin-bottom: 20px;">
+<span style="color:#fde047; font-weight:700;">DATA LAYER (shared)</span>
+</div>
+
+<div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px;">
+<div style="background:#2d2d44; border:1px solid #4f46e5; border-radius:8px; padding:12px; text-align:center;">
+<div style="color:#a5b4fc; font-size:11px;">products</div>
+<div style="color:#fff; font-size:10px; margin-top:4px;">41 SKUs</div>
+</div>
+<div style="background:#2d2d44; border:1px solid #4f46e5; border-radius:8px; padding:12px; text-align:center;">
+<div style="color:#a5b4fc; font-size:11px;">reviews + analysis</div>
+<div style="color:#fff; font-size:10px; margin-top:4px;">2,579 rows</div>
+</div>
+<div style="background:#2d2d44; border:1px solid #4f46e5; border-radius:8px; padding:12px; text-align:center;">
+<div style="color:#a5b4fc; font-size:11px;">product_snapshots</div>
+<div style="color:#fff; font-size:10px; margin-top:4px;">trend series</div>
+</div>
+</div>
+
+<div style="text-align:center; color:#6ee7b7; margin-bottom:4px;">|</div>
+<div style="text-align:center; color:#6ee7b7; font-size:11px; margin-bottom:4px;">query_cumulative_data() + query_window_data(since, until)</div>
+<div style="text-align:center; color:#6ee7b7; margin-bottom:20px;">V</div>
+
+<div style="text-align:center; margin-bottom: 20px;">
+<span style="color:#fde047; font-weight:700;">REPORT ENGINE</span>
+<span style="color:#8e8ea0; font-size:11px;"> generate_report(tier, logical_date)</span>
+</div>
+
+<div style="display:grid; grid-template-columns: 1fr; gap:8px; margin-bottom:24px;">
+<div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="color:#fbbf24;">1. compute_cumulative_kpis()</span>
+<span style="color:#6b7280; font-size:10px;">ALL tiers — never N/A</span>
+</div>
+</div>
+<div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="color:#fbbf24;">2. compute_window_delta()</span>
+<span style="color:#6b7280; font-size:10px;">daily/weekly window changes</span>
+</div>
+</div>
+<div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="color:#fbbf24;">3. run_analysis_modules(tier.dimensions)</span>
+<span style="color:#6b7280; font-size:10px;">per-tier dimension config</span>
+</div>
+</div>
+<div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="color:#fbbf24;">4. render(tier.template, analytics)</span>
+<span style="color:#6b7280; font-size:10px;">HTML + Excel + email</span>
+</div>
+</div>
+<div style="background:#1e293b; border:1px solid #334155; border-radius:8px; padding:12px;">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<span style="color:#fbbf24;">5. deliver(tier.delivery_rules)</span>
+<span style="color:#6b7280; font-size:10px;">email / dingtalk / archive</span>
+</div>
+</div>
+</div>
+
+<div style="text-align:center; color:#6ee7b7; margin-bottom:20px;">V</div>
+
+<div style="text-align:center; margin-bottom: 16px;">
+<span style="color:#fde047; font-weight:700;">TIER CONFIGS</span>
+</div>
+
+<div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px;">
+
+<div style="background:#450a0a; border:1px solid #b91c1c; border-radius:8px; padding:10px; text-align:center;">
+<div style="color:#fca5a5; font-weight:700; font-size:12px;">ALERT</div>
+<div style="color:#fca5a5; font-size:10px; margin-top:6px;">real-time</div>
+<div style="color:#fca5a5; font-size:9px; margin-top:4px;">new negative</div>
+<div style="color:#fca5a5; font-size:9px;">safety keyword</div>
+<div style="color:#fca5a5; font-size:9px;">price swing >15%</div>
+</div>
+
+<div style="background:#1e293b; border:1px solid #4f46e5; border-radius:8px; padding:10px; text-align:center;">
+<div style="color:#a5b4fc; font-weight:700; font-size:12px;">DAILY</div>
+<div style="color:#a5b4fc; font-size:10px; margin-top:6px;">24h window</div>
+<div style="color:#a5b4fc; font-size:9px; margin-top:4px;">cumul KPI snapshot</div>
+<div style="color:#a5b4fc; font-size:9px;">window delta</div>
+<div style="color:#a5b4fc; font-size:9px;">new reviews list</div>
+</div>
+
+<div style="background:#042f2e; border:1px solid #047857; border-radius:8px; padding:10px; text-align:center;">
+<div style="color:#6ee7b7; font-weight:700; font-size:12px;">WEEKLY</div>
+<div style="color:#6ee7b7; font-size:10px; margin-top:6px;">7d window</div>
+<div style="color:#6ee7b7; font-size:9px; margin-top:4px;">+ clusters</div>
+<div style="color:#6ee7b7; font-size:9px;">+ risk ranking</div>
+<div style="color:#6ee7b7; font-size:9px;">+ competitive gap</div>
+<div style="color:#6ee7b7; font-size:9px;">+ trend charts</div>
+</div>
+
+<div style="background:#3b0764; border:1px solid #9333ea; border-radius:8px; padding:10px; text-align:center;">
+<div style="color:#d8b4fe; font-weight:700; font-size:12px;">MONTHLY</div>
+<div style="color:#d8b4fe; font-size:10px; margin-top:6px;">30d window</div>
+<div style="color:#d8b4fe; font-size:9px; margin-top:4px;">+ ALL weekly dims</div>
+<div style="color:#d8b4fe; font-size:9px;">+ category benchmark</div>
+<div style="color:#d8b4fe; font-size:9px;">+ issue lifecycle</div>
+<div style="color:#d8b4fe; font-size:9px;">+ exec summary</div>
+<div style="color:#d8b4fe; font-size:9px;">+ product scorecard</div>
+</div>
+
+</div>
+
+</div>
+</div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+<h3>分析模块拆分</h3>
+<div class="mockup">
+<div class="mockup-header">report_analytics.py (1600 lines) -> Modular Split</div>
+<div class="mockup-body" style="font-family: 'DM Mono', monospace; font-size: 12px; line-height: 2; padding: 20px; background: #1a1a2e; color: #e0e0e0;">
+
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+
+<div>
+<div style="color:#fbbf24; font-weight:700; margin-bottom:8px;">SHARED (all tiers)</div>
+<div style="background:#2d2d44; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#a5b4fc;">analytics_kpi.py</span>
+<span style="color:#6b7280; font-size:10px;"> — health index, neg rate, risk score</span>
+</div>
+<div style="background:#2d2d44; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#a5b4fc;">analytics_clusters.py</span>
+<span style="color:#6b7280; font-size:10px;"> — label grouping, severity, sub-features</span>
+</div>
+<div style="background:#2d2d44; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#a5b4fc;">analytics_competitive.py</span>
+<span style="color:#6b7280; font-size:10px;"> — gap index, benchmark examples</span>
+</div>
+<div style="background:#2d2d44; border-radius:6px; padding:10px;">
+<span style="color:#a5b4fc;">analytics_heatmap.py</span>
+<span style="color:#6b7280; font-size:10px;"> — product x attribute matrix</span>
+</div>
+</div>
+
+<div>
+<div style="color:#d8b4fe; font-weight:700; margin-bottom:8px;">MONTHLY-ONLY (new)</div>
+<div style="background:#2d2d44; border:1px dashed #9333ea; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#d8b4fe;">analytics_lifecycle.py</span>
+<span style="color:#6b7280; font-size:10px;"> — issue state machine + trends</span>
+</div>
+<div style="background:#2d2d44; border:1px dashed #9333ea; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#d8b4fe;">analytics_category.py</span>
+<span style="color:#6b7280; font-size:10px;"> — category benchmark + price bands</span>
+</div>
+<div style="background:#2d2d44; border:1px dashed #9333ea; border-radius:6px; padding:10px; margin-bottom:6px;">
+<span style="color:#d8b4fe;">analytics_scorecard.py</span>
+<span style="color:#6b7280; font-size:10px;"> — per-SKU health trend + traffic light</span>
+</div>
+<div style="background:#2d2d44; border:1px dashed #9333ea; border-radius:6px; padding:10px;">
+<span style="color:#d8b4fe;">analytics_executive.py</span>
+<span style="color:#6b7280; font-size:10px;"> — LLM exec summary + strategy rec</span>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+<h3>调度触发机制</h3>
+<div class="mockup">
+<div class="mockup-header">Scheduler Workers</div>
+<div class="mockup-body" style="font-family: 'DM Mono', monospace; font-size: 12px; line-height: 1.8; padding: 20px; background: #1a1a2e; color: #e0e0e0;">
+
+<div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px;">
+
+<div style="background:#450a0a; border-radius:6px; padding:10px;">
+<div style="color:#fca5a5; font-weight:700; font-size:11px;">AlertWorker</div>
+<div style="color:#fca5a5; font-size:10px; margin-top:4px;">trigger: on_review_saved</div>
+<div style="color:#fca5a5; font-size:10px;">check: rating<=2 OR safety</div>
+<div style="color:#fca5a5; font-size:10px;">action: instant push</div>
+</div>
+
+<div style="background:#1e293b; border-radius:6px; padding:10px;">
+<div style="color:#a5b4fc; font-weight:700; font-size:11px;">DailyScheduler</div>
+<div style="color:#a5b4fc; font-size:10px; margin-top:4px;">trigger: cron HH:MM</div>
+<div style="color:#a5b4fc; font-size:10px;">check: has_content?</div>
+<div style="color:#a5b4fc; font-size:10px;">action: email if yes</div>
+</div>
+
+<div style="background:#042f2e; border-radius:6px; padding:10px;">
+<div style="color:#6ee7b7; font-weight:700; font-size:11px;">WeeklyScheduler</div>
+<div style="color:#6ee7b7; font-size:10px; margin-top:4px;">trigger: Monday HH:MM</div>
+<div style="color:#6ee7b7; font-size:10px;">check: always send</div>
+<div style="color:#6ee7b7; font-size:10px;">action: email + archive</div>
+</div>
+
+<div style="background:#3b0764; border-radius:6px; padding:10px;">
+<div style="color:#d8b4fe; font-weight:700; font-size:11px;">MonthlyScheduler</div>
+<div style="color:#d8b4fe; font-size:10px; margin-top:4px;">trigger: 1st day HH:MM</div>
+<div style="color:#d8b4fe; font-size:10px;">check: always send</div>
+<div style="color:#d8b4fe; font-size:10px;">action: email + archive</div>
+</div>
+
+</div>
+</div>
+</div>
+</div>
