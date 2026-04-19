@@ -369,3 +369,14 @@ KPI Delta 计算：
 - **`docs/features/`** — 需求文档。命名：`F{序号}-{简述}.md`（如 `F001-basic-scraper.md`）
 - **`docs/plans/`** — 实施计划。命名：`P{序号}-{简述}.md`（如 `P001-basic-scraper.md`），与 feature 序号对应
 - **`docs/devlogs/`** — 开发日志。命名：`D{序号}-{简述}.md`（如 `D001-basic-scraper.md`），记录实现细节和踩坑
+
+## 发布与部署自检
+
+1. 本地改动合并进 master 后，用 `python scripts/publish.py patch|minor` 发布到 PyPI
+2. SSH 生产服务器，`pip install -U qbu-crawler`（或 uvx 拉新版），重启服务
+3. 触发一次手动 run 或等待次日定时 run 后，验证：
+   ```bash
+   sqlite3 $QBU_DATA_DIR/products.db \
+     "SELECT id, service_version, report_mode, report_phase FROM workflow_runs ORDER BY id DESC LIMIT 3"
+   ```
+4. `service_version` 应等于 `qbu_crawler/__init__.py` 里的 `__version__`；不一致说明没重启成功
