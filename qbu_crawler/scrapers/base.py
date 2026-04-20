@@ -146,24 +146,85 @@ class BaseScraper:
         return pids
 
     @classmethod
+    def _find_chrome_pids_by_cmdline(cls, port: int) -> list[int]:
+        """按 cmdline 精确识别用户数据 Chrome 进程。
+        关键：Chrome 关闭调试器 server 后（"后台保持运行"机制），port 不再 LISTENING，
+        但 chrome.exe 进程仍活着、cmdline 里仍有 --remote-debugging-port=N 和
+        --user-data-dir=...，这是唯一可靠的识别方式。"""
+        pids = []
+        try:
+            import psutil
+        except ImportError:
+            return pids
+        marker_port = f'--remote-debugging-port={port}'
+        marker_userdata = f'--user-data-dir={CHROME_USER_DATA_PATH}' if CHROME_USER_DATA_PATH else None
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if name not in ('chrome.exe', 'chrome'):
+                    continue
+                cmdline = proc.info.get('cmdline') or []
+                joined = ' '.join(cmdline)
+                if marker_port not in joined:
+                    continue
+                if marker_userdata and marker_userdata not in joined:
+                    continue
+                pids.append(proc.info['pid'])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return pids
+
+    @classmethod
     def _kill_user_data_chrome(cls, port: int):
         """关闭占用指定调试端口的 Chrome 进程。
-        先试 CDP 优雅退出（保证 cookie flush 到磁盘）；
-        若是 CDP 半死僵尸或占着 SingletonLock 不动，按端口查 PID 强杀进程树兜底。
-        杀完 poll 确认端口真的释放，给 subprocess.Popen 一个干净的起跑环境。"""
+        三层策略：
+          1. CDP force=True 路径（走 SystemInfo.getProcessInfo + psutil.kill）
+          2. 按 cmdline 识别 chrome.exe 并 psutil.kill（补"后台保持运行"漏网）
+          3. netstat 按端口 LISTENING 兜底（理论上 1/2 都失败才用得到）
+        """
+        # 1. CDP force=True，让 DrissionPage 自己通过 CDP SystemInfo 拿 PID 列表杀
         try:
             browser = Chromium(port)
-            browser.quit()
+            browser.quit(force=True, timeout=5)
         except Exception:
+            try:
+                browser = Chromium(port)
+                browser.quit()
+            except Exception:
+                pass
+
+        # 2. psutil 按 cmdline 找。处理"CDP 已关但 Chrome 进程因后台机制仍活着"的场景
+        try:
+            import psutil
+            for attempt in range(3):
+                pids = cls._find_chrome_pids_by_cmdline(port)
+                if not pids:
+                    break
+                for pid in pids:
+                    logger.warning(f"[启动] 按 cmdline 命中 Chrome PID {pid}，kill (attempt {attempt + 1})")
+                    try:
+                        p = psutil.Process(pid)
+                        # 先 kill 子进程树，再 kill 主进程
+                        for child in p.children(recursive=True):
+                            try: child.kill()
+                            except Exception: pass
+                        p.kill()
+                    except Exception as e:
+                        logger.warning(f"[启动] psutil kill PID {pid} 失败: {e}")
+                time.sleep(0.5)
+        except ImportError:
             pass
+
         if sys.platform != 'win32':
             return
-        for attempt in range(5):
+
+        # 3. netstat 按端口 LISTENING 兜底（psutil 失效或 cmdline 无法匹配时）
+        for attempt in range(3):
             pids = cls._find_pids_on_port(port)
             if not pids:
                 return
             for pid in pids:
-                logger.warning(f"[启动] 端口 {port} 被 PID {pid} 占用，强杀进程树 (attempt {attempt + 1})")
+                logger.warning(f"[启动] 端口 {port} 被 PID {pid} 占用，taskkill /F /T (attempt {attempt + 1})")
                 try:
                     subprocess.run(
                         ['taskkill', '/F', '/T', '/PID', pid],
@@ -174,7 +235,7 @@ class BaseScraper:
             time.sleep(0.5)
         still = cls._find_pids_on_port(port)
         if still:
-            logger.error(f"[启动] 强杀后端口 {port} 仍被 PID {still} 占用；Chrome 可能加载了系统服务/驱动保护")
+            logger.error(f"[启动] 强杀后端口 {port} 仍被 PID {still} 占用")
 
     @staticmethod
     def _clean_singleton_locks():
@@ -197,7 +258,15 @@ class BaseScraper:
     def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
         """使用 Chrome 用户数据启动浏览器，可选代理。
         Chrome 支持 --user-data-dir + --proxy-server 同时使用，
-        代理通过 HTTP CONNECT 隧道，JA3 指纹不变。"""
+        代理通过 HTTP CONNECT 隧道，JA3 指纹不变。
+
+        用 _user_data_lock 串行化启动流程，防多个用户数据 scraper 并发 init
+        时互相踩脚（第一个 Popen 刚起来就被第二个 kill 掉）。"""
+        with cls._user_data_lock:
+            return cls._launch_with_user_data_locked(proxy=proxy)
+
+    @classmethod
+    def _launch_with_user_data_locked(cls, proxy: str | None = None) -> Chromium:
         port = cls._USER_DATA_PORT
 
         if proxy:
@@ -241,12 +310,28 @@ class BaseScraper:
         args.append('--disable-session-crashed-bubble')
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         last_err = None
-        for _ in range(20):
+        dead_streak = 0
+        for attempt in range(40):  # 40s 总窗口，生产上 Chrome 冷启动（大用户数据+并发）可能超 20s
             time.sleep(1)
             # 严格先等我们 Popen 的 Chrome 起来再连，防 DrissionPage 在端口空时自作主张
             # 拉一个白板 Chrome 覆盖我们的进程。
             if not cls._find_pids_on_port(port):
-                last_err = "Popen 的 Chrome 尚未 LISTENING"
+                # 进一步诊断：我们刚 Popen 的 Chrome 进程是否还活着？
+                chrome_alive = bool(cls._find_chrome_pids_by_cmdline(port))
+                if chrome_alive:
+                    last_err = f"Chrome 进程存活但尚未 LISTENING (attempt {attempt + 1})"
+                    dead_streak = 0
+                else:
+                    dead_streak += 1
+                    last_err = f"Popen 的 Chrome 已退出（SingletonLock IPC?）(attempt {attempt + 1})"
+                    # Chrome 连续 3 秒不存在 → Popen 的 Chrome 被 SingletonLock IPC 给"某个看不见的持有者"后自己退出了
+                    # 重清 Lock 重新 Popen 一次，还失败就让外面抛
+                    if dead_streak >= 3:
+                        logger.warning(f"[启动] {last_err}，重清 SingletonLock 重新 Popen")
+                        cls._kill_user_data_chrome(port)
+                        cls._clean_singleton_locks()
+                        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        dead_streak = 0
                 continue
             try:
                 browser = Chromium(port)
