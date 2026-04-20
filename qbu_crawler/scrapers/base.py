@@ -110,13 +110,88 @@ class BaseScraper:
         return options
 
     @classmethod
+    def _find_pids_on_port(cls, port: int) -> list[str]:
+        """按 TCP 端口查所有 LISTENING 的 PID。
+        兼容 Windows 11 带 Offload State 列的 netstat 输出：
+          "TCP 127.0.0.1:19222 0.0.0.0:0 LISTENING 12345 InHost"
+        以 "LISTENING" 关键字定位 PID，而非固定位置偏移。"""
+        if sys.platform != 'win32':
+            return []
+        try:
+            result = subprocess.run(
+                ['netstat', '-ano', '-p', 'TCP'],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as e:
+            logger.warning(f"[启动] netstat 调用失败: {e}")
+            return []
+        pids = []
+        for line in result.stdout.splitlines():
+            if 'LISTENING' not in line:
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            # 本地地址列严格以 ":{port}" 结尾（防 ":192220" 之类误命中）
+            local_addr = parts[1]
+            if not local_addr.endswith(f':{port}'):
+                continue
+            try:
+                idx = parts.index('LISTENING')
+                pid = parts[idx + 1]
+                if pid.isdigit() and pid not in pids:
+                    pids.append(pid)
+            except (ValueError, IndexError):
+                continue
+        return pids
+
+    @classmethod
     def _kill_user_data_chrome(cls, port: int):
-        """关闭占用指定调试端口的 Chrome 进程"""
+        """关闭占用指定调试端口的 Chrome 进程。
+        先试 CDP 优雅退出（保证 cookie flush 到磁盘）；
+        若是 CDP 半死僵尸或占着 SingletonLock 不动，按端口查 PID 强杀进程树兜底。
+        杀完 poll 确认端口真的释放，给 subprocess.Popen 一个干净的起跑环境。"""
         try:
             browser = Chromium(port)
             browser.quit()
         except Exception:
             pass
+        if sys.platform != 'win32':
+            return
+        for attempt in range(5):
+            pids = cls._find_pids_on_port(port)
+            if not pids:
+                return
+            for pid in pids:
+                logger.warning(f"[启动] 端口 {port} 被 PID {pid} 占用，强杀进程树 (attempt {attempt + 1})")
+                try:
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', pid],
+                        capture_output=True, timeout=5,
+                    )
+                except Exception as e:
+                    logger.warning(f"[启动] taskkill PID {pid} 失败: {e}")
+            time.sleep(0.5)
+        still = cls._find_pids_on_port(port)
+        if still:
+            logger.error(f"[启动] 强杀后端口 {port} 仍被 PID {still} 占用；Chrome 可能加载了系统服务/驱动保护")
+
+    @staticmethod
+    def _clean_singleton_locks():
+        """清理用户数据目录下的 Chrome 单实例锁文件。
+        Chrome 异常退出后，SingletonLock/SingletonCookie/SingletonSocket 可能残留，
+        导致新 Chrome 进程把命令 IPC 给"锁持有者"后立刻退出（即使持有者已死）。
+        """
+        if not CHROME_USER_DATA_PATH:
+            return
+        for name in ('SingletonLock', 'SingletonCookie', 'SingletonSocket'):
+            path = os.path.join(CHROME_USER_DATA_PATH, name)
+            try:
+                if os.path.lexists(path):
+                    os.remove(path)
+                    logger.info(f"[启动] 清理残留 {name}")
+            except Exception as e:
+                logger.warning(f"[启动] 清理 {name} 失败: {e}")
 
     @classmethod
     def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
@@ -129,14 +204,24 @@ class BaseScraper:
             # 代理是启动参数，切换代理必须重启 Chrome
             cls._kill_user_data_chrome(port)
         else:
-            # 无代理时尝试连接已运行的 Chrome
-            try:
-                browser = Chromium(port)
-                cls._cleanup_tabs(browser)
-                return browser
-            except Exception:
-                pass
+            # 无代理时尝试连接已运行的 Chrome。
+            # ⚠ 关键：DrissionPage 的 Chromium(port) 在端口空闲时会自动拉一个白板 Chrome
+            # （走 DrissionPage 默认参数，完全忽略我们的 --user-data-dir），导致每次启动
+            # 都多一次无意义的白板 Chrome + probe 失败 fallthrough。
+            # 因此先 netstat 确认有 LISTENING 再进复用分支；空端口直接 fall through
+            # 到下面的 subprocess 启动分支，用我们自己的 user-data-dir 参数拉 Chrome。
+            if cls._find_pids_on_port(port):
+                try:
+                    browser = Chromium(port)
+                    cls._cleanup_tabs(browser)
+                    if not cls._probe_browser_alive(browser):
+                        raise RuntimeError("复用的 Chrome 健康探测失败（僵尸进程）")
+                    return browser
+                except Exception as e:
+                    logger.warning(f"[启动] 端口 {port} 复用失败，将重启 Chrome: {e}")
+                    cls._kill_user_data_chrome(port)
 
+        cls._clean_singleton_locks()
         chrome_path = _find_chrome()
         args = [
             chrome_path,
@@ -155,33 +240,69 @@ class BaseScraper:
             args.append('--headless=new')
         args.append('--disable-session-crashed-bubble')
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        last_err = None
         for _ in range(20):
             time.sleep(1)
+            # 严格先等我们 Popen 的 Chrome 起来再连，防 DrissionPage 在端口空时自作主张
+            # 拉一个白板 Chrome 覆盖我们的进程。
+            if not cls._find_pids_on_port(port):
+                last_err = "Popen 的 Chrome 尚未 LISTENING"
+                continue
             try:
                 browser = Chromium(port)
                 cls._cleanup_tabs(browser)
+                # CDP 端口有时先于 page target 就绪，此时 latest_tab 会 IndexError。
+                # 探测未通过就继续等，别返回一个半死浏览器。
+                if not cls._probe_browser_alive(browser):
+                    last_err = "page target 未就绪"
+                    continue
                 return browser
-            except Exception:
+            except Exception as e:
+                last_err = repr(e)
                 continue
-        raise RuntimeError(f"Chrome with user data failed to start on port {port}")
+        raise RuntimeError(
+            f"Chrome with user data failed to start on port {port}: {last_err}"
+        )
 
     @staticmethod
     def _cleanup_tabs(browser):
-        """关闭多余标签，只保留一个。防止用户数据 Chrome 会话恢复导致标签堆积。"""
+        """关闭多余标签，只保留一个。防止用户数据 Chrome 会话恢复导致标签堆积。
+
+        get_tabs() 返回 MixTab 对象列表，对象本身就有 close()。之前误用
+        browser.get_tab(obj) 二次查询，把对象塞进期望 str/int 的参数，
+        行为未定义，可能把 page-type target 全部关光，导致后续
+        browser.latest_tab → self.tab_ids[0] 抛 IndexError。
+        """
         try:
             tabs = browser.get_tabs()
-            if len(tabs) <= 1:
-                return
-            # 保留最后一个标签，关闭其余
-            for tab_id in tabs[:-1]:
+        except Exception as e:
+            logger.warning(f"[清理] get_tabs 失败: {e}")
+            return
+        if len(tabs) > 1:
+            closed = 0
+            for tab in tabs[:-1]:
                 try:
-                    tab = browser.get_tab(tab_id)
                     tab.close()
+                    closed += 1
                 except Exception:
                     pass
-            logger.info(f"[清理] 关闭 {len(tabs) - 1} 个多余标签")
-        except Exception:
-            pass
+            logger.info(f"[清理] 关闭 {closed} 个多余标签（共 {len(tabs)} 个）")
+
+    @staticmethod
+    def _probe_browser_alive(browser) -> bool:
+        """健康探测：确认 Chrome CDP 既能握手又能真正执行操作。
+        僵尸场景：端口残留、Chromium(port) 成功，但 new_tab/latest_tab 立刻 refused。
+        探测逻辑：若无 page target 就开一个 about:blank；然后读 latest_tab.url。
+        任一步失败 → 返回 False，上层重启 Chrome。"""
+        try:
+            if browser.tabs_count == 0:
+                browser.new_tab('about:blank')
+            # latest_tab + .url 会走一次 CDP Target.getTargets + Runtime
+            _ = browser.latest_tab.url
+            return True
+        except Exception as e:
+            logger.warning(f"[启动] 浏览器健康探测失败: {e}")
+            return False
 
     def _warm_up(self):
         """访问站点首页完成反爬 challenge（如 Akamai _abck cookie）。
@@ -606,7 +727,16 @@ class BaseScraper:
             return None
 
     def close(self):
+        # DrissionPage 默认 quit() 只发 CDP Browser.close + detach WebSocket，不杀进程，
+        # Chrome 有"后台保持运行"机制后进程继续 LISTENING，下次启动会探测到半死僵尸。
+        # 必须 force=True 走 SystemInfo.getProcessInfo + psutil.Process.kill() 路径。
         try:
-            self.browser.quit()
+            self.browser.quit(force=True, timeout=5)
         except Exception:
-            pass
+            try:
+                self.browser.quit()
+            except Exception:
+                pass
+        # 用户数据模式再加一层端口→PID 强杀兜底，防 force=True 里 CDP 已死拿不到 PID 的极端场景。
+        if self._use_user_data:
+            self._kill_user_data_chrome(self._USER_DATA_PORT)

@@ -206,9 +206,17 @@ class TaskManager:
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
-                    logger.error(f"[Task {task_id}] Failed {url}: {e}")
+                    logger.error(f"[Task {task_id}] Failed {url}: {e}", exc_info=True)
                     task.progress["failed"] = task.progress.get("failed", 0) + 1
                     task.progress["completed"] = i + 1
+                    # 浏览器可能已不可用（Chrome 死、tab 丢、session 污染），销毁 scraper；
+                    # 下次迭代通过 scraper is None 分支重建，避免单点失败连锁拖垮整个任务
+                    if scraper:
+                        try:
+                            scraper.close()
+                        except Exception:
+                            pass
+                        scraper = None
 
                 self._persist(task)
 
@@ -275,6 +283,8 @@ class TaskManager:
                 self._persist(task)
 
                 try:
+                    if scraper is None:
+                        scraper = get_scraper(url)
                     effective_review_limit = self._resolve_review_limit(url, requested_review_limit)
                     data = scraper.scrape(url, review_limit=effective_review_limit)
                     product = data.get("product", {})
@@ -292,9 +302,17 @@ class TaskManager:
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
-                    logger.error(f"[Task {task_id}] Failed {url}: {e}")
+                    logger.error(f"[Task {task_id}] Failed {url}: {e}", exc_info=True)
                     task.progress["failed"] = task.progress.get("failed", 0) + 1
                     task.progress["completed"] = i + 1
+                    # 浏览器可能已不可用（Chrome 死、tab 丢、session 污染），销毁 scraper；
+                    # 下次迭代通过 scraper is None 分支重建，避免单点失败连锁拖垮整个任务
+                    if scraper:
+                        try:
+                            scraper.close()
+                        except Exception:
+                            pass
+                        scraper = None
 
                 self._persist(task)
 
