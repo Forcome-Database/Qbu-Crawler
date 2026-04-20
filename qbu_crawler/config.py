@@ -58,7 +58,59 @@ BV_WAIT_TIMEOUT = 10  # Bazaarvoice 数据等待超时（秒）
 BV_POLL_INTERVAL = 0.5  # BV 数据轮询间隔（秒）
 
 # Chrome 用户数据（绕过 Akamai 等严格反爬，复用已有 cookie/session）
+#
+# 强烈建议 CHROME_USER_DATA_PATH 指向一个 *专属* 目录（如 C:\QbuCrawlerProfile），
+# 不要直接指向用户真实的 Chrome profile（如 %LOCALAPPDATA%\Google\Chrome\User Data）。
+# 原因：用户个人 Chrome 会持有 SingletonLock，我们 Popen 的 Chrome 启动时会把命令
+# IPC 给用户 Chrome 后自己退出，port 永远起不来，导致采集死循环。
+#
+# CHROME_USER_DATA_SEED：用于首次种子复制的真实 profile 路径（如
+# %LOCALAPPDATA%\Google\Chrome\User Data）。首次运行若 CHROME_USER_DATA_PATH 不存在，
+# 会从 seed 目录只复制关键 cookie 文件（不复制扩展/缓存/历史，避免 GB 级复制）。
 CHROME_USER_DATA_PATH = os.getenv("CHROME_USER_DATA_PATH", "")  # 留空则用独立浏览器
+CHROME_USER_DATA_SEED = os.getenv("CHROME_USER_DATA_SEED", "")  # 留空则不做种子复制
+
+
+def _seed_chrome_user_data():
+    """首次运行时从 CHROME_USER_DATA_SEED 复制关键 cookie/preferences 到专属目录。
+    只复制 Default/Cookies*、Default/Local State、Default/Preferences，
+    避免整个 profile（GB 级）复制带来的 I/O 爆炸和磁盘占用。"""
+    import shutil
+    if not CHROME_USER_DATA_PATH or not CHROME_USER_DATA_SEED:
+        return
+    if os.path.isdir(CHROME_USER_DATA_PATH):
+        return  # 已存在，不重复种子
+    if not os.path.isdir(CHROME_USER_DATA_SEED):
+        return
+    src_default = os.path.join(CHROME_USER_DATA_SEED, "Default")
+    dst_default = os.path.join(CHROME_USER_DATA_PATH, "Default")
+    os.makedirs(dst_default, exist_ok=True)
+    essentials = [
+        ("Default", "Cookies"),
+        ("Default", "Cookies-journal"),
+        ("Default", "Preferences"),
+        ("", "Local State"),
+    ]
+    copied = []
+    for sub, name in essentials:
+        src = os.path.join(CHROME_USER_DATA_SEED, sub, name) if sub else os.path.join(CHROME_USER_DATA_SEED, name)
+        dst = os.path.join(CHROME_USER_DATA_PATH, sub, name) if sub else os.path.join(CHROME_USER_DATA_PATH, name)
+        if os.path.isfile(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            try:
+                shutil.copy2(src, dst)
+                copied.append(name)
+            except Exception:
+                pass
+    if copied:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"[Chrome] 已从 seed 目录 {CHROME_USER_DATA_SEED} 向专属目录 "
+            f"{CHROME_USER_DATA_PATH} 复制关键文件: {copied}"
+        )
+
+
+_seed_chrome_user_data()
 
 # 代理池 API（遇到反爬封锁时自动获取代理 IP）
 # 示例: https://white.1024proxy.com/white/api?region=US&num=1&time=10&format=1&type=txt
