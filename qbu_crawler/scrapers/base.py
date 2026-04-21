@@ -147,10 +147,8 @@ class BaseScraper:
 
     @classmethod
     def _find_chrome_pids_by_cmdline(cls, port: int) -> list[int]:
-        """按 cmdline 精确识别用户数据 Chrome 进程。
-        关键：Chrome 关闭调试器 server 后（"后台保持运行"机制），port 不再 LISTENING，
-        但 chrome.exe 进程仍活着、cmdline 里仍有 --remote-debugging-port=N 和
-        --user-data-dir=...，这是唯一可靠的识别方式。"""
+        """按 cmdline 精确识别用户数据 Chrome 主进程（同时含 port + user-data-dir）。
+        用于定位 CDP 已关但主进程仍活的"后台保持运行"僵尸。"""
         pids = []
         try:
             import psutil
@@ -173,6 +171,40 @@ class BaseScraper:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         return pids
+
+    @classmethod
+    def _kill_all_chrome_with_userdata(cls) -> int:
+        """按 user-data-dir 核爆所有 chrome 进程（含 renderer/helper 子进程）。
+        Chrome 主进程 kill 后，renderer/GPU/utility 子进程可能仍活着，它们 cmdline
+        里有 --user-data-dir=... 但没有 --remote-debugging-port=...，
+        _find_chrome_pids_by_cmdline 漏掉→这些子进程仍握 profile 锁，
+        新 Popen 的 Chrome IPC 给"看不见的持有者"后自退→死循环。"""
+        if not CHROME_USER_DATA_PATH:
+            return 0
+        try:
+            import psutil
+        except ImportError:
+            return 0
+        marker = f'--user-data-dir={CHROME_USER_DATA_PATH}'
+        killed = 0
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if name not in ('chrome.exe', 'chrome'):
+                    continue
+                cmdline = ' '.join(proc.info.get('cmdline') or [])
+                if marker not in cmdline:
+                    continue
+                try:
+                    psutil.Process(proc.info['pid']).kill()
+                    killed += 1
+                except Exception:
+                    pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        if killed:
+            logger.warning(f"[启动] user-data-dir nuclear kill {killed} 个 chrome 进程（含子进程）")
+        return killed
 
     @classmethod
     def _kill_user_data_chrome(cls, port: int):
@@ -237,6 +269,9 @@ class BaseScraper:
         if still:
             logger.error(f"[启动] 强杀后端口 {port} 仍被 PID {still} 占用")
 
+        # 4. 按 user-data-dir 核爆所有 chrome 子进程（renderer/helper 常没有 port marker）
+        cls._kill_all_chrome_with_userdata()
+
     @staticmethod
     def _clean_singleton_locks():
         """清理用户数据目录下的 Chrome 单实例锁文件。
@@ -255,6 +290,61 @@ class BaseScraper:
                 logger.warning(f"[启动] 清理 {name} 失败: {e}")
 
     @classmethod
+    def _snapshot_chrome_env(cls, tag: str):
+        """启动前/清理前的环境快照诊断日志。
+        打印：
+          - 端口 19222 的 LISTENING PID
+          - 所有 chrome.exe 进程的 pid + cmdline（按是否含 user-data-dir 分组）
+        生产复现时直接看日志就能判断"谁占着 profile"，不用登服务器跑 tasklist。
+
+        cmdline 太长时截断到 300 字符 + 关键 marker 是否出现。"""
+        port = cls._USER_DATA_PORT
+        marker_userdata = f'--user-data-dir={CHROME_USER_DATA_PATH}' if CHROME_USER_DATA_PATH else None
+        marker_port = f'--remote-debugging-port={port}'
+        logger.info(f"[诊断/{tag}] ── chrome 环境快照 ──")
+        try:
+            listening = cls._find_pids_on_port(port)
+            logger.info(f"[诊断/{tag}] 端口 {port} LISTENING PID: {listening or '（无）'}")
+        except Exception as e:
+            logger.warning(f"[诊断/{tag}] netstat 失败: {e}")
+        try:
+            import psutil
+        except ImportError:
+            logger.info(f"[诊断/{tag}] psutil 不可用，跳过 chrome.exe 枚举")
+            return
+        ours = []   # 含我们的 user-data-dir 的 chrome 进程
+        others = []  # 其他 chrome.exe（用户真 profile 等）
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if name not in ('chrome.exe', 'chrome'):
+                    continue
+                cmdline = ' '.join(proc.info.get('cmdline') or [])
+                entry = {
+                    'pid': proc.info['pid'],
+                    'cmdline': cmdline[:300] + ('…' if len(cmdline) > 300 else ''),
+                    'has_port': marker_port in cmdline,
+                    'has_userdata': bool(marker_userdata and marker_userdata in cmdline),
+                }
+                if entry['has_userdata']:
+                    ours.append(entry)
+                else:
+                    others.append(entry)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        logger.info(
+            f"[诊断/{tag}] 持 user-data-dir={CHROME_USER_DATA_PATH} 的 chrome 进程：{len(ours)} 个"
+        )
+        for e in ours:
+            logger.info(
+                f"[诊断/{tag}]   PID {e['pid']} port_marker={e['has_port']} cmdline={e['cmdline']}"
+            )
+        logger.info(f"[诊断/{tag}] 其他 chrome.exe（与 QBU profile 无关）：{len(others)} 个")
+        # "其他" 通常是用户自己的 Chrome，pid 打印即可，cmdline 不打（隐私 + 噪音）
+        if others:
+            logger.info(f"[诊断/{tag}]   PIDs: {[e['pid'] for e in others]}")
+
+    @classmethod
     def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
         """使用 Chrome 用户数据启动浏览器，可选代理。
         Chrome 支持 --user-data-dir + --proxy-server 同时使用，
@@ -268,6 +358,9 @@ class BaseScraper:
     @classmethod
     def _launch_with_user_data_locked(cls, proxy: str | None = None) -> Chromium:
         port = cls._USER_DATA_PORT
+
+        # 入口快照：启动前环境里"谁已经在用我们的 profile"一目了然
+        cls._snapshot_chrome_env("启动前")
 
         if proxy:
             # 代理是启动参数，切换代理必须重启 Chrome
@@ -289,6 +382,9 @@ class BaseScraper:
                 except Exception as e:
                     logger.warning(f"[启动] 端口 {port} 复用失败，将重启 Chrome: {e}")
                     cls._kill_user_data_chrome(port)
+
+        # Popen 前快照：kill/清锁后还剩哪些 chrome.exe，是否真的清干净了
+        cls._snapshot_chrome_env("Popen前")
 
         cls._clean_singleton_locks()
         chrome_path = _find_chrome()
@@ -328,6 +424,9 @@ class BaseScraper:
                     # 重清 Lock 重新 Popen 一次，还失败就让外面抛
                     if dead_streak >= 3:
                         logger.warning(f"[启动] {last_err}，重清 SingletonLock 重新 Popen")
+                        # 关键诊断点：Popen 的 Chrome 立刻退了，此刻快照能直接看到
+                        # 到底是哪个 chrome.exe 抢走了 profile 的 IPC
+                        cls._snapshot_chrome_env("Popen自退")
                         cls._kill_user_data_chrome(port)
                         cls._clean_singleton_locks()
                         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -351,27 +450,39 @@ class BaseScraper:
 
     @staticmethod
     def _cleanup_tabs(browser):
-        """关闭多余标签，只保留一个。防止用户数据 Chrome 会话恢复导致标签堆积。
+        """清理多余标签：先开一个 fresh about:blank，再关掉所有旧 tab。
 
-        get_tabs() 返回 MixTab 对象列表，对象本身就有 close()。之前误用
-        browser.get_tab(obj) 二次查询，把对象塞进期望 str/int 的参数，
-        行为未定义，可能把 page-type target 全部关光，导致后续
-        browser.latest_tab → self.tab_ids[0] 抛 IndexError。
+        ⚠ 不能简单保留 tabs[-1] 然后关 tabs[:-1]：DrissionPage 的 browser.latest_tab
+        返回 tab_ids[0]（CDP Target.getTargets 里排最前的 target），而 get_tabs()
+        的 tabs[0] 正好就是 latest_tab；tabs[:-1] 会把它关掉，后续 _probe_browser_alive
+        读 latest_tab.url 会撞到 "connection to the page has been disconnected"。
+
+        做法：先 new_tab 建新页，它自动成为最新 target → latest_tab 指向它；
+        然后关掉所有原 tab，探测稳定、状态可预期。
         """
         try:
             tabs = browser.get_tabs()
         except Exception as e:
             logger.warning(f"[清理] get_tabs 失败: {e}")
             return
-        if len(tabs) > 1:
-            closed = 0
-            for tab in tabs[:-1]:
-                try:
-                    tab.close()
-                    closed += 1
-                except Exception:
-                    pass
-            logger.info(f"[清理] 关闭 {closed} 个多余标签（共 {len(tabs)} 个）")
+        if len(tabs) <= 1:
+            return
+        try:
+            fresh = browser.new_tab('about:blank')
+        except Exception as e:
+            logger.warning(f"[清理] new_tab 失败，跳过清理: {e}")
+            return
+        fresh_id = getattr(fresh, 'tab_id', None)
+        closed = 0
+        for tab in tabs:
+            try:
+                if fresh_id and getattr(tab, 'tab_id', None) == fresh_id:
+                    continue
+                tab.close()
+                closed += 1
+            except Exception:
+                pass
+        logger.info(f"[清理] 关闭 {closed} 个旧标签（共 {len(tabs)} 个），保留新建 about:blank")
 
     @staticmethod
     def _probe_browser_alive(browser) -> bool:
@@ -822,6 +933,7 @@ class BaseScraper:
                 self.browser.quit()
             except Exception:
                 pass
-        # 用户数据模式再加一层端口→PID 强杀兜底，防 force=True 里 CDP 已死拿不到 PID 的极端场景。
+        # 用户数据模式：端口→PID 强杀 + user-data-dir 核爆（清 renderer/helper 残留）。
+        # 不核爆 renderer 的话，下一次 Popen 新 Chrome 时会被它们持有的 profile 锁 IPC 走。
         if self._use_user_data:
             self._kill_user_data_chrome(self._USER_DATA_PORT)
