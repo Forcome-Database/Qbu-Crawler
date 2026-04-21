@@ -1146,6 +1146,34 @@ def test_build_dual_report_analytics_has_cumulative_kpis(analytics_db):
     assert kpis["ingested_review_rows"] == cumulative_review_count
 
 
+def test_normalize_propagates_enriched_fields_to_cumulative_kpis(analytics_db):
+    """Regression: email_full.html.j2 reads cumulative_kpis first, so
+    health_index / high_risk_count / *_display must be synced there after
+    normalize_deep_report_analytics computes them.
+    """
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+    analytics = build_dual_report_analytics(snapshot)
+    normalized = normalize_deep_report_analytics(analytics)
+
+    cum = normalized["cumulative_kpis"]
+    kpis = normalized["kpis"]
+    for key in (
+        "health_index",
+        "high_risk_count",
+        "own_negative_review_rate_display",
+        "negative_review_rate_display",
+        "coverage_rate",
+    ):
+        assert key in cum, f"cumulative_kpis missing enriched field: {key}"
+        assert cum[key] == kpis[key], f"cumulative_kpis[{key}] out of sync with kpis"
+    # Must be separate dicts so downstream mutations don't leak
+    assert cum is not kpis
+
+
 def test_build_dual_report_analytics_has_window(analytics_db):
     """window key should be present with reviews_count, own_reviews_count, etc."""
     from qbu_crawler.server.report_analytics import build_dual_report_analytics

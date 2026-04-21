@@ -420,12 +420,16 @@ def _build_insights_prompt(analytics, snapshot=None):
         bench_lines.append(f"  - {name}: {summary}")
     bench_text = "\n".join(bench_lines) if bench_lines else "  暂无"
 
-    # Risk products
+    # Risk products — distinguish true "high risk" (≥threshold) vs "top-by-score"
+    high_risk_threshold = config.HIGH_RISK_THRESHOLD
+    high_risk_count = kpis.get("high_risk_count", 0)
     risk_products = analytics.get("self", {}).get("risk_products", [])
     risk_lines = []
     for p in risk_products[:3]:
+        score = p.get("risk_score", 0) or 0
+        tag = "⚠️高风险" if score >= high_risk_threshold else "一般风险"
         risk_lines.append(
-            f"  - {p.get('product_name', '')}：风险分 {p.get('risk_score', 0)}/100，"
+            f"  - [{tag}] {p.get('product_name', '')}：风险分 {score}/100，"
             f"差评率 {(p.get('negative_rate') or 0) * 100:.0f}%，"
             f"主要问题 {p.get('top_features_display', '')}"
         )
@@ -439,8 +443,9 @@ def _build_insights_prompt(analytics, snapshot=None):
 - 自有评论 {own_reviews} 条，自有差评 {own_neg} 条（自有差评率 {own_rate * 100:.1f}%）
 - 全量评论 {total} 条（含竞品 {comp_reviews} 条），全量差评 {neg} 条
 - 健康指数：{health}/100
+- 高风险产品数（风险分 ≥{high_risk_threshold}）：{high_risk_count}
 
-高风险产品：
+风险最高的产品（前 3，按风险分排序；仅 [⚠️高风险] 标记的才算"高风险产品"，其余为"一般风险"不得升格）：
 {risk_text}
 
 主要问题（按影响排序，含用户原话高频表现）：
@@ -467,7 +472,10 @@ def _build_insights_prompt(analytics, snapshot=None):
   "benchmark_takeaway": "一段话总结竞品做对了什么，可供自有产品借鉴的具体做法"
 }}
 
-重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
+重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。
+口径约束：
+- 文案中称"高风险产品"时，数量必须与上方"高风险产品数"一致，且只能引用带 [⚠️高风险] 标记的产品名；未标记产品若提及，须使用"风险较高"或"一般风险"，不得混用。
+- 若"高风险产品数 = 0"，executive_bullets 不得出现"高风险产品"这一提法，可改用"风险最高的 N 个产品"。"""
 
     # Low-sample warning (Fix-5: use window review count, not cumulative ingested_review_rows)
     _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))

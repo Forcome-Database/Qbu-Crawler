@@ -983,6 +983,15 @@ def normalize_deep_report_analytics(analytics):
 
     normalized["kpi_cards"] = kpi_cards
 
+    # ── Sync enriched KPIs into cumulative_kpis (dual mode) ──────────────
+    # build_dual_report_analytics seeds normalized["cumulative_kpis"] with the
+    # raw cum_analytics["kpis"] reference BEFORE this function rebuilds a new
+    # kpis dict and computes health_index / high_risk_count / coverage_rate /
+    # *_display fields. Without this sync, email_full.html.j2 (which prefers
+    # cumulative_kpis) renders empty cards for those derived fields.
+    if "cumulative_kpis" in analytics:
+        normalized["cumulative_kpis"] = dict(normalized["kpis"])
+
     # ── Resolved tooltip dict for templates (table headers, issue stats) ──
     normalized["tooltips"] = {k: _resolve_tooltip(k) for k in METRIC_TOOLTIPS}
 

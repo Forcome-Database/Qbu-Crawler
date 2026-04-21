@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:/Program Files/Git/bin/git.exe\" -C \"E:/Project/ForcomeAiTools/Qbu-Crawler\" status)",
+      "Bash(rm \"E:/Project/ForcomeAiTools/Qbu-Crawler/.git/COMMIT_MSG_TMP\")"
+    ]
+  }
+}

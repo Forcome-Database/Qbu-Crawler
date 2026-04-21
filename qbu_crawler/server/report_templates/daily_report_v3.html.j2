@@ -48,11 +48,12 @@
 
       <!-- Hero: CSS Gauge + Headline -->
       <div class="hero">
-        <div class="gauge-wrapper" data-health="{{ analytics.kpis.health_index or 50 }}">
+        {% set _hi = analytics.kpis.health_index %}
+        <div class="gauge-wrapper" data-health="{{ _hi if _hi is not none else 50 }}">
           <div class="gauge-arc">
             <div class="gauge-fill"></div>
             <div class="gauge-mask"></div>
-            <div class="gauge-value">0</div>
+            <div class="gauge-value">{{ ('%.1f'|format(_hi)) if _hi is not none else '—' }}</div>
           </div>
           <div class="gauge-label">健康指数</div>
           <div class="gauge-scale"><span>0</span><span>50</span><span>100</span></div>

@@ -80,9 +80,14 @@
       fill.style.setProperty('--gauge-color', color);
     }
 
-    // Animate number counter-up
+    // Animate number counter-up (skip if server already rendered target value)
     var numEl = wrapper.querySelector('.gauge-value');
-    if (numEl) animateCounter(numEl, 0, val, 1200, 1);
+    if (numEl) {
+      var preset = parseFloat(numEl.textContent);
+      if (!isFinite(preset) || Math.abs(preset - val) > 0.1) {
+        animateCounter(numEl, 0, val, 1200, 1);
+      }
+    }
   }
 
   /* =========================================================================
