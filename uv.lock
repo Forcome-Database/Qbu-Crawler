@@ -1970,7 +1970,7 @@ wheels = [
 
 [[package]]
 name = "qbu-crawler"
-version = "0.2.1"
+version = "0.3.13"
 source = { editable = "." }
 dependencies = [
     { name = "drissionpage" },

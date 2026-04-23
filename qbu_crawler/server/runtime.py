@@ -65,6 +65,7 @@ class ServerRuntime:
         if self.notifier is not None:
             self.notifier.stop()
         self.translator.stop()
+        self.task_manager.stop()
         self._started = False
 
 

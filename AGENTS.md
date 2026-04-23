@@ -255,9 +255,12 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 
 ## DrissionPage 通用开发注意事项
 
+- **attach 后的 `get_tabs()` / `new_tab()` / `latest_tab.url` 也可能无超时卡死**：`Chromium(port)` 握手成功不代表后续 tab 级 CDP 调用一定健康，尤其是用户数据目录启动、会话恢复出旧标签时。对这些调用要加临时 socket 超时，避免 scraper 构造阶段永远挂在白板
+- **不要默认把真实 Chrome 的 `Preferences` / `Local State` seed 到爬虫 profile**：这类文件会带入启动页、会话恢复、扩展状态等“个人浏览器状态”。爬虫只需要 `Cookies` 继承反爬 cookie，默认应做成 cookie jar，而不是半个真实 profile
 - **不要用 `ele.text` 读取 `<script>` 标签**：DrissionPage 对 script 标签的 `.text` 可能返回空，必须用 `tab.run_js()` 通过 `s.textContent` 提取
 - **不要用共享数据库连接 + `executescript()`**：`executescript()` 会破坏连接的事务状态，导致后续操作出现 FOREIGN KEY 错误。使用独立连接（每次操作开关）
 - **不要每次 scrape 创建/关闭标签页**：`new_tab()` + `close()` 开销大且不必要，用 `latest_tab` 复用即可
+- **清理会话恢复出来的多标签时，必须先新建一个 `about:blank` 再关旧标签**：DrissionPage 的 `latest_tab` 对应 `tab_ids[0]`，直接关闭旧 tabs 可能把当前 page target 一起关掉，随后访问 `latest_tab.url` 会报 `The connection to the page has been disconnected`
 - **不要用 `wait.eles_loaded()` 等动态注入的 script 标签**：对动态注入的 `<script>` 标签不可靠，必须用 `tab.run_js()` 轮询 `document.querySelector()`
 - **不要用 `wait.url_change()` 等翻页**：该方法需要 `text` 参数（URL 片段），翻页时 URL 变化不可预测，应使用 `wait.doc_loaded()`
 - **NO_IMAGES=True 不影响图片 URL 获取**：禁用图片只阻止浏览器下载图片资源，滚动触发懒加载后 img 标签和 src 属性仍会渲染

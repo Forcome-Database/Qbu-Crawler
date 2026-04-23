@@ -161,7 +161,10 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 | `RESTART_EVERY` | `50` | 每 N 个产品重启浏览器防内存泄漏，`0` 禁用（用户数据模式下自动禁用） |
 | `MAX_REVIEWS` | `200` | 单产品最多加载评论数，`0` 不限（大量评论会导致浏览器崩溃） |
 | `CHROME_USER_DATA_PATH` | — | 爬虫 Chrome 的 *专属* user-data-dir，留空用独立浏览器。**不要直接指向用户真实 Chrome profile**——用户 Chrome 会持有 SingletonLock，我们 Popen 的 Chrome 会 IPC 后自退导致死循环。固定调试端口 19222 |
-| `CHROME_USER_DATA_SEED` | — | 用于首次种子复制的真实 Chrome User Data 目录。CHROME_USER_DATA_PATH 目录首次不存在时，仅复制 Default/Cookies、Default/Preferences、Local State（不复制扩展/缓存/历史）。解决专属目录 Akamai `_abck` cookie 冷启动问题 |
+| `CHROME_USER_DATA_SEED` | — | 用于种子复制的真实 Chrome User Data 目录。触发条件：专属目录不存在 **或** 存在但 `Default/Cookies` 缺失/size=0（自愈：上次 seed 因源 Chrome 锁 Cookies 失败时会重试）。仅复制 Default/Cookies、Default/Preferences、Local State。解决专属目录 Akamai `_abck` cookie 冷启动问题 |
+| `CHROME_PROFILE_ROT_THRESHOLD` | `2` | 专属 profile 腐化自愈阈值：连续 N 次被封或 Chrome 启动失败 → 下次启动前自动 `rmtree` 专属目录并从 SEED 重建。streak 记在 `{CHROME_USER_DATA_PATH}/.qbu_rot_streak`，成功解封时清零。设 0 禁用 |
+| `BASSPRO_REQUEST_DELAY_MIN/MAX` | `8/18` | basspro 专属请求间隔（秒），覆盖全局 `REQUEST_DELAY=(1,3)`。针对 Akamai session 层检测，用真人级节奏降低被封概率 |
+| `BASSPRO_SESSION_REFRESH_EVERY` | `4` | 每 N 个产品后回 basspro 首页停留 5-8 秒，触发 Akamai bm-loader 的 sensor POST 刷新 `_abck`；设 0 禁用 |
 | `PROXY_API_URL` | — | 代理池 API 地址（如 `https://white.1024proxy.com/white/api?region=US&num=1&time=10&format=1&type=txt`），留空不使用。遇到 Access Denied 时自动获取代理 IP 重试 |
 | `PROXY_MAX_RETRIES` | `3` | 单个 URL 最大代理轮换次数，每次轮换重启浏览器 |
 
@@ -309,6 +312,7 @@ KPI Delta 计算：
 - `SITE_LOAD_MODE`：页面加载模式（`eager` / `normal`）
 - `SITE_NEEDS_USER_DATA`：是否需要 Chrome 用户数据模式（Akamai 站点）
 - `SITE_RESTART_SAFE`：浏览器重启是否安全（`False` 则跳过 `RESTART_EVERY` 定期重启）
+- `SITE_REQUEST_DELAY`：站点专属请求间隔 `(min, max)` 秒，覆盖全局 `REQUEST_DELAY`；用于严格反爬站点（如 basspro 默认 `(8,18)`）
 
 `_get_page()` 根据属性自动选择策略：
 - **用户数据 + 代理**（`SITE_NEEDS_USER_DATA=True`）：Chrome 同时使用 `--user-data-dir` 和 `--proxy-server`，预热完成 Akamai challenge 后再爬取，代理轮换时保留用户数据。`_user_data_lock` 保证并发安全
@@ -340,6 +344,7 @@ KPI Delta 计算：
 - **Cloudflare bot 检测需要额外配置**：使用 Cloudflare 的站点（如 waltons.com）会检测 `navigator.webdriver` 属性。必须添加 `--disable-blink-features=AutomationControlled` 并设置真实 User-Agent 才能绕过。同时需要 `normal` 加载模式让 Cloudflare JS challenge 有机会执行
 - **Akamai 反爬比 Cloudflare 更严格**：Akamai（如 basspro.com）除了 JS 检测外还做 TLS 指纹（JA3/JA4）和 CDP 协议检测，`--disable-blink-features` 不够。解决方案：设置 `CHROME_USER_DATA_PATH`（*专属*目录，不是用户真实 profile）+ `CHROME_USER_DATA_SEED`（首次种子），从真实 profile 继承 `_abck` cookie。固定调试端口 19222，subprocess 预启动
 - **⚠ 不能让爬虫 Chrome 与用户个人 Chrome 共享 user-data-dir**：Chrome 的 SingletonLock 按 user-data-dir 维度持有。用户 Chrome（即便关了窗口也可能后台保持运行）持锁时，subprocess.Popen 的新 Chrome 会把命令 IPC 给用户 Chrome 后自己退出，调试端口永远起不来，采集进入死循环。必须用专属目录
+- **⚠ 清僵尸 Chrome 必须按 `--user-data-dir` 匹配而不是 `--remote-debugging-port`**：Windows 上 Chrome 的 Single-Instance 锁是**命名互斥量**（key=hash(user-data-dir)），任何 chrome.exe 进程（含 renderer/utility/gpu/service_worker 子进程）持有互斥量都会让新 Chrome IPC 自退。主进程被杀后子进程在 Windows 可能 "ghost parent"，`psutil.Process.children()` 遍历不到——必须按 `--user-data-dir` cmdline 枚举所有 chrome.exe 一网打尽。路径对比需 `os.path.normcase + normpath + abspath` 处理 `C:\` vs `c:/` vs 短路径名变体
 - **DrissionPage `set_user_data_path()` 在大目录下启动超时**：Chrome 用户数据目录可能数 GB，DrissionPage 的内部连接超时（几秒）不够。解决方案：用 `subprocess.Popen` 预启动 Chrome，轮询等待调试端口就绪（最多 20 秒），再用 `Chromium(port)` 接管
 - **TrustSpot 的翻页按钮永远存在**：TrustSpot 的 `a.next-page` 在最后一页后不会消失，而是循环回第一页。不能用按钮是否存在判断终止，必须用「本页无新增评论（全部去重命中）」来检测已翻完
 - **TrustSpot 的 `.trustspot-widget-review-block` 同时包含评论和 Q&A**：必须过滤掉无 `.comment-box` 或含 `.ts-qa-wrapper` 的 block，否则会采集到空正文的问答条目

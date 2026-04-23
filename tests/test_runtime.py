@@ -29,7 +29,7 @@ def test_server_runtime_starts_and_stops_components():
 
     runtime = ServerRuntime(
         translator=translator,
-        task_manager=object(),
+        task_manager=MagicMock(),
         notifier=notifier,
         workflow_worker=workflow,
         daily_scheduler=scheduler,

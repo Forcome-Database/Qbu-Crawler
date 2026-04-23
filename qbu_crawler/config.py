@@ -69,48 +69,95 @@ BV_POLL_INTERVAL = 0.5  # BV 数据轮询间隔（秒）
 # 会从 seed 目录只复制关键 cookie 文件（不复制扩展/缓存/历史，避免 GB 级复制）。
 CHROME_USER_DATA_PATH = os.getenv("CHROME_USER_DATA_PATH", "")  # 留空则用独立浏览器
 CHROME_USER_DATA_SEED = os.getenv("CHROME_USER_DATA_SEED", "")  # 留空则不做种子复制
+CHROME_USER_DATA_COPY_PREFERENCES = os.getenv("CHROME_USER_DATA_COPY_PREFERENCES", "false").lower() == "true"
+CHROME_USER_DATA_COPY_LOCAL_STATE = os.getenv("CHROME_USER_DATA_COPY_LOCAL_STATE", "false").lower() == "true"
+CHROME_USER_DATA_SYNC_FILES = [
+    ("Default", "Cookies"),
+    ("Default", "Cookies-journal"),
+]
+if CHROME_USER_DATA_COPY_PREFERENCES:
+    CHROME_USER_DATA_SYNC_FILES.append(("Default", "Preferences"))
+if CHROME_USER_DATA_COPY_LOCAL_STATE:
+    CHROME_USER_DATA_SYNC_FILES.append(("", "Local State"))
+
+
+def _chrome_profile_needs_seed() -> bool:
+    """判断专属 profile 是否需要 seed。
+    - 目录不存在 → 首次初始化，需要
+    - 目录存在但 Default/Cookies 缺失或 size=0 → 上次 seed 失败（如源 Chrome 正在跑时
+      Cookies 被锁 → copy2 抛异常被吞），原逻辑的 isdir 短路会让 profile 永久缺 _abck
+      cookie；这里兜底重 seed
+    """
+    if not os.path.isdir(CHROME_USER_DATA_PATH):
+        return True
+    cookies_path = os.path.join(CHROME_USER_DATA_PATH, "Default", "Cookies")
+    try:
+        return not os.path.isfile(cookies_path) or os.path.getsize(cookies_path) == 0
+    except OSError:
+        return True
 
 
 def _seed_chrome_user_data():
-    """首次运行时从 CHROME_USER_DATA_SEED 复制关键 cookie/preferences 到专属目录。
-    只复制 Default/Cookies*、Default/Local State、Default/Preferences，
-    避免整个 profile（GB 级）复制带来的 I/O 爆炸和磁盘占用。"""
+    """从 CHROME_USER_DATA_SEED 复制关键文件到专属目录。
+    默认只复制 Cookies，避免把真实 Chrome 的会话/启动状态带进爬虫专属 profile。
+    有自愈能力：目录存在但 Cookies 缺失时会重 seed（见 _chrome_profile_needs_seed）。
+    """
+    import logging
     import shutil
+    log = logging.getLogger(__name__)
     if not CHROME_USER_DATA_PATH or not CHROME_USER_DATA_SEED:
         return
-    if os.path.isdir(CHROME_USER_DATA_PATH):
-        return  # 已存在，不重复种子
-    if not os.path.isdir(CHROME_USER_DATA_SEED):
+    if not _chrome_profile_needs_seed():
         return
-    src_default = os.path.join(CHROME_USER_DATA_SEED, "Default")
+    if not os.path.isdir(CHROME_USER_DATA_SEED):
+        log.error(
+            f"[Chrome] seed 源目录不存在: {CHROME_USER_DATA_SEED}，"
+            "无法初始化 _abck cookie，basspro 几乎必然被 Akamai 拒绝"
+        )
+        return
     dst_default = os.path.join(CHROME_USER_DATA_PATH, "Default")
     os.makedirs(dst_default, exist_ok=True)
-    essentials = [
-        ("Default", "Cookies"),
-        ("Default", "Cookies-journal"),
-        ("Default", "Preferences"),
-        ("", "Local State"),
-    ]
     copied = []
-    for sub, name in essentials:
+    errors = []
+    cookies_ok = False
+    for sub, name in CHROME_USER_DATA_SYNC_FILES:
         src = os.path.join(CHROME_USER_DATA_SEED, sub, name) if sub else os.path.join(CHROME_USER_DATA_SEED, name)
         dst = os.path.join(CHROME_USER_DATA_PATH, sub, name) if sub else os.path.join(CHROME_USER_DATA_PATH, name)
-        if os.path.isfile(src):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            try:
-                shutil.copy2(src, dst)
-                copied.append(name)
-            except Exception:
-                pass
+        if not os.path.isfile(src):
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            shutil.copy2(src, dst)
+            copied.append(name)
+            if name == "Cookies":
+                cookies_ok = True
+        except Exception as e:
+            errors.append((name, str(e)))
     if copied:
-        import logging
-        logging.getLogger(__name__).warning(
+        log.warning(
             f"[Chrome] 已从 seed 目录 {CHROME_USER_DATA_SEED} 向专属目录 "
             f"{CHROME_USER_DATA_PATH} 复制关键文件: {copied}"
+        )
+    if errors:
+        # 静默吞异常会让 profile 永久残缺；记 warning 让用户看得到、但不当紧急事件
+        for name, msg in errors:
+            log.warning(f"[Chrome] seed 复制 {name} 失败（通常因源 Chrome 持写锁）: {msg}")
+    if not cookies_ok:
+        # 生产观察：seed Cookies 失败属常态（源 Chrome 通常在跑），
+        # 空白 profile + Akamai 自助 challenge 依然稳定。
+        # 仅在 rot streak 自愈也无效时才需人工介入关闭真实 Chrome。
+        log.info(
+            "[Chrome] Default/Cookies 未 seed（源 Chrome 通常持写锁）。"
+            "空白 profile + Akamai 自助 challenge 已足够稳定，无需额外操作。"
         )
 
 
 _seed_chrome_user_data()
+
+# 专属 profile 连续失败阈值：>= 该值则下次启动前自动删除 profile 并从 SEED 重建
+# 每次失败 = 在 _get_page_user_data 里轮完所有代理仍无法解封，说明 _abck 已彻底失效
+# 设 0 禁用自愈，保留原行为
+CHROME_PROFILE_ROT_THRESHOLD = int(os.getenv("CHROME_PROFILE_ROT_THRESHOLD", "2"))
 
 # 代理池 API（遇到反爬封锁时自动获取代理 IP）
 # 示例: https://white.1024proxy.com/white/api?region=US&num=1&time=10&format=1&type=txt
@@ -121,6 +168,16 @@ PROXY_SITES = {s.strip() for s in os.getenv("PROXY_SITES", "").split(",") if s.s
 
 # 反爬配置
 REQUEST_DELAY = (1, 3)  # 请求间随机延迟范围（秒），设为 None 禁用
+
+# basspro 专属配置：Akamai session 层检测的针对性调整
+# 调大 REQUEST_DELAY + 中途回首页刷 _abck sensor data，降低 session 层升级 challenge 概率
+BASSPRO_REQUEST_DELAY = (
+    int(os.getenv("BASSPRO_REQUEST_DELAY_MIN", "8")),
+    int(os.getenv("BASSPRO_REQUEST_DELAY_MAX", "18")),
+)
+# 每 N 个产品后回首页停留，触发 Akamai bm-loader 的 sensor POST 刷新 _abck
+# 设 0 禁用
+BASSPRO_SESSION_REFRESH_EVERY = int(os.getenv("BASSPRO_SESSION_REFRESH_EVERY", "4"))
 
 # 稳定性配置
 RESTART_EVERY = 50  # 每抓取 N 个产品后重启浏览器，防止内存泄漏，0 禁用

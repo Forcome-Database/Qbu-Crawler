@@ -149,6 +149,25 @@ class TaskManager:
         # to avoid race conditions between API thread and worker thread.
         return True
 
+    def stop(self):
+        """优雅关停：服务 lifespan shutdown 时调用。
+        - 正在跑的任务：set flag，让 worker 在当前 URL 完成后自然退出
+        - 未开始的 pending 任务：DB 状态改 cancelled（worker 不会被调度到，无法自己更新）
+        - executor.shutdown(wait=False, cancel_futures=True)：丢弃队列里未取的 future，
+          已 running 的让它们观察 flag 退出；不等 join（解释器 atexit 会兜底 join）。
+        """
+        for task_id, task in list(self._tasks.items()):
+            if task.status not in (TaskStatus.pending, TaskStatus.running):
+                continue
+            flag = self._cancel_flags.get(task_id)
+            if flag:
+                flag.set()
+            if task.status == TaskStatus.pending:
+                task.status = TaskStatus.cancelled
+                task.finished_at = config.now_shanghai().isoformat()
+                self._persist(task)
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
     def get_task(self, task_id: str) -> dict | None:
         task = self._tasks.get(task_id)
         if task:
@@ -183,8 +202,11 @@ class TaskManager:
                     if scraper is None or get_site_key(url) != getattr(scraper, '_current_site', None):
                         if scraper:
                             scraper.close()
+                        site_key = get_site_key(url)
+                        logger.info(f"[Task {task_id}] 创建 scraper: site={site_key}, url={url}")
                         scraper = get_scraper(url)
-                        scraper._current_site = get_site_key(url)
+                        scraper._current_site = site_key
+                        logger.info(f"[Task {task_id}] scraper 就绪: site={site_key}, url={url}")
 
                     effective_review_limit = self._resolve_review_limit(
                         url,
@@ -284,7 +306,11 @@ class TaskManager:
 
                 try:
                     if scraper is None:
+                        site_key = get_site_key(url)
+                        logger.info(f"[Task {task_id}] 创建 scraper: site={site_key}, url={url}")
                         scraper = get_scraper(url)
+                        scraper._current_site = site_key
+                        logger.info(f"[Task {task_id}] scraper 就绪: site={site_key}, url={url}")
                     effective_review_limit = self._resolve_review_limit(url, requested_review_limit)
                     data = scraper.scrape(url, review_limit=effective_review_limit)
                     product = data.get("product", {})

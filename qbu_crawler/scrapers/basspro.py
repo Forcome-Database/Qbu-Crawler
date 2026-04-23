@@ -4,7 +4,10 @@ import re
 import time
 
 from qbu_crawler.scrapers.base import BaseScraper
-from qbu_crawler.config import BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, PAGE_LOAD_TIMEOUT
+from qbu_crawler.config import (
+    BV_WAIT_TIMEOUT, BV_POLL_INTERVAL, PAGE_LOAD_TIMEOUT,
+    BASSPRO_REQUEST_DELAY, BASSPRO_SESSION_REFRESH_EVERY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +17,35 @@ class BassProScraper(BaseScraper):
     SITE_LOAD_MODE = "normal"       # Akamai challenge 需要完整加载
     SITE_NEEDS_USER_DATA = True     # 需要用户数据绕过 Akamai
     SITE_RESTART_SAFE = False       # 重启会丢 _abck cookie
+    SITE_REQUEST_DELAY = BASSPRO_REQUEST_DELAY  # 真人级节奏（默认 8-18s）
+
+    def _maybe_refresh_session(self):
+        """每 N 个产品后回首页停留，触发 Akamai bm-loader 的 sensor data POST，
+        把 `_abck` session 标志位从可能的 `~-1~`（需要 re-challenge）刷回 `~0~`。
+
+        背景：Akamai 的 session 层检测会因"同一 session 连续访问产品页但从未
+        重新触发 bm-loader 完整流程" 升级 challenge；表现为第 N+1 个 URL 突然被封。
+        首页访问让 bm-loader 重新跑 sensor 收集（通常 5-10s 内完成 POST）。"""
+        if BASSPRO_SESSION_REFRESH_EVERY <= 0:
+            return
+        if self._scrape_count == 0 or self._scrape_count % BASSPRO_SESSION_REFRESH_EVERY != 0:
+            return
+        logger.info(
+            f"[抗封] 已抓 {self._scrape_count} 个产品，回首页刷新 _abck sensor..."
+        )
+        tab = self.browser.latest_tab
+        try:
+            tab.get("https://www.basspro.com/")
+            # 模拟阅读：滚动一下、停 5-8s，让 bm-loader 有时间 POST sensor data
+            tab.run_js("window.scrollBy(0, 400);")
+            tab.wait(3, 5)
+            tab.run_js("window.scrollBy(0, -200);")
+            tab.wait(4, 7)
+            if self._is_blocked(tab):
+                logger.warning("[抗封] 首页自身被封，后续 URL 可能触发代理轮换")
+        except Exception as e:
+            # 首页异常不阻塞主流程；若后续 URL 真被封，走原有降级路径
+            logger.warning(f"[抗封] 首页刷新异常（继续抓取）: {e}")
 
     def _warm_up(self):
         """访问 basspro 首页完成 Akamai challenge，建立有效 _abck cookie"""
@@ -23,8 +55,10 @@ class BassProScraper(BaseScraper):
         tab.wait(3, 5)
         if self._is_blocked(tab):
             logger.warning("[预热] 首页访问被封锁，_abck cookie 可能无效")
+            return False
         else:
             logger.info("[预热] Akamai challenge 完成")
+            return True
 
     def _dismiss_age_gate(self, tab):
         """检测并关闭年龄验证弹窗（部分产品页会触发，如枪械/弹药相关）
@@ -72,6 +106,7 @@ class BassProScraper(BaseScraper):
             pass  # 无弹窗或异常，正常继续
 
     def scrape(self, url: str, review_limit: int | None = None) -> dict:
+        self._maybe_refresh_session()
         self._maybe_restart_browser()
 
         tab = self._get_page(url)

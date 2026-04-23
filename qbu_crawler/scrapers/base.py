@@ -1,17 +1,20 @@
 import json
 import logging
 import os
+import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from urllib.parse import urlparse
 
 from DrissionPage import Chromium, ChromiumOptions
 from qbu_crawler.config import (
     HEADLESS, PAGE_LOAD_TIMEOUT, NO_IMAGES,
     RETRY_TIMES, RETRY_INTERVAL, REQUEST_DELAY, RESTART_EVERY,
-    CHROME_USER_DATA_PATH,
+    CHROME_USER_DATA_PATH, CHROME_PROFILE_ROT_THRESHOLD, CHROME_USER_DATA_SYNC_FILES,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,13 +65,21 @@ def _find_chrome() -> str:
 
 
 class BaseScraper:
-    # 用户数据模式下 Chrome 使用的固定调试端口
-    _USER_DATA_PORT = 19222
-
     # ── 站点级属性（子类可覆盖）──
     SITE_LOAD_MODE: str = "eager"       # 页面加载模式
     SITE_NEEDS_USER_DATA: bool = False  # 是否需要 Chrome 用户数据模式
     SITE_RESTART_SAFE: bool = True      # 浏览器重启是否安全（不丢关键 cookie）
+    # 站点专属请求间隔（秒），None 时用全局 REQUEST_DELAY
+    # 用途：basspro 等严格反爬站点需要更长停顿模拟真人节奏
+    SITE_REQUEST_DELAY: tuple[int, int] | None = None
+
+    # ⚠ 架构关键（2026-04-22 重构）：
+    # 废弃固定 _USER_DATA_PORT=19222 + 共享 CHROME_USER_DATA_PATH 的模型。
+    # Windows Chrome 的 Single-Instance 互斥量 key = hash(user-data-dir)，
+    # 跨 session 残留的 Chrome 进程（含子进程）持有互斥量，新 Popen IPC 自退。
+    # 无论怎么 kill，互斥量释放时机不可控（Windows handle 继承 / Chrome 重生等）。
+    # 根治方案：每个 scraper 实例用唯一 user-data-dir + 随机端口，
+    # 互斥量 key 不同 → 完全不存在冲突可能，kill/lock 路径都不再是关键路径。
     _user_data_lock = threading.Lock()
 
     def __init__(self):
@@ -77,12 +88,95 @@ class BaseScraper:
         self._use_user_data = bool(CHROME_USER_DATA_PATH) and self.SITE_NEEDS_USER_DATA
         self._proxy = None  # 当前使用的代理 (ip:port)
         self._warmed_up = False
+        self._session_profile_dirty = False
+        # Session 隔离：每实例独立 user-data-dir + port
+        self._session_user_data_dir: str | None = None
+        self._session_port: int | None = None
         if self._use_user_data:
             self._proxy = self._get_initial_proxy()
-            self.browser = self._launch_with_user_data(proxy=self._proxy)
+            self._cleanup_stale_session_profiles()
+            self._session_user_data_dir = self._allocate_session_profile()
+            self._session_port = self._allocate_free_port()
+            logger.info(
+                f"[Chrome] 准备启动独立实例: port={self._session_port}, "
+                f"user-data-dir={self._session_user_data_dir}, proxy={'on' if self._proxy else 'off'}"
+            )
+            self.browser = self._launch_with_user_data(
+                user_data_dir=self._session_user_data_dir,
+                port=self._session_port,
+                proxy=self._proxy,
+            )
+            logger.info(
+                f"[Chrome] 独立实例启动完成: port={self._session_port}, "
+                f"user-data-dir={self._session_user_data_dir}"
+            )
         else:
             self.browser = self._create_browser()
         self._scrape_count = 0
+
+    @classmethod
+    def _cleanup_stale_session_profiles(cls):
+        """清扫历史残留的 _sess_* 目录（PID 已死的）。
+        上次 Ctrl+C 没跑到 close() 时会留下 session 目录，下次启动清掉。"""
+        if not CHROME_USER_DATA_PATH:
+            return
+        parent = os.path.dirname(CHROME_USER_DATA_PATH) or "."
+        base_name = os.path.basename(CHROME_USER_DATA_PATH)
+        prefix = f"{base_name}_sess_"
+        if not os.path.isdir(parent):
+            return
+        try:
+            import psutil
+            have_psutil = True
+        except ImportError:
+            have_psutil = False
+        for name in os.listdir(parent):
+            if not name.startswith(prefix):
+                continue
+            # 从目录名解析 PID：{base}_sess_{pid}_{uuid}
+            try:
+                pid = int(name[len(prefix):].split('_')[0])
+            except (ValueError, IndexError):
+                continue
+            if have_psutil and psutil.pid_exists(pid):
+                continue  # PID 活着，可能是兄弟 scraper，保留
+            stale_dir = os.path.join(parent, name)
+            try:
+                shutil.rmtree(stale_dir, ignore_errors=True)
+                logger.info(f"[Chrome] 清理陈旧 session（PID {pid} 已死）: {name}")
+            except Exception as e:
+                logger.warning(f"[Chrome] 清理陈旧 session {name} 失败: {e}")
+
+    @classmethod
+    def _allocate_session_profile(cls) -> str:
+        """创建本实例专属的 user-data-dir，从 CHROME_USER_DATA_PATH 复制关键文件。
+        目录唯一化 → Chrome 命名互斥量 key 唯一 → 无跨 session 冲突可能。"""
+        parent = os.path.dirname(CHROME_USER_DATA_PATH) or "."
+        base_name = os.path.basename(CHROME_USER_DATA_PATH)
+        session_id = f"sess_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+        session_dir = os.path.join(parent, f"{base_name}_{session_id}")
+        os.makedirs(os.path.join(session_dir, "Default"), exist_ok=True)
+        if os.path.isdir(CHROME_USER_DATA_PATH):
+            for sub, name in CHROME_USER_DATA_SYNC_FILES:
+                rel = os.path.join(sub, name) if sub else name
+                src = os.path.join(CHROME_USER_DATA_PATH, rel)
+                dst = os.path.join(session_dir, rel)
+                if not os.path.isfile(src):
+                    continue
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                try:
+                    shutil.copy2(src, dst)
+                except Exception as e:
+                    logger.warning(f"[Chrome] session 复制 {rel} 失败: {e}")
+        logger.info(f"[Chrome] 本实例独立 user-data-dir: {session_dir}")
+        return session_dir
+
+    @staticmethod
+    def _allocate_free_port() -> int:
+        """OS 随机分配空闲端口"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
 
     def _create_browser(self, proxy: str | None = None) -> Chromium:
         """创建浏览器实例，可选代理"""
@@ -90,6 +184,15 @@ class BaseScraper:
         if proxy:
             options.set_argument(f'--proxy-server=http://{proxy}')
         return Chromium(options)
+
+    @staticmethod
+    def _attach_browser(port: int, ws_timeout: float = 5.0) -> Chromium:
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(ws_timeout)
+        try:
+            return Chromium(port)
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
     def _build_options(self) -> ChromiumOptions:
         options = ChromiumOptions()
@@ -147,10 +250,12 @@ class BaseScraper:
 
     @classmethod
     def _find_chrome_pids_by_cmdline(cls, port: int) -> list[int]:
-        """按 cmdline 精确识别用户数据 Chrome 进程。
-        关键：Chrome 关闭调试器 server 后（"后台保持运行"机制），port 不再 LISTENING，
-        但 chrome.exe 进程仍活着、cmdline 里仍有 --remote-debugging-port=N 和
-        --user-data-dir=...，这是唯一可靠的识别方式。"""
+        """按 cmdline 精确识别用户数据 Chrome **主进程**（严格：port + user-data-dir 都要匹配）。
+        用途：_launch_with_user_data_locked 里判断"我们 Popen 的那个主进程是否还活着"。
+
+        ⚠ 注意：这个函数**不会**匹配 renderer / utility / gpu-process 等子进程
+        （子进程只有 --user-data-dir 没有 --remote-debugging-port）。清僵尸请用
+        _find_chrome_pids_by_user_data，否则会放过持 Single-Instance 互斥量的子进程。"""
         pids = []
         try:
             import psutil
@@ -175,40 +280,81 @@ class BaseScraper:
         return pids
 
     @classmethod
-    def _kill_user_data_chrome(cls, port: int):
-        """关闭占用指定调试端口的 Chrome 进程。
-        三层策略：
-          1. CDP force=True 路径（走 SystemInfo.getProcessInfo + psutil.kill）
-          2. 按 cmdline 识别 chrome.exe 并 psutil.kill（补"后台保持运行"漏网）
-          3. netstat 按端口 LISTENING 兜底（理论上 1/2 都失败才用得到）
-        """
-        # 1. CDP force=True，让 DrissionPage 自己通过 CDP SystemInfo 拿 PID 列表杀
+    def _find_chrome_pids_by_user_data(cls, user_data_dir: str | None = None) -> list[int]:
+        """按 --user-data-dir 宽匹配所有 chrome.exe（主进程 + 所有子进程 + 后台进程）。
+        默认匹配 CHROME_USER_DATA_PATH；传参时匹配指定目录（本 session 场景）。
+
+        路径规范化处理 C:\\ vs c:/ vs 短路径名 vs 尾部斜杠等 Windows 变体。"""
+        pids = []
+        target_dir = user_data_dir or CHROME_USER_DATA_PATH
+        if not target_dir:
+            return pids
         try:
-            browser = Chromium(port)
-            browser.quit(force=True, timeout=5)
+            import psutil
+        except ImportError:
+            return pids
+        try:
+            target = os.path.normcase(os.path.normpath(os.path.abspath(target_dir)))
         except Exception:
+            return pids
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
-                browser = Chromium(port)
-                browser.quit()
+                name = (proc.info.get('name') or '').lower()
+                if name not in ('chrome.exe', 'chrome'):
+                    continue
+                cmdline = proc.info.get('cmdline') or []
+                matched = False
+                for arg in cmdline:
+                    if not arg.startswith('--user-data-dir='):
+                        continue
+                    path_val = arg.split('=', 1)[1].strip().strip('"').strip("'")
+                    try:
+                        arg_path = os.path.normcase(
+                            os.path.normpath(os.path.abspath(path_val))
+                        )
+                    except Exception:
+                        continue
+                    if arg_path == target:
+                        matched = True
+                        break
+                if matched:
+                    pids.append(proc.info['pid'])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return pids
+
+    @classmethod
+    def _kill_user_data_chrome(cls, port: int, user_data_dir: str | None = None):
+        """杀指定 user-data-dir 关联的 Chrome 进程。
+        当每 session 独立目录时，本函数只杀本 session 内的 Chrome（代理轮换时）。
+        不再用于清跨 session 僵尸（那是架构层面通过唯一目录解决的）。"""
+        # 1. CDP graceful quit —— 仅在端口有 Chrome 时
+        if cls._find_pids_on_port(port):
+            try:
+                browser = cls._attach_browser(port)
+                browser.quit(force=True, timeout=5)
             except Exception:
                 pass
 
-        # 2. psutil 按 cmdline 找。处理"CDP 已关但 Chrome 进程因后台机制仍活着"的场景
+        # 2. psutil 按 user_data_dir 匹配 kill
+        target_dir = user_data_dir or CHROME_USER_DATA_PATH
+        if not target_dir:
+            return
         try:
             import psutil
             for attempt in range(3):
-                pids = cls._find_chrome_pids_by_cmdline(port)
+                pids = cls._find_chrome_pids_by_user_data(target_dir)
                 if not pids:
                     break
                 for pid in pids:
-                    logger.warning(f"[启动] 按 cmdline 命中 Chrome PID {pid}，kill (attempt {attempt + 1})")
                     try:
                         p = psutil.Process(pid)
-                        # 先 kill 子进程树，再 kill 主进程
                         for child in p.children(recursive=True):
                             try: child.kill()
                             except Exception: pass
                         p.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
                     except Exception as e:
                         logger.warning(f"[启动] psutil kill PID {pid} 失败: {e}")
                 time.sleep(0.5)
@@ -238,64 +384,127 @@ class BaseScraper:
             logger.error(f"[启动] 强杀后端口 {port} 仍被 PID {still} 占用")
 
     @staticmethod
-    def _clean_singleton_locks():
-        """清理用户数据目录下的 Chrome 单实例锁文件。
-        Chrome 异常退出后，SingletonLock/SingletonCookie/SingletonSocket 可能残留，
-        导致新 Chrome 进程把命令 IPC 给"锁持有者"后立刻退出（即使持有者已死）。
-        """
-        if not CHROME_USER_DATA_PATH:
+    def _clean_singleton_locks(user_data_dir: str | None = None):
+        """清理指定 user-data-dir 下的 Chrome 单实例锁文件。默认清 CHROME_USER_DATA_PATH。
+        Chrome 异常退出后锁文件残留 → 新 Chrome IPC 给"锁持有者"立刻退出。
+        注意：文件级清锁只解决部分场景；Windows 命名互斥量冲突不是清文件能解决的，
+        根治在于每 session 用独立 user-data-dir（互斥量 key 不同）。"""
+        target = user_data_dir or CHROME_USER_DATA_PATH
+        if not target:
             return
         for name in ('SingletonLock', 'SingletonCookie', 'SingletonSocket'):
-            path = os.path.join(CHROME_USER_DATA_PATH, name)
+            path = os.path.join(target, name)
             try:
                 if os.path.lexists(path):
                     os.remove(path)
-                    logger.info(f"[启动] 清理残留 {name}")
             except Exception as e:
                 logger.warning(f"[启动] 清理 {name} 失败: {e}")
 
-    @classmethod
-    def _launch_with_user_data(cls, proxy: str | None = None) -> Chromium:
-        """使用 Chrome 用户数据启动浏览器，可选代理。
-        Chrome 支持 --user-data-dir + --proxy-server 同时使用，
-        代理通过 HTTP CONNECT 隧道，JA3 指纹不变。
+    # ── Profile 腐化自愈 ──
+    _ROT_STREAK_FILE = ".qbu_rot_streak"
 
-        用 _user_data_lock 串行化启动流程，防多个用户数据 scraper 并发 init
-        时互相踩脚（第一个 Popen 刚起来就被第二个 kill 掉）。"""
+    @classmethod
+    def _rot_streak_path(cls) -> str | None:
+        if not CHROME_USER_DATA_PATH:
+            return None
+        return os.path.join(CHROME_USER_DATA_PATH, cls._ROT_STREAK_FILE)
+
+    @classmethod
+    def _read_rot_streak(cls) -> int:
+        path = cls._rot_streak_path()
+        if not path:
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return int((f.read() or "0").strip())
+        except (FileNotFoundError, ValueError, OSError):
+            return 0
+
+    @classmethod
+    def _write_rot_streak(cls, n: int):
+        path = cls._rot_streak_path()
+        if not path:
+            return
+        try:
+            os.makedirs(CHROME_USER_DATA_PATH, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(str(max(0, n)))
+        except OSError as e:
+            logger.warning(f"[profile] 写 rot streak 失败: {e}")
+
+    @classmethod
+    def _maybe_rebuild_rotten_profile(cls):
+        """专属 profile 连续 N 次用完所有代理仍无法解封 → 认定 _abck 腐化，
+        删目录让下次 _seed_chrome_user_data 从 SEED 重建。
+        调用点：_launch_with_user_data_locked 入口，所以删目录时 Chrome 尚未起。
+        在 _user_data_lock 持锁下调用，无并发问题。"""
+        if not CHROME_USER_DATA_PATH or CHROME_PROFILE_ROT_THRESHOLD <= 0:
+            return
+        streak = cls._read_rot_streak()
+        if streak < CHROME_PROFILE_ROT_THRESHOLD:
+            return
+        logger.error(
+            f"[profile] 检测到专属 profile 连续 {streak} 次被封（>= 阈值 "
+            f"{CHROME_PROFILE_ROT_THRESHOLD}），判定为腐化。"
+            f"删除 {CHROME_USER_DATA_PATH} 并从 SEED 重建..."
+        )
+        # 清理 base 目录下 Chrome 相关进程；session 目录是独立的，不受影响
+        # 注意：base 目录本身不应该有 Chrome 在用（session 都是 base_sess_*），
+        # 但以防用户手动用过 base，防御性 kill 一下
+        cls._kill_user_data_chrome(port=0, user_data_dir=CHROME_USER_DATA_PATH)
+        try:
+            shutil.rmtree(CHROME_USER_DATA_PATH, ignore_errors=False)
+        except Exception as e:
+            logger.error(
+                f"[profile] 删除腐化 profile 失败: {e}（可能仍有 Chrome 进程占用，"
+                "下次启动再试）"
+            )
+            return
+        # 重新 seed：_seed_chrome_user_data 自身做目录存在性检查
+        from qbu_crawler import config as _cfg
+        _cfg._seed_chrome_user_data()
+        logger.warning("[profile] 腐化 profile 已重建，streak 计数自动归零（文件已被删除）")
+
+    @classmethod
+    def _launch_with_user_data(
+        cls,
+        user_data_dir: str,
+        port: int,
+        proxy: str | None = None,
+    ) -> Chromium:
+        """使用独立 user-data-dir + 独立 port 启动 Chrome。
+        每 scraper 实例一套（唯一目录 + 随机端口），根治 SingletonLock 跨 session 冲突。
+        锁保留用于同实例内代理轮换时的串行启停。"""
         with cls._user_data_lock:
-            return cls._launch_with_user_data_locked(proxy=proxy)
+            return cls._launch_with_user_data_locked(
+                user_data_dir=user_data_dir, port=port, proxy=proxy,
+            )
 
     @classmethod
-    def _launch_with_user_data_locked(cls, proxy: str | None = None) -> Chromium:
-        port = cls._USER_DATA_PORT
+    def _launch_with_user_data_locked(
+        cls,
+        user_data_dir: str,
+        port: int,
+        proxy: str | None = None,
+    ) -> Chromium:
+        # 腐化自愈（影响 seed 源 CHROME_USER_DATA_PATH，下次 allocate_session 时从新 base 复制）
+        cls._maybe_rebuild_rotten_profile()
 
-        if proxy:
-            # 代理是启动参数，切换代理必须重启 Chrome
-            cls._kill_user_data_chrome(port)
-        else:
-            # 无代理时尝试连接已运行的 Chrome。
-            # ⚠ 关键：DrissionPage 的 Chromium(port) 在端口空闲时会自动拉一个白板 Chrome
-            # （走 DrissionPage 默认参数，完全忽略我们的 --user-data-dir），导致每次启动
-            # 都多一次无意义的白板 Chrome + probe 失败 fallthrough。
-            # 因此先 netstat 确认有 LISTENING 再进复用分支；空端口直接 fall through
-            # 到下面的 subprocess 启动分支，用我们自己的 user-data-dir 参数拉 Chrome。
-            if cls._find_pids_on_port(port):
-                try:
-                    browser = Chromium(port)
-                    cls._cleanup_tabs(browser)
-                    if not cls._probe_browser_alive(browser):
-                        raise RuntimeError("复用的 Chrome 健康探测失败（僵尸进程）")
-                    return browser
-                except Exception as e:
-                    logger.warning(f"[启动] 端口 {port} 复用失败，将重启 Chrome: {e}")
-                    cls._kill_user_data_chrome(port)
+        # user_data_dir 是本 session 专属目录（首次调用由 _allocate_session_profile 创建；
+        # 代理切换时复用该目录）。**没有跨 session 冲突**，无需 reuse 分支、无需 kill 旧 Chrome。
+        # 仅为防御性：如果同一 session 内之前 Popen 的 Chrome 还在跑（如代理轮换），先杀它。
+        cls._kill_user_data_chrome(port=port, user_data_dir=user_data_dir)
+        cls._clean_singleton_locks(user_data_dir)
 
-        cls._clean_singleton_locks()
         chrome_path = _find_chrome()
+        logger.info(
+            f"[启动] 准备 Popen Chrome: port={port}, "
+            f"user-data-dir={user_data_dir}, proxy={'on' if proxy else 'off'}"
+        )
         args = [
             chrome_path,
             f'--remote-debugging-port={port}',
-            f'--user-data-dir={CHROME_USER_DATA_PATH}',
+            f'--user-data-dir={user_data_dir}',
             '--profile-directory=Default',
             '--disable-blink-features=AutomationControlled',
             '--deny-permission-prompts',
@@ -308,46 +517,130 @@ class BaseScraper:
         if HEADLESS and _has_display():
             args.append('--headless=new')
         args.append('--disable-session-crashed-bubble')
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        args.append('--restore-last-session=false')
+
+        # 捕获 Chrome stderr 到临时 log 文件，失败时把内容贴进异常信息，便于诊断
+        stderr_log_path = os.path.join(user_data_dir, ".qbu_chrome_stderr.log")
+        stderr_fh = None
+        try:
+            stderr_fh = open(stderr_log_path, 'wb')
+        except Exception:
+            pass
+        subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_fh or subprocess.DEVNULL,
+        )
+        logger.info(f"[启动] 已 Popen Chrome，等待端口就绪: port={port}")
         last_err = None
         dead_streak = 0
-        for attempt in range(40):  # 40s 总窗口，生产上 Chrome 冷启动（大用户数据+并发）可能超 20s
+        listening_logged = False
+        for attempt in range(40):
             time.sleep(1)
-            # 严格先等我们 Popen 的 Chrome 起来再连，防 DrissionPage 在端口空时自作主张
-            # 拉一个白板 Chrome 覆盖我们的进程。
             if not cls._find_pids_on_port(port):
-                # 进一步诊断：我们刚 Popen 的 Chrome 进程是否还活着？
-                chrome_alive = bool(cls._find_chrome_pids_by_cmdline(port))
+                listening_logged = False
+                # 严格匹配：我们 Popen 的主 chrome.exe（port + user_data_dir）是否还活着
+                chrome_alive = bool(cls._find_chrome_pid_by_port_and_dir(port, user_data_dir))
                 if chrome_alive:
                     last_err = f"Chrome 进程存活但尚未 LISTENING (attempt {attempt + 1})"
                     dead_streak = 0
                 else:
                     dead_streak += 1
-                    last_err = f"Popen 的 Chrome 已退出（SingletonLock IPC?）(attempt {attempt + 1})"
-                    # Chrome 连续 3 秒不存在 → Popen 的 Chrome 被 SingletonLock IPC 给"某个看不见的持有者"后自己退出了
-                    # 重清 Lock 重新 Popen 一次，还失败就让外面抛
+                    last_err = f"Popen 的 Chrome 已退出 (attempt {attempt + 1})"
                     if dead_streak >= 3:
                         logger.warning(f"[启动] {last_err}，重清 SingletonLock 重新 Popen")
-                        cls._kill_user_data_chrome(port)
-                        cls._clean_singleton_locks()
-                        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        cls._clean_singleton_locks(user_data_dir)
+                        subprocess.Popen(
+                            args,
+                            stdout=subprocess.DEVNULL,
+                            stderr=stderr_fh or subprocess.DEVNULL,
+                        )
                         dead_streak = 0
                 continue
             try:
-                browser = Chromium(port)
+                if not listening_logged:
+                    logger.info(f"[启动] 端口已监听，开始 attach: port={port}")
+                    listening_logged = True
+                logger.info(f"[启动] attach_browser 开始: port={port}")
+                browser = cls._attach_browser(port)
+                logger.info(f"[启动] attach_browser 成功: port={port}")
+                logger.info(f"[启动] cleanup_tabs 开始: port={port}")
                 cls._cleanup_tabs(browser)
-                # CDP 端口有时先于 page target 就绪，此时 latest_tab 会 IndexError。
-                # 探测未通过就继续等，别返回一个半死浏览器。
+                logger.info(f"[启动] cleanup_tabs 完成: port={port}")
+                logger.info(f"[启动] probe_browser_alive 开始: port={port}")
                 if not cls._probe_browser_alive(browser):
                     last_err = "page target 未就绪"
                     continue
+                logger.info(f"[启动] probe_browser_alive 成功: port={port}")
+                if stderr_fh:
+                    try: stderr_fh.close()
+                    except Exception: pass
                 return browser
             except Exception as e:
                 last_err = repr(e)
                 continue
+        # 启动失败：读 stderr log 附到异常里
+        if stderr_fh:
+            try: stderr_fh.close()
+            except Exception: pass
+        chrome_msg = cls._tail_chrome_stderr(stderr_log_path, max_lines=20)
+        # Chrome 启动失败本身就是 profile 可能腐化的信号
+        cls._write_rot_streak(cls._read_rot_streak() + 1)
+        detail = f"\n--- Chrome stderr (tail) ---\n{chrome_msg}" if chrome_msg else ""
         raise RuntimeError(
-            f"Chrome with user data failed to start on port {port}: {last_err}"
+            f"Chrome with user data failed to start on port {port}: {last_err}{detail}"
         )
+
+    @staticmethod
+    def _tail_chrome_stderr(path: str, max_lines: int = 20) -> str:
+        """读取 Chrome stderr 最后 N 行，用于诊断 Chrome 为何启动失败（IPC? crash?）"""
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                return ""
+            with open(path, 'rb') as f:
+                data = f.read().decode('utf-8', errors='replace').strip()
+            lines = data.splitlines()
+            return "\n".join(lines[-max_lines:])
+        except Exception:
+            return ""
+
+    @classmethod
+    def _find_chrome_pid_by_port_and_dir(cls, port: int, user_data_dir: str) -> list[int]:
+        """严格匹配：同时带 --remote-debugging-port={port} 和 --user-data-dir={user_data_dir}
+        的主 chrome.exe。用于判断我们 Popen 的主进程是否还活着。"""
+        pids = []
+        try:
+            import psutil
+        except ImportError:
+            return pids
+        try:
+            target = os.path.normcase(os.path.normpath(os.path.abspath(user_data_dir)))
+        except Exception:
+            return pids
+        marker_port = f'--remote-debugging-port={port}'
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if name not in ('chrome.exe', 'chrome'):
+                    continue
+                cmdline = proc.info.get('cmdline') or []
+                joined = ' '.join(cmdline)
+                if marker_port not in joined:
+                    continue
+                for arg in cmdline:
+                    if not arg.startswith('--user-data-dir='):
+                        continue
+                    path_val = arg.split('=', 1)[1].strip().strip('"').strip("'")
+                    try:
+                        arg_path = os.path.normcase(os.path.normpath(os.path.abspath(path_val)))
+                    except Exception:
+                        continue
+                    if arg_path == target:
+                        pids.append(proc.info['pid'])
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return pids
 
     @staticmethod
     def _cleanup_tabs(browser):
@@ -358,20 +651,51 @@ class BaseScraper:
         行为未定义，可能把 page-type target 全部关光，导致后续
         browser.latest_tab → self.tab_ids[0] 抛 IndexError。
         """
+        old_timeout = socket.getdefaulttimeout()
         try:
+            socket.setdefaulttimeout(5.0)
+            logger.info("[清理] get_tabs 开始")
             tabs = browser.get_tabs()
+            logger.info(f"[清理] get_tabs 完成: 共 {len(tabs)} 个")
         except Exception as e:
             logger.warning(f"[清理] get_tabs 失败: {e}")
             return
-        if len(tabs) > 1:
-            closed = 0
-            for tab in tabs[:-1]:
-                try:
-                    tab.close()
-                    closed += 1
-                except Exception:
-                    pass
-            logger.info(f"[清理] 关闭 {closed} 个多余标签（共 {len(tabs)} 个）")
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+        if len(tabs) <= 1:
+            return
+        old_timeout = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(5.0)
+            logger.info("[清理] new_tab 开始")
+            fresh = browser.new_tab('about:blank')
+            logger.info(f"[清理] new_tab 完成: fresh_id={getattr(fresh, 'tab_id', None)}")
+        except Exception as e:
+            logger.warning(f"[清理] new_tab 失败，跳过清理: {e}")
+            return
+        finally:
+            socket.setdefaulttimeout(old_timeout)
+        fresh_id = getattr(fresh, 'tab_id', None)
+        closed = 0
+        for idx, tab in enumerate(tabs, start=1):
+            try:
+                if fresh_id and getattr(tab, 'tab_id', None) == fresh_id:
+                    continue
+                tab_id = getattr(tab, 'tab_id', None)
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(3.0)
+                logger.info(f"[清理] 关闭旧标签开始: index={idx}, tab_id={tab_id}")
+                tab.close()
+                logger.info(f"[清理] 关闭旧标签完成: index={idx}, tab_id={tab_id}")
+                closed += 1
+            except Exception as e:
+                logger.warning(
+                    f"[清理] 关闭旧标签失败: index={idx}, "
+                    f"tab_id={getattr(tab, 'tab_id', None)}, err={e}"
+                )
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+        logger.info(f"[清理] 关闭 {closed} 个旧标签（共 {len(tabs)} 个），保留新建 about:blank")
 
     @staticmethod
     def _probe_browser_alive(browser) -> bool:
@@ -379,7 +703,9 @@ class BaseScraper:
         僵尸场景：端口残留、Chromium(port) 成功，但 new_tab/latest_tab 立刻 refused。
         探测逻辑：若无 page target 就开一个 about:blank；然后读 latest_tab.url。
         任一步失败 → 返回 False，上层重启 Chrome。"""
+        old_timeout = socket.getdefaulttimeout()
         try:
+            socket.setdefaulttimeout(5.0)
             if browser.tabs_count == 0:
                 browser.new_tab('about:blank')
             # latest_tab + .url 会走一次 CDP Target.getTargets + Runtime
@@ -388,11 +714,13 @@ class BaseScraper:
         except Exception as e:
             logger.warning(f"[启动] 浏览器健康探测失败: {e}")
             return False
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
     def _warm_up(self):
         """访问站点首页完成反爬 challenge（如 Akamai _abck cookie）。
         子类可覆盖提供站点特定的预热逻辑。默认不做任何事。"""
-        pass
+        return False
 
     def _get_initial_proxy(self) -> str | None:
         """初始化时获取代理 IP（如果站点需要代理）"""
@@ -606,7 +934,7 @@ class BaseScraper:
         from qbu_crawler.config import PROXY_MAX_RETRIES
 
         if not self._warmed_up:
-            self._warm_up()
+            self._session_profile_dirty = bool(self._warm_up()) or self._session_profile_dirty
             self._warmed_up = True
 
         tab = self.browser.latest_tab
@@ -617,6 +945,8 @@ class BaseScraper:
                 pool = get_proxy_pool()
                 if pool:
                     pool.mark_good(self._proxy)
+            type(self)._write_rot_streak(0)
+            self._session_profile_dirty = True
             return tab
 
         # Cloudflare: 等待自动验证 + 尝试点击 Turnstile，不需要换代理
@@ -625,11 +955,14 @@ class BaseScraper:
                 pool = get_proxy_pool()
                 if pool:
                     pool.mark_good(self._proxy)
+            type(self)._write_rot_streak(0)
+            self._session_profile_dirty = True
             return tab
 
         # 被封 → 轮换代理，重启用户数据 Chrome（保留 cookie + 新 IP）
         pool = get_proxy_pool()
         if not pool:
+            type(self)._write_rot_streak(type(self)._read_rot_streak() + 1)
             raise RuntimeError(
                 f"用户数据模式下仍被封锁: {url}。"
                 "请手动用 Chrome 访问目标站点刷新 cookie，"
@@ -650,9 +983,13 @@ class BaseScraper:
                 f"[反爬] 被封 → 用户数据 + 代理 {new_proxy} "
                 f"(attempt {attempt + 1}/{PROXY_MAX_RETRIES})"
             )
-            self.browser = self._launch_with_user_data(proxy=new_proxy)
+            self.browser = self._launch_with_user_data(
+                user_data_dir=self._session_user_data_dir,
+                port=self._session_port,
+                proxy=new_proxy,
+            )
             self._warmed_up = False
-            self._warm_up()
+            self._session_profile_dirty = bool(self._warm_up()) or self._session_profile_dirty
             self._warmed_up = True
 
             tab = self.browser.latest_tab
@@ -660,8 +997,13 @@ class BaseScraper:
 
             if not self._is_blocked(tab):
                 pool.mark_good(new_proxy)
+                type(self)._write_rot_streak(0)
+                self._session_profile_dirty = True
                 return tab
 
+        # 所有代理都过不去 = profile 的 _abck 彻底烂掉；streak++
+        # 达到阈值后下次 _launch_with_user_data_locked 会自动删目录 reseed
+        type(self)._write_rot_streak(type(self)._read_rot_streak() + 1)
         raise RuntimeError(
             f"用户数据模式下已尝试 {PROXY_MAX_RETRIES} 个代理均失败: {url}"
         )
@@ -771,10 +1113,12 @@ class BaseScraper:
             )
 
     def _increment_and_delay(self, tab):
-        """递增抓取计数并执行随机延迟"""
+        """递增抓取计数并执行随机延迟
+        优先用 SITE_REQUEST_DELAY，回退到全局 REQUEST_DELAY"""
         self._scrape_count += 1
-        if REQUEST_DELAY:
-            tab.wait(REQUEST_DELAY[0], REQUEST_DELAY[1])
+        delay = self.SITE_REQUEST_DELAY or REQUEST_DELAY
+        if delay:
+            tab.wait(delay[0], delay[1])
 
     def _process_review_images(self, reviews: list) -> list:
         """下载评论图片到 MinIO，将 BV URL 替换为 MinIO URL"""
@@ -812,9 +1156,8 @@ class BaseScraper:
             return None
 
     def close(self):
-        # DrissionPage 默认 quit() 只发 CDP Browser.close + detach WebSocket，不杀进程，
-        # Chrome 有"后台保持运行"机制后进程继续 LISTENING，下次启动会探测到半死僵尸。
-        # 必须 force=True 走 SystemInfo.getProcessInfo + psutil.Process.kill() 路径。
+        # DrissionPage 默认 quit() 只发 CDP Browser.close + detach WebSocket，不杀进程；
+        # Chrome 后台保持运行机制让进程继续 LISTENING，必须 force=True 走 SystemInfo 路径。
         try:
             self.browser.quit(force=True, timeout=5)
         except Exception:
@@ -822,6 +1165,51 @@ class BaseScraper:
                 self.browser.quit()
             except Exception:
                 pass
-        # 用户数据模式再加一层端口→PID 强杀兜底，防 force=True 里 CDP 已死拿不到 PID 的极端场景。
         if self._use_user_data:
-            self._kill_user_data_chrome(self._USER_DATA_PORT)
+            # 杀本 session 的 Chrome 及其子进程（按本 session 的 user-data-dir 匹配，
+            # 不影响其它并行 session）
+            if self._session_port is not None:
+                self._kill_user_data_chrome(
+                    port=self._session_port,
+                    user_data_dir=self._session_user_data_dir,
+                )
+            if (
+                self._session_profile_dirty
+                and CHROME_USER_DATA_PATH
+                and self._session_user_data_dir
+                and os.path.isdir(self._session_user_data_dir)
+            ):
+                cookies_path = os.path.join(self._session_user_data_dir, "Default", "Cookies")
+                if os.path.isfile(cookies_path):
+                    try:
+                        has_cookies = os.path.getsize(cookies_path) > 0
+                    except OSError:
+                        has_cookies = False
+                else:
+                    has_cookies = False
+                if has_cookies:
+                    for sub, name in CHROME_USER_DATA_SYNC_FILES:
+                        rel = os.path.join(sub, name) if sub else name
+                        src = os.path.join(self._session_user_data_dir, rel)
+                        if not os.path.isfile(src):
+                            continue
+                        dst = os.path.join(CHROME_USER_DATA_PATH, rel)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        tmp_dst = f"{dst}.tmp.{uuid.uuid4().hex}"
+                        try:
+                            shutil.copy2(src, tmp_dst)
+                            os.replace(tmp_dst, dst)
+                        except Exception as e:
+                            try:
+                                if os.path.exists(tmp_dst):
+                                    os.remove(tmp_dst)
+                            except OSError:
+                                pass
+                            logger.warning(f"[Chrome] 回写 {rel} 失败: {e}")
+            # 删本 session 的目录，避免磁盘积累
+            if self._session_user_data_dir and os.path.isdir(self._session_user_data_dir):
+                try:
+                    shutil.rmtree(self._session_user_data_dir, ignore_errors=True)
+                    logger.info(f"[Chrome] 删除 session 目录: {self._session_user_data_dir}")
+                except Exception as e:
+                    logger.warning(f"[Chrome] 删除 session 目录失败: {e}")
