@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
 def _snapshot():
@@ -128,8 +128,8 @@ def _analytics():
                 {
                     "label_code": "service_fulfillment",
                     "priority": "medium",
-                    "possible_cause_boundary": "可能与售后SOP有关",
-                    "improvement_direction": "复核售后闭环时间",
+                    "possible_cause_boundary": "可能与售后 SOP 有关",
+                    "improvement_direction": "复核售后闭环时长",
                     "evidence_count": 1,
                 },
             ],
@@ -332,7 +332,7 @@ def _insights_analytics():
             "benchmark_examples": [],
             "negative_opportunities": [],
             "gap_analysis": [
-                {"label_display": "做工", "competitor_positive_count": 12, "own_negative_count": 6},
+                {"label_display": "鍋氬伐", "competitor_positive_count": 12, "own_negative_count": 6},
             ],
         },
         "appendix": {"image_reviews": []},
@@ -343,9 +343,9 @@ def test_generate_report_insights_with_mock_llm(monkeypatch):
     from qbu_crawler.server import report_llm
 
     mock_response_json = json.dumps({
-        "hero_headline": "手柄问题需立即关注",
+        "hero_headline": "手柄问题需要立即关注",
         "executive_summary": "自有产品差评集中在手柄松动和噪音问题。",
-        "executive_bullets": ["手柄松动影响8条评论", "噪音问题5条", "竞品做工优势明显"],
+        "executive_bullets": ["手柄松动影响 8 条评论", "噪音问题 5 条", "竞品做工优势明显"],
         "improvement_priorities": [
             {"rank": 1, "target": "Own Grinder", "issue": "手柄松动", "action": "加固手柄连接", "evidence_count": 8}
         ],
@@ -379,7 +379,7 @@ def test_generate_report_insights_with_mock_llm(monkeypatch):
 
     result = report_llm.generate_report_insights(_insights_analytics())
 
-    assert result["hero_headline"] == "手柄问题需立即关注"
+    assert result["hero_headline"] == "手柄问题需要立即关注"
     assert len(result["executive_bullets"]) == 3
     assert len(result["improvement_priorities"]) == 1
     assert result["competitive_insight"] != ""
@@ -431,7 +431,7 @@ def test_build_insights_prompt_includes_data():
     assert "自有产品 3 个" in prompt
     assert "竞品 2 个" in prompt
     assert "手柄松动" in prompt
-    assert "做工" in prompt
+    assert "鍋氬伐" in prompt
 
 
 def test_fallback_insights_has_required_keys():
@@ -475,14 +475,14 @@ def test_validate_llm_evidence_counts():
         },
     }
     llm_output = {
-        "hero_headline": "质量问题严重",
-        "executive_summary": "摘要",
-        "executive_bullets": ["要点1"],
+        "hero_headline": "璐ㄩ噺闂涓ラ噸",
+        "executive_summary": "鎽樿",
+        "executive_bullets": ["瑕佺偣1"],
         "improvement_priorities": [
-            {"rank": 1, "target": "Product A", "issue": "质量",
-             "action": "修复", "evidence_count": 999},
+            {"rank": 1, "target": "Product A", "issue": "璐ㄩ噺",
+             "action": "淇", "evidence_count": 999},
         ],
-        "competitive_insight": "洞察",
+        "competitive_insight": "娲炲療",
     }
     validated = _validate_insights(llm_output, analytics)
     for p in validated["improvement_priorities"]:
@@ -522,7 +522,7 @@ def test_insights_prompt_uses_own_kpis():
     assert "自有评论 112" in prompt, f"Prompt should contain '自有评论 112', got:\n{prompt}"
     assert "自有差评 50" in prompt, f"Prompt should contain '自有差评 50', got:\n{prompt}"
     assert "44.6%" in prompt, f"Prompt should contain own negative rate '44.6%', got:\n{prompt}"
-    assert "竞品 36" in prompt or "含竞品 36" in prompt, (
+    assert "含竞品 36 条" in prompt, (
         f"Prompt should mention competitor review count 36, got:\n{prompt}"
     )
     # Prompt must instruct LLM to use own data in hero_headline
@@ -681,10 +681,11 @@ def test_select_insight_samples_works_without_cumulative():
 
 
 def test_build_insights_prompt_includes_window_summary():
-    """_build_insights_prompt should append a 今日变化 section when window data is present."""
+    """_build_insights_prompt should append a 浠婃棩鍙樺寲 section when window data is present."""
     from qbu_crawler.server.report_llm import _build_insights_prompt
 
     analytics = _insights_analytics()
+    analytics["report_semantics"] = "incremental"
     analytics["window"] = {
         "reviews_count": 12,
         "own_reviews_count": 8,
@@ -721,8 +722,74 @@ def test_build_insights_prompt_small_window_warning_uses_window_count():
             "new_negative_count": 0,
         },
         "perspective": "dual",
+        "report_semantics": "incremental",
     }
 
     prompt = _build_insights_prompt(analytics)
 
     assert "样本极少" in prompt, "Small sample warning should fire for window_count=3"
+def test_build_insights_prompt_includes_bootstrap_semantics_guard():
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = _insights_analytics()
+    analytics["report_semantics"] = "bootstrap"
+    analytics["change_digest"] = {
+        "view_state": "bootstrap",
+        "summary": {"ingested_review_count": 12},
+    }
+
+    prompt = _build_insights_prompt(analytics)
+
+    assert "bootstrap" in prompt
+    assert "\u4e0d\u8981\u5199\u201c\u4eca\u65e5\u65b0\u589e\u201d" in prompt
+
+
+def test_generate_report_insights_bootstrap_forbidden_new_language_falls_back(monkeypatch):
+    from qbu_crawler.server import report_llm
+    from qbu_crawler.server.report_llm import _fallback_insights
+
+    mock_response_json = json.dumps({
+        "hero_headline": "\u4eca\u65e5\u65b0\u589e\u8bc4\u8bba\u66b4\u589e\uff0c\u9700\u8981\u7acb\u523b\u5173\u6ce8",
+        "executive_summary": "\u4eca\u65e5\u65b0\u589e\u8bc4\u8bba\u5f88\u591a\uff0c\u8bf4\u660e\u53e3\u7891\u6b63\u5728\u5feb\u901f\u6ce2\u52a8\u3002",
+        "executive_bullets": ["\u4eca\u65e5\u65b0\u589e\u8bc4\u8bba\u660e\u663e\u589e\u591a"],
+        "improvement_priorities": [],
+        "competitive_insight": "",
+        "benchmark_takeaway": "",
+    })
+
+    class MockMessage:
+        content = mock_response_json
+
+    class MockChoice:
+        message = MockMessage()
+
+    class MockResponse:
+        choices = [MockChoice()]
+
+    class MockClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    return MockResponse()
+
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_BASE", "http://fake")
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_KEY", "fake-key")
+
+    import types
+    mock_openai = types.ModuleType("openai")
+    mock_openai.OpenAI = lambda **kwargs: MockClient()
+    monkeypatch.setitem(__import__("sys").modules, "openai", mock_openai)
+
+    analytics = _insights_analytics()
+    analytics["report_semantics"] = "bootstrap"
+    analytics["change_digest"] = {
+        "view_state": "bootstrap",
+        "summary": {"ingested_review_count": 12},
+    }
+
+    result = report_llm.generate_report_insights(analytics)
+    fallback = _fallback_insights(analytics)
+
+    assert result["hero_headline"] == fallback["hero_headline"]
+    assert result["executive_bullets"] == fallback["executive_bullets"]

@@ -1,4 +1,4 @@
-"""Tests for Excel workbook generation (legacy 2-sheet and V3 4-sheet)."""
+"""Tests for Excel workbook generation (legacy 2-sheet and V3 5-sheet)."""
 
 import os
 from datetime import datetime, timezone
@@ -191,7 +191,7 @@ def _patch_image_download(monkeypatch):
     monkeypatch.setattr(report, "_download_image_data", lambda url: None)
 
 
-def test_generate_analytical_excel_has_four_sheets(tmp_path, monkeypatch):
+def test_generate_analytical_excel_has_five_sheets(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report._generate_analytical_excel(
@@ -202,7 +202,7 @@ def test_generate_analytical_excel_has_four_sheets(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
+    assert set(wb.sheetnames) == {"评论明细", "产品概览", "今日变化", "问题标签", "趋势数据"}
 
 
 def test_generate_excel_without_analytics_uses_legacy(tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ def test_generate_excel_without_analytics_uses_legacy(tmp_path, monkeypatch):
 
 
 def test_generate_excel_with_analytics_uses_analytical(tmp_path, monkeypatch):
-    """When analytics is passed, the wrapper produces the 4-sheet V3 format."""
+    """When analytics is passed, the wrapper produces the governed analytical format."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = _make_test_analytics()
     path = report.generate_excel(
@@ -233,7 +233,8 @@ def test_generate_excel_with_analytics_uses_analytical(tmp_path, monkeypatch):
     wb = openpyxl.load_workbook(path)
     assert "评论明细" in wb.sheetnames
     assert "产品概览" in wb.sheetnames
-    assert len(wb.sheetnames) == 4
+    assert "今日变化" in wb.sheetnames
+    assert len(wb.sheetnames) == 5
 
 
 def test_review_detail_sheet_has_expected_columns(tmp_path, monkeypatch):
@@ -403,7 +404,7 @@ def test_analytical_excel_none_analytics_falls_back_to_legacy(tmp_path, monkeypa
 
 
 def test_analytical_excel_empty_data_still_has_headers(tmp_path, monkeypatch):
-    """Empty products/reviews with analytics still produce 4 sheets with headers."""
+    """Empty products/reviews with analytics still produce 5 sheets with headers."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     analytics = {
         "mode_display": "首日全量基线版",
@@ -416,8 +417,8 @@ def test_analytical_excel_empty_data_still_has_headers(tmp_path, monkeypatch):
     import openpyxl
 
     wb = openpyxl.load_workbook(path)
-    assert len(wb.sheetnames) == 4
-    assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
+    assert len(wb.sheetnames) == 5
+    assert set(wb.sheetnames) == {"评论明细", "产品概览", "今日变化", "问题标签", "趋势数据"}
     # Each sheet should at least have a header row
     for name in wb.sheetnames:
         ws = wb[name]
@@ -509,7 +510,7 @@ def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
 
 
 def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
-    """'本次新增' column is present when window_review_ids is set; review id=2 is marked '是'."""
+    """'本次新增' column is present when window_review_ids is set; review id=2 is marked '新增'."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     import openpyxl
 
@@ -552,6 +553,8 @@ def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
     ]
 
     analytics = _make_test_analytics()
+    analytics["mode"] = "incremental"
+    analytics["report_semantics"] = "incremental"
     analytics["window_review_ids"] = [2]
 
     path = report._generate_analytical_excel(
@@ -577,13 +580,12 @@ def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
         flag = ws.cell(row=row, column=new_col).value
         if rid is not None:
             rows_data[rid] = flag
-
-    assert rows_data.get(2) == "是", f"Review id=2 should be marked '是', got {rows_data.get(2)!r}"
+    assert rows_data.get(2) == "新增", f"Review id=2 should be marked '新增', got {rows_data.get(2)!r}"
     assert rows_data.get(1) in ("", None), f"Review id=1 should be empty, got {rows_data.get(1)!r}"
 
 
-def test_excel_no_new_column_when_window_ids_absent(tmp_path, monkeypatch):
-    """'本次新增' column should be absent when analytics has no window_review_ids."""
+def test_excel_classifies_bootstrap_rows_when_window_ids_absent(tmp_path, monkeypatch):
+    """'本次新增' column stays present and uses bootstrap semantics when analytics has no window_review_ids."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
     reviews = [
@@ -609,10 +611,18 @@ def test_excel_no_new_column_when_window_ids_absent(tmp_path, monkeypatch):
     }
 
     output = str(tmp_path / "reports" / "test-no-new.xlsx")
-    path = report.generate_excel(products, reviews, analytics=analytics, output_path=output)
+    path = report.generate_excel(
+        products,
+        reviews,
+        report_date=datetime(2026, 4, 20),
+        analytics=analytics,
+        output_path=output,
+    )
 
     from openpyxl import load_workbook
     wb = load_workbook(path)
     ws = wb["评论明细"]
     headers = [cell.value for cell in ws[1]]
-    assert "本次新增" not in headers, f"Column should be absent, got headers: {headers}"
+    assert "本次新增" in headers, f"Column should be present, got headers: {headers}"
+    new_col = headers.index("本次新增") + 1
+    assert ws.cell(row=2, column=new_col).value == "新近"

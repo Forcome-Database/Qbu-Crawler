@@ -85,6 +85,48 @@
     if (numEl) animateCounter(numEl, 0, val, 1200, 1);
   }
 
+  function initTrendPanels() {
+    var viewBtns = document.querySelectorAll('.trend-view-btn[data-trend-view]');
+    var dimensionBtns = document.querySelectorAll('.trend-subtab-btn[data-trend-dimension]');
+    var panels = document.querySelectorAll('.trend-panel[data-trend-view][data-trend-dimension]');
+    if (!viewBtns.length || !dimensionBtns.length || !panels.length) return;
+
+    var activeViewBtn = document.querySelector('.trend-view-btn.trend-active') || viewBtns[0];
+    var activeDimensionBtn = document.querySelector('.trend-subtab-btn.trend-active') || dimensionBtns[0];
+    var currentView = activeViewBtn.getAttribute('data-trend-view');
+    var currentDimension = activeDimensionBtn.getAttribute('data-trend-dimension');
+
+    function renderTrendPanel() {
+      viewBtns.forEach(function (btn) {
+        btn.classList.toggle('trend-active', btn.getAttribute('data-trend-view') === currentView);
+      });
+      dimensionBtns.forEach(function (btn) {
+        btn.classList.toggle('trend-active', btn.getAttribute('data-trend-dimension') === currentDimension);
+      });
+      panels.forEach(function (panel) {
+        var matchesView = panel.getAttribute('data-trend-view') === currentView;
+        var matchesDimension = panel.getAttribute('data-trend-dimension') === currentDimension;
+        panel.classList.toggle('trend-panel-active', matchesView && matchesDimension);
+      });
+    }
+
+    viewBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        currentView = btn.getAttribute('data-trend-view');
+        renderTrendPanel();
+      });
+    });
+
+    dimensionBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        currentDimension = btn.getAttribute('data-trend-dimension');
+        renderTrendPanel();
+      });
+    });
+
+    renderTrendPanel();
+  }
+
   /* =========================================================================
      3. COUNTER-UP ANIMATION
      ========================================================================= */
@@ -416,6 +458,10 @@
         row.style.display = '';
       });
     }
+
+    document.querySelectorAll('.trend-panel').forEach(function (panel) {
+      panel.classList.add('trend-panel-active');
+    });
   }
 
   /* =========================================================================
@@ -516,6 +562,7 @@
 
   function boot() {
     initTabs();
+    initTrendPanels();
     initGauge();
     initCounters();
     initCollapsible();

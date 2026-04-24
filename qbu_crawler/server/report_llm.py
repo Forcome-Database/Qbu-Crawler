@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import re
 
 from json_repair import repair_json
 
@@ -270,6 +271,33 @@ _INSIGHTS_KEYS = (
 )
 
 
+def _report_semantics(analytics):
+    return analytics.get("report_semantics") or (
+        "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
+    )
+
+
+def _has_bootstrap_language_violation(result, analytics):
+    if _report_semantics(analytics) != "bootstrap":
+        return False
+
+    texts = [
+        result.get("hero_headline", ""),
+        result.get("executive_summary", ""),
+        *[str(item) for item in (result.get("executive_bullets") or [])],
+    ]
+    merged = "\n".join(texts)
+    forbidden_patterns = (
+        r"今日新增",
+        r"今日暴增",
+        r"较昨日",
+        r"较上期",
+        r"环比",
+        r"今日.*新增",
+    )
+    return any(re.search(pattern, merged) for pattern in forbidden_patterns)
+
+
 def _select_insight_samples(snapshot, analytics):
     """Select 15-20 diverse reviews for LLM synthesis from snapshot only.
 
@@ -362,6 +390,8 @@ def _build_insights_prompt(analytics, snapshot=None):
     own_neg = kpis.get("own_negative_review_rows", 0)
     own_rate = kpis.get("own_negative_review_rate", 0)
     comp_reviews = kpis.get("competitor_review_rows", 0)
+    report_semantics = _report_semantics(analytics)
+    change_digest = analytics.get("change_digest") or {}
 
     # Top issues with concrete symptoms from sub_features
     clusters = analytics.get("self", {}).get("top_negative_clusters", [])
@@ -469,6 +499,26 @@ def _build_insights_prompt(analytics, snapshot=None):
 
 重要：improvement_priorities 中每条必须对应上方「主要问题」列表中的一个 label_code，action 必须针对该类别用户实际反馈的症状，不要张冠李戴。"""
 
+    if report_semantics == "bootstrap":
+        ingested_count = (change_digest.get("summary") or {}).get("ingested_review_count", total)
+        prompt += "\n\n[report_semantics=bootstrap]"
+        prompt += (
+            "\n\n--- 报告语义 ---"
+            f"\n当前是首次基线（监控起点），本次入库评论 {ingested_count} 条。"
+            "\n不要写“今日新增”“较昨日”“较上期”“环比”等增量措辞，只能描述当前截面和监控起点。"
+        )
+    else:
+        summary = change_digest.get("summary") or {}
+        if summary:
+            prompt += "\n\n--- 今日变化 ---"
+            prompt += f"\n本次入库评论 {summary.get('ingested_review_count', total)} 条"
+            prompt += (
+                f"\n其中近30天业务新增 {summary.get('fresh_review_count', 0)} 条，"
+                f"历史补采 {summary.get('historical_backfill_count', 0)} 条"
+            )
+            if summary.get("fresh_own_negative_count", 0) > 0:
+                prompt += f"\n近30天自有差评 {summary.get('fresh_own_negative_count', 0)} 条"
+
     # Low-sample warning (Fix-5: use window review count, not cumulative ingested_review_rows)
     _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
     if _window_count < 5:
@@ -480,14 +530,14 @@ def _build_insights_prompt(analytics, snapshot=None):
 
     # Window summary section (P007 Task 5)
     window = analytics.get("window", {})
-    if window.get("reviews_count", 0) > 0:
+    if report_semantics != "bootstrap" and window.get("reviews_count", 0) > 0:
         prompt += f"\n\n--- 今日变化 ---"
         prompt += f"\n今日新增评论 {window['reviews_count']} 条"
         prompt += f"（自有 {window.get('own_reviews_count', 0)}，竞品 {window.get('competitor_reviews_count', 0)}）"
         if window.get("new_negative_count", 0) > 0:
             prompt += f"\n注意：新增自有差评 {window['new_negative_count']} 条"
         prompt += "\n请在 executive_bullets 中提及今日新增变化（如有值得关注的新评论）。"
-    elif analytics.get("perspective") == "dual":
+    elif report_semantics != "bootstrap" and analytics.get("perspective") == "dual":
         prompt += "\n\n今日无新增评论。executive_bullets 应聚焦累积数据中的关键洞察和持续存在的问题。"
 
     # Inject review samples for grounded insights
@@ -627,7 +677,11 @@ def generate_report_insights(analytics, snapshot=None):
         if not isinstance(result.get("improvement_priorities"), list):
             result["improvement_priorities"] = []
 
-        return _validate_insights(result, analytics)
+        result = _validate_insights(result, analytics)
+        if _has_bootstrap_language_violation(result, analytics):
+            logger.warning("LLM insights violated bootstrap semantics, using fallback")
+            return _fallback_insights(analytics)
+        return result
 
     except Exception:
         logger.warning("LLM insights generation failed, using fallback", exc_info=True)

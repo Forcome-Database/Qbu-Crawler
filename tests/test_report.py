@@ -113,6 +113,21 @@ def test_query_report_data(patch_db, monkeypatch):
     assert reviews[0]["images"][0] == "https://img.example.com/1.jpg"
 
 
+def test_query_report_data_includes_review_context_fields(patch_db, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", patch_db)
+
+    from qbu_crawler.server.report import query_report_data
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    _, reviews = query_report_data(since)
+
+    assert len(reviews) == 1
+    review = reviews[0]
+    assert review["product_url"] == "https://example.com/product/1"
+    assert review["site"] == "basspro"
+    assert review["scraped_at"] is not None
+
+
 def test_query_report_data_future_cutoff(patch_db, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", patch_db)
 
@@ -1179,6 +1194,17 @@ def test_query_cumulative_data_returns_all_reviews(cumulative_db):
     _, reviews = query_cumulative_data()
 
     assert len(reviews) == 5
+
+
+def test_query_cumulative_data_includes_review_context_fields(cumulative_db):
+    from qbu_crawler.server.report import query_cumulative_data
+
+    _, reviews = query_cumulative_data()
+
+    review = reviews[0]
+    assert review["product_url"].startswith("https://example.com/")
+    assert review["site"] in {"basspro", "meatyourmaker"}
+    assert review["scraped_at"] is not None
 
 
 def test_query_cumulative_data_includes_analysis_fields(cumulative_db):

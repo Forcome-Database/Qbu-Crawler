@@ -267,3 +267,103 @@ def test_report_analytics_keeps_ingested_and_site_total_separate(metric_db):
 
     assert analytics["kpis"]["ingested_review_rows"] == 2
     assert analytics["kpis"]["site_reported_review_total_current"] == 10
+
+
+def test_change_digest_counts_fresh_reviews_and_backfill_from_publish_time():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    digest = build_change_digest(
+        {
+            "logical_date": "2026-03-30",
+            "reviews": [
+                {"ownership": "own", "rating": 2, "date_published": "2026-03-29"},
+                {"ownership": "competitor", "rating": 5, "date_published": "2026-03-20"},
+                {"ownership": "own", "rating": 1, "date_published": "2026-01-15"},
+            ],
+            "products": [],
+            "untranslated_count": 0,
+        },
+        {
+            "report_semantics": "bootstrap",
+            "kpis": {"untranslated_count": 0},
+            "self": {"top_negative_clusters": []},
+        },
+    )
+
+    assert digest["summary"]["ingested_review_count"] == 3
+    assert digest["summary"]["fresh_review_count"] == 2
+    assert digest["summary"]["historical_backfill_count"] == 1
+    assert digest["summary"]["fresh_own_negative_count"] == 1
+
+
+def test_change_digest_marks_backfill_dominant_at_seventy_percent():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    reviews = [
+        {
+            "ownership": "own" if idx % 2 == 0 else "competitor",
+            "rating": 4,
+            "date_published": "2025-12-01",
+        }
+        for idx in range(7)
+    ] + [
+        {
+            "ownership": "own",
+            "rating": 3,
+            "date_published": "2026-03-2%s" % idx,
+        }
+        for idx in range(7, 10)
+    ]
+
+    digest = build_change_digest(
+        {
+            "logical_date": "2026-03-30",
+            "reviews": reviews,
+            "products": [],
+            "untranslated_count": 0,
+        },
+        {
+            "report_semantics": "bootstrap",
+            "kpis": {"untranslated_count": 0},
+            "self": {"top_negative_clusters": []},
+        },
+    )
+
+    assert digest["summary"]["ingested_review_count"] == 10
+    assert digest["summary"]["fresh_review_count"] == 3
+    assert digest["summary"]["historical_backfill_count"] == 7
+    assert digest["warnings"]["backfill_dominant"]["enabled"] is True
+    assert "70%" in digest["warnings"]["backfill_dominant"]["message"]
+
+
+def test_change_digest_incremental_uses_empty_state_when_no_significant_changes():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    digest = build_change_digest(
+        {
+            "logical_date": "2026-03-30",
+            "reviews": [
+                {"ownership": "own", "rating": 3, "date_published": "2026-01-15"},
+            ],
+            "products": [
+                {"sku": "SKU-1", "name": "Stable Product", "price": 199.0, "stock_status": "in_stock", "rating": 4.2},
+            ],
+            "untranslated_count": 0,
+        },
+        {
+            "report_semantics": "incremental",
+            "kpis": {"untranslated_count": 0},
+            "self": {"top_negative_clusters": []},
+        },
+        {
+            "products": [
+                {"sku": "SKU-1", "name": "Stable Product", "price": 199.0, "stock_status": "in_stock", "rating": 4.2},
+            ],
+        },
+        {"self": {"top_negative_clusters": []}},
+    )
+
+    assert digest["view_state"] == "empty"
+    assert digest["summary"]["state_change_count"] == 0
+    assert digest["review_signals"]["fresh_negative_reviews"] == []
+    assert digest["empty_state"]["enabled"] is True

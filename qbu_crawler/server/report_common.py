@@ -381,11 +381,15 @@ def _parse_date_flexible(value: str | None, anchor_date=None):
         pass
     # Relative format: "X days/months/years ago", "a month ago", "a year ago"
     today = anchor_date or date.today()
-    m = re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, re.IGNORECASE)
+    m = re.match(r"(?:(\d+)|a|an)\s+(minute|hour|day|week|month|year)s?\s+ago", s, re.IGNORECASE)
     if m:
         amount = int(m.group(1)) if m.group(1) else 1
         unit = m.group(2).lower()
-        if unit == "day":
+        if unit == "minute":
+            return today
+        elif unit == "hour":
+            return today - timedelta(days=amount // 24)
+        elif unit == "day":
             return today - timedelta(days=amount)
         elif unit == "week":
             return today - timedelta(weeks=amount)
@@ -641,10 +645,17 @@ def _fallback_executive_bullets(normalized):
 
 def normalize_deep_report_analytics(analytics):
     analytics = analytics or {}
+    report_semantics = analytics.get("report_semantics")
+    if report_semantics not in {"bootstrap", "incremental"}:
+        report_semantics = "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
     normalized = {
         "mode": analytics.get("mode", "baseline"),
+        "report_semantics": report_semantics,
+        "is_bootstrap": analytics.get("is_bootstrap", report_semantics == "bootstrap"),
         "mode_display": "首日全量基线版" if analytics.get("mode", "baseline") == "baseline" else "增量监测版",
         "baseline_sample_days": analytics.get("baseline_sample_days", 0),
+        "change_digest": analytics.get("change_digest") or {},
+        "trend_digest": analytics.get("trend_digest") or {},
         "metric_semantics": {
             "ingested_review_rows": "reviews 实际入库行数",
             "site_reported_review_total_current": "products.review_count 当前站点展示总评论数",

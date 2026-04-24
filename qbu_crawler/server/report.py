@@ -6,7 +6,7 @@ import os
 import smtplib
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -75,6 +75,7 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
         review_rows = conn.execute(
             """
             SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+                   p.url AS product_url, p.site AS site, r.scraped_at AS scraped_at,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.date_published_parsed, r.images,
                    p.ownership,
@@ -239,6 +240,8 @@ def generate_excel(
     """
     if report_date is None:
         report_date = config.now_shanghai()
+    if report_date.tzinfo is not None:
+        report_date = report_date.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     filename = f"scrape-report-{report_date.strftime('%Y-%m-%d')}.xlsx"
@@ -716,6 +719,8 @@ def _generate_analytical_excel(
 
     if report_date is None:
         report_date = config.now_shanghai()
+    if report_date.tzinfo is not None:
+        report_date = report_date.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
 
     os.makedirs(config.REPORT_DIR, exist_ok=True)
     filename = f"scrape-report-{report_date.strftime('%Y-%m-%d')}.xlsx"
@@ -973,6 +978,386 @@ def _generate_analytical_excel(
     return filepath
 
 
+def _generate_analytical_excel(
+    products: list[dict],
+    reviews: list[dict],
+    analytics: dict | None,
+    report_date: datetime | None = None,
+) -> str:
+    if analytics is None:
+        return _legacy_generate_excel(products, reviews, report_date=report_date)
+
+    if report_date is None:
+        report_date = config.now_shanghai()
+    if report_date.tzinfo is not None:
+        report_date = report_date.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
+
+    os.makedirs(config.REPORT_DIR, exist_ok=True)
+    filename = f"scrape-report-{report_date.strftime('%Y-%m-%d')}.xlsx"
+    filepath = os.path.join(config.REPORT_DIR, filename)
+
+    wb = Workbook()
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    report_semantics = analytics.get("report_semantics") or (
+        "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
+    )
+    change_digest = analytics.get("change_digest") or {}
+    digest_summary = change_digest.get("summary") or {}
+    digest_warnings = change_digest.get("warnings") or {}
+    digest_issue_changes = change_digest.get("issue_changes") or {}
+    digest_product_changes = change_digest.get("product_changes") or {}
+    digest_review_signals = change_digest.get("review_signals") or {}
+    digest_empty_state = change_digest.get("empty_state") or {}
+    window_review_ids = set(analytics.get("window_review_ids") or [])
+    fresh_cutoff = report_date - timedelta(days=30)
+
+    def _write_headers(ws, headers):
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+
+    def _auto_widths(ws, min_w=10, max_w=60):
+        for col in ws.columns:
+            letter = col[0].column_letter
+            max_len = max((len(str(c.value or "")) for c in col), default=0)
+            ws.column_dimensions[letter].width = min(max(max_len + 2, min_w), max_w)
+
+    def _parse_json_list(value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                return []
+        if isinstance(value, list):
+            return value
+        return []
+
+    def _safe_text(value):
+        if value in (None, "", "None", "null"):
+            return ""
+        return str(value)
+
+    def _snippet(value, limit=60):
+        text = _safe_text(value)
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit - 1]}…"
+
+    def _parse_review_datetime(review):
+        raw = review.get("date_published_parsed") or review.get("date_published")
+        if not raw:
+            return None
+        text = str(raw).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        candidates = [text]
+        if len(text) >= 19:
+            candidates.append(text[:19])
+        if len(text) >= 10:
+            candidates.append(text[:10])
+        for candidate in candidates:
+            try:
+                parsed = datetime.fromisoformat(candidate)
+                if parsed.tzinfo is not None:
+                    parsed = parsed.astimezone(config.SHANGHAI_TZ).replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                continue
+        return None
+
+    def _review_new_flag(review):
+        if report_semantics == "bootstrap":
+            published = _parse_review_datetime(review)
+            if published and published >= fresh_cutoff:
+                return "新近"
+            return "补采"
+        if review.get("id") in window_review_ids:
+            return "新增"
+        return ""
+
+    def _labels_text(review):
+        return ", ".join(
+            _xl_display(label.get("code"), _LABEL_DISPLAY)
+            for label in _parse_json_list(review.get("analysis_labels") or "[]")
+            if isinstance(label, dict)
+        )
+
+    def _features_text(review):
+        return ", ".join(
+            _safe_text(item)
+            for item in _parse_json_list(review.get("analysis_features") or review.get("features") or "[]")
+            if _safe_text(item)
+        )
+
+    def _impact_category_display(review, labels_text):
+        return (
+            _safe_text(review.get("impact_category"))
+            or _safe_text(review.get("failure_mode"))
+            or labels_text
+        )
+
+    def _headline_display(review):
+        return (
+            _safe_text(review.get("headline_cn"))
+            or _safe_text(review.get("headline"))
+            or _snippet(review.get("body_cn") or review.get("body"))
+            or "图片证据"
+        )
+
+    def _body_display(review):
+        return _safe_text(review.get("body_cn")) or _safe_text(review.get("body"))
+
+    def _render_change_value(value, change_type=None):
+        if change_type == "stock":
+            return _xl_display(value or "unknown", _STOCK_DISPLAY)
+        return value if value not in (None, "") else ""
+
+    review_counts_by_sku = {}
+    negative_counts_by_sku = {}
+    for review in reviews:
+        sku = review.get("product_sku") or ""
+        if not sku:
+            continue
+        review_counts_by_sku[sku] = review_counts_by_sku.get(sku, 0) + 1
+        if (review.get("rating") or 5) <= config.NEGATIVE_THRESHOLD:
+            negative_counts_by_sku[sku] = negative_counts_by_sku.get(sku, 0) + 1
+
+    ws1 = wb.active
+    ws1.title = "评论明细"
+    review_headers = [
+        "ID", "本次新增", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
+        "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)", "特征短语", "洞察", "评论时间", "照片",
+    ]
+    _write_headers(ws1, review_headers)
+    images_col = len(review_headers)
+
+    all_image_urls = set()
+    for review in reviews:
+        for url in _parse_json_list(review.get("images") or []):
+            if isinstance(url, str) and url.startswith("http"):
+                all_image_urls.add(url)
+    prefetched = _download_images_parallel(list(all_image_urls)) if all_image_urls else {}
+
+    for review in reviews:
+        images_list = _parse_json_list(review.get("images") or [])
+        labels_text = _labels_text(review)
+        features_text = _features_text(review)
+        row = [
+            review.get("id"),
+            _review_new_flag(review),
+            review.get("product_name"),
+            review.get("product_sku"),
+            _xl_display(review.get("ownership"), _OWNERSHIP_DISPLAY),
+            review.get("rating"),
+            _xl_display(review.get("sentiment"), _SENTIMENT_DISPLAY),
+            labels_text,
+            _impact_category_display(review, labels_text),
+            _safe_text(review.get("failure_mode")),
+            _safe_text(review.get("headline")),
+            _headline_display(review),
+            _safe_text(review.get("body")),
+            _body_display(review),
+            features_text,
+            _safe_text(review.get("analysis_insight_cn") or review.get("insight_cn")),
+            _safe_text(review.get("date_published_parsed") or review.get("date_published")),
+            "",
+        ]
+        ws1.append(row)
+
+        row_idx = ws1.max_row
+        embedded_count = 0
+        for url in images_list:
+            if not isinstance(url, str) or not url.startswith("http"):
+                continue
+            cached = prefetched.get(url, _IMG_FAILED)
+            if cached is _IMG_FAILED:
+                cached = _download_image_data(url)
+            if not cached or cached is _IMG_FAILED:
+                continue
+            xl_img = _make_xl_image(cached)
+            y_offset = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+            from openpyxl.drawing.xdr import XDRPositiveSize2D
+            from openpyxl.utils.units import pixels_to_EMU
+            marker = AnchorMarker(
+                col=images_col - 1,
+                row=row_idx - 1,
+                colOff=0,
+                rowOff=pixels_to_EMU(y_offset),
+            )
+            size = XDRPositiveSize2D(
+                pixels_to_EMU(xl_img.width),
+                pixels_to_EMU(xl_img.height),
+            )
+            xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+            ws1.add_image(xl_img)
+            embedded_count += 1
+
+        if embedded_count > 0:
+            row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
+            ws1.row_dimensions[row_idx].height = row_height_px * 0.75
+        elif images_list:
+            ws1.cell(row=row_idx, column=images_col, value="\n".join(str(item) for item in images_list))
+
+    _auto_widths(ws1)
+    ws1.column_dimensions[get_column_letter(images_col)].width = _IMG_COL_WIDTH
+
+    ws2 = wb.create_sheet("产品概览")
+    product_headers = [
+        "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
+        "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分",
+    ]
+    _write_headers(ws2, product_headers)
+    risk_by_sku = {
+        item["product_sku"]: item
+        for item in (analytics.get("self") or {}).get("risk_products") or []
+        if item.get("product_sku")
+    }
+    for product in products:
+        sku = product.get("sku") or ""
+        risk = risk_by_sku.get(sku, {})
+        collected_review_count = review_counts_by_sku.get(sku, 0)
+        negative_review_count = risk.get("negative_review_rows")
+        if negative_review_count is None:
+            negative_review_count = negative_counts_by_sku.get(sku, 0)
+        negative_rate = risk.get("negative_rate")
+        if negative_rate in (None, "") and collected_review_count:
+            negative_rate = negative_review_count / collected_review_count
+        ws2.append([
+            product.get("name"),
+            sku,
+            product.get("site"),
+            _xl_display(product.get("ownership"), _OWNERSHIP_DISPLAY),
+            product.get("price"),
+            _xl_display(product.get("stock_status"), _STOCK_DISPLAY),
+            product.get("rating"),
+            product.get("review_count"),
+            collected_review_count,
+            negative_review_count or 0,
+            negative_rate,
+            risk.get("risk_score"),
+        ])
+
+    _auto_widths(ws2)
+
+    ws_change = wb.create_sheet("今日变化")
+    _write_headers(ws_change, ["模块", "项目", "值", "说明"])
+    ws_change.append([
+        "状态",
+        "监控起点" if report_semantics == "bootstrap" else "今日变化",
+        change_digest.get("view_state") or report_semantics,
+        "首次建档，当前结果用于建立监控基线。" if report_semantics == "bootstrap" else "聚焦本次运行中需要优先关注的新增变化。",
+    ])
+    for label, value in (
+        ("本次入库评论", digest_summary.get("ingested_review_count", 0)),
+        ("新近评论", digest_summary.get("fresh_review_count", 0)),
+        ("历史补采", digest_summary.get("historical_backfill_count", 0)),
+        ("自有新近差评", digest_summary.get("fresh_own_negative_count", 0)),
+        ("新增问题", digest_summary.get("issue_new_count", 0)),
+        ("升级问题", digest_summary.get("issue_escalated_count", 0)),
+        ("改善问题", digest_summary.get("issue_improving_count", 0)),
+        ("产品状态变更", digest_summary.get("state_change_count", 0)),
+    ):
+        ws_change.append(["摘要", label, value, ""])
+
+    for warning_key in ("translation_incomplete", "estimated_dates", "backfill_dominant"):
+        warning = digest_warnings.get(warning_key) or {}
+        if warning.get("enabled"):
+            ws_change.append(["提示", warning_key, "已触发", _safe_text(warning.get("message"))])
+
+    if digest_empty_state.get("enabled"):
+        ws_change.append([
+            "空态",
+            _safe_text(digest_empty_state.get("title")),
+            "",
+            _safe_text(digest_empty_state.get("description")),
+        ])
+
+    for change_type in ("new", "escalated", "improving", "de_escalated"):
+        for item in digest_issue_changes.get(change_type) or []:
+            ws_change.append([
+                "问题变化",
+                _safe_text(item.get("label_display") or item.get("label_code")),
+                item.get("current_review_count", 0),
+                f"{change_type} / Δ{item.get('delta_review_count', 0)} / 影响SKU {item.get('affected_product_count', 0)}",
+            ])
+
+    for change_title, change_key in (
+        ("价格变化", "price_changes"),
+        ("库存变化", "stock_changes"),
+        ("评分变化", "rating_changes"),
+        ("新增产品", "new_products"),
+        ("下线产品", "removed_products"),
+    ):
+        for item in digest_product_changes.get(change_key) or []:
+            ws_change.append([
+                "产品变化",
+                _safe_text(item.get("name") or item.get("sku")),
+                f"{_render_change_value(item.get('old'), 'stock' if change_key == 'stock_changes' else None)} -> {_render_change_value(item.get('new'), 'stock' if change_key == 'stock_changes' else None)}",
+                change_title,
+            ])
+
+    for signal_key, signal_title in (
+        ("fresh_negative_reviews", "自有新近差评"),
+        ("fresh_competitor_positive_reviews", "竞品新近好评"),
+    ):
+        for item in digest_review_signals.get(signal_key) or []:
+            label_text = _labels_text(item)
+            ws_change.append([
+                "评论信号",
+                _headline_display(item),
+                item.get("rating"),
+                f"{signal_title} / {_impact_category_display(item, label_text)}",
+            ])
+
+    _auto_widths(ws_change)
+
+    ws3 = wb.create_sheet("问题标签")
+    _write_headers(ws3, ["评论ID", "产品SKU", "问题标签", "极性", "严重度", "置信度"])
+    for review in reviews:
+        for label in _parse_json_list(review.get("analysis_labels") or "[]"):
+            if not isinstance(label, dict):
+                continue
+            ws3.append([
+                review.get("id"),
+                review.get("product_sku"),
+                _xl_display(label.get("code"), _LABEL_DISPLAY),
+                _xl_display(label.get("polarity"), _POLARITY_DISPLAY),
+                _xl_display(label.get("severity"), _SEVERITY_DISPLAY),
+                label.get("confidence"),
+            ])
+
+    _auto_widths(ws3)
+
+    ws4 = wb.create_sheet("趋势数据")
+    _write_headers(ws4, ["日期", "SKU", "产品名称", "价格", "评分", "评论数", "库存状态"])
+    for trend in analytics.get("_trend_series") or []:
+        for point in trend.get("series") or []:
+            ws4.append([
+                point.get("date"),
+                trend.get("product_sku"),
+                trend.get("product_name"),
+                point.get("price"),
+                point.get("rating"),
+                point.get("review_count"),
+                _xl_display(point.get("stock_status"), _STOCK_DISPLAY),
+            ])
+
+    _auto_widths(ws4)
+
+    wb.save(filepath)
+    logger.info("V3 5-sheet Excel generated: %s", filepath)
+    return filepath
+
+
 def _report_ts(value: datetime | str) -> str:
     """Normalize report cutoffs to the naive timestamp format stored in SQLite."""
     if isinstance(value, str):
@@ -1011,6 +1396,7 @@ def query_report_data(
         review_rows = conn.execute(
             """
             SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+                   p.url AS product_url, p.site AS site, r.scraped_at AS scraped_at,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.date_published_parsed, r.images,
                    p.ownership,
@@ -1067,6 +1453,7 @@ def query_cumulative_data() -> tuple[list[dict], list[dict]]:
         review_rows = conn.execute(
             """
             SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+                   p.url AS product_url, p.site AS site, r.scraped_at AS scraped_at,
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.date_published_parsed, r.images,
                    p.ownership,

@@ -220,6 +220,19 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - `TranslationWorker` 守护线程：DB-as-Queue 模式，轮询未翻译评论 → LLM 批量翻译 → 持久化到 reviews 表，与爬虫并行执行
 - MCP Resources 暴露表结构元数据（`db://schema/{table}`），提升 LLM 查询准确率
 
+### 报表语义治理（2026-04-23）
+
+- 顶层语义字段固定为 `report_semantics`、`is_bootstrap`、`change_digest`、`trend_digest`
+- `report_semantics` 只允许 `bootstrap`（首次建档/基线期）和 `incremental`（增量期）
+- 顶层 `kpis` 是唯一允许给 HTML / 邮件 / Excel 展示的 KPI 来源；`cumulative_kpis`、`window`、`snapshot` 只作为分析中间态，不能直接拿去拼展示文案
+- `change_digest` 是 `今日变化` 的唯一输入；`trend_digest` 是 `变化趋势` 的唯一输入
+- `window.reviews_count` 只表示本次 run 实际入库评论数，不能解释成“今日新增评论”
+- `bootstrap` 下必须展示“监控起点 / 首次建档 / 当前截面”语义，禁止出现“今日新增 / 较昨日 / 较上期”类措辞
+- `今日变化` 入口常驻，但 `bootstrap` 下展示监控起点态，`incremental + 无显著变化` 下展示 `empty_state`
+- `fresh_review_count` 基于评论发布时间（`date_published_parsed` / `date_published`）按近 30 天口径计算；价格、评分、库存、评论总数等产品状态趋势基于 `scraped_at`
+- `backfill_dominant` 阈值固定为 `historical_backfill_count / ingested_review_count >= 0.7`
+- 真实生产报告目录以 `C:\Users\User\Desktop\QBU\reports` 为准；旧拷贝路径 `C:\Users\leo\Desktop\pachong` 只用于参考，artifact 解析必须兼容绝对路径失效后的回退查找
+
 ### OpenClaw 定时工作流
 
 当前采用“**服务内嵌调度 + 确定性工作流**”架构：
@@ -310,3 +323,20 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `qbu_crawler/server/openclaw/bridge/app.py` — OpenClaw Host 上的 hardened notify bridge
 - `qbu_crawler/server/workflows.py::DailySchedulerWorker` — crawler-host 内嵌 daily scheduler
 - `deploy/openclaw/` — OpenClaw host 的 `openclaw.json` 模板、sync 脚本、bridge service
+
+## 2026-04-23 报表治理增量
+
+本次“今日变化 / 变化趋势”治理相关的核心文件和目录：
+
+- `qbu_crawler/server/report_snapshot.py` — artifact resolver、`change_digest` 构建和 full email 渲染收口
+- `qbu_crawler/server/report_analytics.py` — 顶层 `report_semantics` / `trend_digest` 统一输出
+- `qbu_crawler/server/report_common.py` — 归一化透传顶层 `kpis`、`change_digest`、`trend_digest`
+- `qbu_crawler/server/report_llm.py` — `bootstrap` 语义守卫与 deterministic fallback
+- `qbu_crawler/server/report.py` — governed Excel 导出，新增 `今日变化` sheet 与双态“本次新增”列
+- `qbu_crawler/server/report_templates/daily_report_v3.html.j2` — 顶层 `今日变化 / 变化趋势` tab
+- `qbu_crawler/server/report_templates/daily_report_v3.js` — 趋势页 `周 / 月 / 年` 与四维度切换
+- `qbu_crawler/server/report_templates/daily_report_v3.css` — `今日变化 / 变化趋势` 的布局和状态样式
+- `qbu_crawler/server/report_templates/email_full.html.j2` — 邮件只消费顶层 `kpis` 与 `change_digest`
+- `tests/test_metric_semantics.py` — 时间口径与 `change_digest` 指标语义回归
+- `tests/test_v3_excel.py` — `今日变化` / `趋势数据` / “本次新增”契约回归
+- `tests/test_v3_mode_semantics.py` — bootstrap / incremental 邮件模式语义回归

@@ -833,6 +833,22 @@ class TestStockStatusThreeStateDisplay:
                       "products_count": 1, "reviews_count": 0,
                       "translated_count": 0, "untranslated_count": 0},
             analytics={"kpis": {"own_review_rows": 100, "health_index": 80},
+                       "change_digest": {
+                           "enabled": True,
+                           "view_state": "active",
+                           "summary": {},
+                           "issue_changes": {"new": [], "escalated": [], "improving": [], "de_escalated": []},
+                           "product_changes": {"stock_changes": [
+                               {"sku": "S1", "name": "P1", "old": "unknown", "new": "in_stock"}
+                           ], "price_changes": [], "rating_changes": [], "new_products": [], "removed_products": []},
+                           "review_signals": {"fresh_negative_reviews": [], "fresh_competitor_positive_reviews": []},
+                           "warnings": {
+                               "translation_incomplete": {"enabled": False, "message": ""},
+                               "estimated_dates": {"enabled": False, "message": ""},
+                               "backfill_dominant": {"enabled": False, "message": ""},
+                           },
+                           "empty_state": {"enabled": False, "title": "", "description": ""},
+                       },
                        "report_copy": {"hero_headline": "", "executive_bullets": []},
                        "self": {"risk_products": [], "top_negative_clusters": [],
                                 "recommendations": []},

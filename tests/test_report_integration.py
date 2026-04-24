@@ -181,6 +181,20 @@ class TestAnalyticsPipeline:
         # issue_cards lives under self
         assert "issue_cards" in normalized.get("self", {})
 
+    def test_trend_digest_sentiment_uses_review_publish_dates(self, populated_db, sample_snapshot):
+        analytics = report_analytics.build_report_analytics(sample_snapshot)
+
+        chart = analytics["trend_digest"]["data"]["month"]["sentiment"]["primary_chart"]
+        active_labels = [
+            label
+            for label, value in zip(chart["labels"], chart["series"][0]["data"])
+            if value
+        ]
+
+        assert chart["status"] == "ready"
+        assert "2026-03-15" in active_labels
+        assert "2026-04-01" not in active_labels
+
     def test_normalize_analytics_negative_rate_display(self, populated_db, sample_snapshot):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -192,6 +206,40 @@ class TestAnalyticsPipeline:
         normalized = report_common.normalize_deep_report_analytics(analytics)
         hero = normalized.get("report_copy", {}).get("hero_headline", "")
         assert isinstance(hero, str) and len(hero) > 0
+
+    def test_normalize_analytics_display_kpis_do_not_read_cumulative_kpis(self):
+        normalized = report_common.normalize_deep_report_analytics(
+            {
+                "mode": "incremental",
+                "kpis": {
+                    "product_count": 1,
+                    "ingested_review_rows": 12,
+                    "translated_count": 12,
+                    "own_review_rows": 12,
+                    "competitor_review_rows": 0,
+                    "own_positive_review_rows": 0,
+                    "own_negative_review_rows": 0,
+                    "site_reported_review_total_current": 20,
+                },
+                "cumulative_kpis": {
+                    "ingested_review_rows": 999,
+                    "own_review_rows": 999,
+                },
+                "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+                "competitor": {
+                    "top_positive_themes": [],
+                    "benchmark_examples": [],
+                    "negative_opportunities": [],
+                    "gap_analysis": [],
+                },
+                "appendix": {"image_reviews": []},
+            }
+        )
+
+        assert normalized["kpis"]["ingested_review_rows"] == 12
+        assert normalized["cumulative_kpis"]["ingested_review_rows"] == 999
+        assert any(card["value"] == 12 for card in normalized["kpi_cards"])
+        assert all(card["value"] != 999 for card in normalized["kpi_cards"])
 
 
 # ── Chart Generation ──────────────────────────────────────────────────────────
@@ -285,7 +333,7 @@ class TestReportHTML:
 
 
 class TestExcelGeneration:
-    """Test 4-sheet data-oriented Excel generation via generate_excel with analytics."""
+    """Test 5-sheet data-oriented Excel generation via generate_excel with analytics."""
 
     def test_generate_analytical_excel_creates_file(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
@@ -299,7 +347,7 @@ class TestExcelGeneration:
         )
         assert Path(path).exists()
 
-    def test_generate_analytical_excel_has_four_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_generate_analytical_excel_has_five_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -312,8 +360,8 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        assert len(wb.sheetnames) == 4
-        assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
+        assert len(wb.sheetnames) == 5
+        assert set(wb.sheetnames) == {"评论明细", "产品概览", "今日变化", "问题标签", "趋势数据"}
 
     def test_review_detail_sheet_has_sentiment_column(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
@@ -348,7 +396,7 @@ class TestExcelGeneration:
         ws = wb["评论明细"]
         # Header + at least one data row
         assert ws.max_row >= 2
-        # No embedded images in 4-sheet format
+        # No embedded images in the governed analytical format
         assert len(ws._images) == 0
 
 

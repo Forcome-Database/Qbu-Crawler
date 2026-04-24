@@ -1,173 +1,363 @@
-"""Tests for the new 4-sheet data-oriented Excel (Report V3 Phase 4)."""
+"""Tests for the governed analytical Excel workbook."""
+
+from datetime import datetime
 
 import openpyxl
-import pytest
+
 from qbu_crawler.server.report import generate_excel
 
 
-class TestExcel4Sheet:
-    def test_produces_4_sheets_with_analytics(self, tmp_path, monkeypatch):
+def _sheet_text(ws):
+    values = []
+    for row in ws.iter_rows(values_only=True):
+        for value in row:
+            if value not in (None, ""):
+                values.append(str(value))
+    return "\n".join(values)
+
+
+def _analytics(report_semantics="incremental", **overrides):
+    analytics = {
+        "mode": "baseline" if report_semantics == "bootstrap" else "incremental",
+        "report_semantics": report_semantics,
+        "kpis": {
+            "ingested_review_rows": 1,
+            "own_review_rows": 1,
+            "competitor_review_rows": 0,
+            "health_index": 88,
+            "high_risk_count": 0,
+            "own_product_count": 1,
+            "competitor_product_count": 0,
+            "translated_count": 1,
+            "untranslated_count": 0,
+        },
+        "change_digest": {
+            "enabled": True,
+            "view_state": "bootstrap" if report_semantics == "bootstrap" else "incremental",
+            "suppressed_reason": "",
+            "summary": {
+                "ingested_review_count": 1,
+                "ingested_own_review_count": 1,
+                "ingested_competitor_review_count": 0,
+                "ingested_own_negative_count": 0,
+                "fresh_review_count": 1,
+                "historical_backfill_count": 0,
+                "fresh_own_negative_count": 0,
+                "issue_new_count": 0,
+                "issue_escalated_count": 0,
+                "issue_improving_count": 0,
+                "state_change_count": 0,
+            },
+            "issue_changes": {
+                "new": [],
+                "escalated": [],
+                "improving": [],
+                "de_escalated": [],
+            },
+            "product_changes": {
+                "price_changes": [],
+                "stock_changes": [],
+                "rating_changes": [],
+                "new_products": [],
+                "removed_products": [],
+            },
+            "review_signals": {
+                "fresh_negative_reviews": [],
+                "fresh_competitor_positive_reviews": [],
+            },
+            "warnings": {
+                "translation_incomplete": {"enabled": False, "message": ""},
+                "estimated_dates": {"enabled": False, "message": ""},
+                "backfill_dominant": {"enabled": False, "message": ""},
+            },
+            "empty_state": {"enabled": False, "title": "", "description": ""},
+        },
+        "self": {"risk_products": []},
+        "_trend_series": [],
+    }
+    analytics.update(overrides)
+    return analytics
+
+
+class TestExcelWorkbook:
+    def test_produces_5_sheets_with_analytics(self, tmp_path, monkeypatch):
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
         products = [{"name": "P1", "sku": "S1", "site": "test", "ownership": "own",
                      "price": 99.99, "stock_status": "in_stock", "rating": 4.0,
                      "review_count": 10, "scraped_at": "2026-04-10"}]
         reviews = [{"id": 1, "product_name": "P1", "product_sku": "S1", "author": "user",
-                     "headline": "Great", "body": "Nice product", "headline_cn": "好",
-                     "body_cn": "好产品", "rating": 5.0, "date_published_parsed": "2026-04-01",
-                     "ownership": "own", "sentiment": "positive", "images": None,
-                     "translate_status": "done", "analysis_labels": "[]", "analysis_features": "[]",
-                     "analysis_insight_cn": "", "impact_category": None, "failure_mode": None}]
-        analytics = {
-            "kpis": {"ingested_review_rows": 1},
-            "self": {"risk_products": [
-                {"product_name": "P1", "product_sku": "S1", "negative_review_rows": 0,
-                 "negative_rate": 0, "risk_score": 0, "ingested_reviews": 1,
-                 "top_features_display": ""}
-            ]},
-            "_trend_series": [{"product_name": "P1", "product_sku": "S1",
-                              "series": [{"date": "2026-04-10", "price": 99.99,
-                                          "rating": 4.0, "review_count": 10,
-                                          "stock_status": "in_stock"}]}],
-        }
-        path = str(tmp_path / "test.xlsx")
-        result = generate_excel(products, reviews, analytics=analytics, output_path=path)
+                    "headline": "Great", "body": "Nice product", "headline_cn": "很好",
+                    "body_cn": "很好用", "rating": 5.0, "date_published_parsed": "2026-04-01",
+                    "ownership": "own", "sentiment": "positive", "images": None,
+                    "translate_status": "done", "analysis_labels": "[]", "analysis_features": "[]",
+                    "analysis_insight_cn": "", "impact_category": None, "failure_mode": None}]
+        analytics = _analytics(
+            _trend_series=[{"product_name": "P1", "product_sku": "S1",
+                            "series": [{"date": "2026-04-10", "price": 99.99,
+                                        "rating": 4.0, "review_count": 10,
+                                        "stock_status": "in_stock"}]}],
+        )
+
+        result = generate_excel(products, reviews, analytics=analytics, output_path=str(tmp_path / "test.xlsx"))
         wb = openpyxl.load_workbook(result)
-        assert set(wb.sheetnames) == {"评论明细", "产品概览", "问题标签", "趋势数据"}
+
+        assert set(wb.sheetnames) == {"评论明细", "产品概览", "今日变化", "问题标签", "趋势数据"}
 
     def test_review_sheet_no_embedded_images(self, tmp_path, monkeypatch):
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
         reviews = [{"id": 1, "product_name": "P1", "product_sku": "S1", "author": "u",
-                     "headline": "H", "body": "B", "headline_cn": "H", "body_cn": "B",
-                     "rating": 5.0, "date_published_parsed": "2026-04-01",
-                     "ownership": "own", "sentiment": "positive",
-                     "images": '["https://example.com/img.jpg"]',
-                     "translate_status": "done"}]
-        # Pass analytics so we get the 4-sheet format
-        analytics = {"kpis": {}, "self": {}, "_trend_series": []}
-        path = str(tmp_path / "test.xlsx")
-        result = generate_excel([], reviews, analytics=analytics, output_path=path)
+                    "headline": "H", "body": "B", "headline_cn": "H", "body_cn": "B",
+                    "rating": 5.0, "date_published_parsed": "2026-04-01",
+                    "ownership": "own", "sentiment": "positive",
+                    "images": '["https://example.com/img.jpg"]',
+                    "translate_status": "done"}]
+
+        result = generate_excel([], reviews, analytics=_analytics(), output_path=str(tmp_path / "test.xlsx"))
         wb = openpyxl.load_workbook(result)
         ws = wb["评论明细"]
-        assert len(ws._images) == 0  # No embedded images
+
+        assert len(ws._images) == 0
 
     def test_legacy_format_without_analytics(self, tmp_path, monkeypatch):
-        """Without analytics, should still produce the legacy 2-sheet format."""
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
         products = [{"url": "http://t", "name": "P", "sku": "S", "price": 10,
                      "stock_status": "in_stock", "rating": 4.0, "review_count": 5,
                      "scraped_at": "2026-04-10", "site": "test", "ownership": "own"}]
-        path = str(tmp_path / "test.xlsx")
-        result = generate_excel(products, [], output_path=path)
+
+        result = generate_excel(products, [], output_path=str(tmp_path / "test.xlsx"))
         wb = openpyxl.load_workbook(result)
-        assert "产品" in wb.sheetnames  # Legacy format
+
+        assert "产品" in wb.sheetnames
 
     def test_review_sheet_image_urls_as_text(self, tmp_path, monkeypatch):
-        """Images should appear as newline-separated text URLs, not embedded images."""
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
         reviews = [{"id": 2, "product_name": "P2", "product_sku": "S2", "author": "u",
-                     "headline": "Title", "body": "Body", "headline_cn": "标题", "body_cn": "正文",
-                     "rating": 3.0, "date_published_parsed": "2026-04-01",
-                     "ownership": "own", "sentiment": "neutral",
-                     "images": '["https://a.com/1.jpg", "https://b.com/2.jpg"]',
-                     "translate_status": "done",
-                     "analysis_labels": "[]", "analysis_features": "[]",
-                     "analysis_insight_cn": "", "impact_category": None, "failure_mode": None}]
-        analytics = {"kpis": {}, "self": {}, "_trend_series": []}
-        path = str(tmp_path / "img_test.xlsx")
-        result = generate_excel([], reviews, analytics=analytics, output_path=path)
+                    "headline": "Title", "body": "Body", "headline_cn": "标题", "body_cn": "正文",
+                    "rating": 3.0, "date_published_parsed": "2026-04-01",
+                    "ownership": "own", "sentiment": "neutral",
+                    "images": '["https://a.com/1.jpg", "https://b.com/2.jpg"]',
+                    "translate_status": "done",
+                    "analysis_labels": "[]", "analysis_features": "[]",
+                    "analysis_insight_cn": "", "impact_category": None, "failure_mode": None}]
+
+        result = generate_excel([], reviews, analytics=_analytics(), output_path=str(tmp_path / "img_test.xlsx"))
         wb = openpyxl.load_workbook(result)
         ws = wb["评论明细"]
-        # Find the image URL column (last column = 照片)
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
         img_col = headers.index("照片") + 1
         cell_val = ws.cell(row=2, column=img_col).value or ""
+
         assert "https://a.com/1.jpg" in cell_val
         assert "https://b.com/2.jpg" in cell_val
         assert len(ws._images) == 0
 
     def test_product_overview_sheet_columns(self, tmp_path, monkeypatch):
-        """产品概览 sheet should have the expected 12 columns."""
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
         products = [{"name": "P1", "sku": "S1", "site": "test", "ownership": "own",
                      "price": 50.0, "stock_status": "in_stock", "rating": 4.5,
                      "review_count": 20, "scraped_at": "2026-04-10"}]
-        analytics = {
-            "kpis": {},
-            "self": {"risk_products": [
+        analytics = _analytics(
+            self={"risk_products": [
                 {"product_name": "P1", "product_sku": "S1", "negative_review_rows": 2,
                  "negative_rate": 0.1, "risk_score": 5, "ingested_reviews": 20,
                  "top_features_display": "质量"}
             ]},
-            "_trend_series": [],
-        }
-        path = str(tmp_path / "prod_test.xlsx")
-        result = generate_excel(products, [], analytics=analytics, output_path=path)
+        )
+
+        result = generate_excel(products, [], analytics=analytics, output_path=str(tmp_path / "prod_test.xlsx"))
         wb = openpyxl.load_workbook(result)
         ws = wb["产品概览"]
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-        expected = ["产品名称", "SKU", "站点", "归属", "售价", "库存状态",
-                    "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分"]
-        assert headers == expected
+
+        assert headers == [
+            "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
+            "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分",
+        ]
 
     def test_label_sheet_pivot_rows(self, tmp_path, monkeypatch):
-        """问题标签 sheet should have one row per label assignment."""
         from qbu_crawler import config
+        import json
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
-        import json
         labels = [
             {"code": "quality", "polarity": "negative", "severity": "high", "confidence": 0.9},
             {"code": "price", "polarity": "positive", "severity": "low", "confidence": 0.7},
         ]
         reviews = [{"id": 10, "product_name": "P1", "product_sku": "S1",
-                     "author": "u", "headline": "H", "body": "B",
-                     "headline_cn": "H", "body_cn": "B", "rating": 2.0,
-                     "date_published_parsed": "2026-04-01", "ownership": "own",
-                     "sentiment": "negative", "images": None, "translate_status": "done",
-                     "analysis_labels": json.dumps(labels),
-                     "analysis_features": "[]", "analysis_insight_cn": "",
-                     "impact_category": None, "failure_mode": None}]
-        analytics = {"kpis": {}, "self": {}, "_trend_series": []}
-        path = str(tmp_path / "label_test.xlsx")
-        result = generate_excel([], reviews, analytics=analytics, output_path=path)
+                    "author": "u", "headline": "H", "body": "B",
+                    "headline_cn": "H", "body_cn": "B", "rating": 2.0,
+                    "date_published_parsed": "2026-04-01", "ownership": "own",
+                    "sentiment": "negative", "images": None, "translate_status": "done",
+                    "analysis_labels": json.dumps(labels),
+                    "analysis_features": "[]", "analysis_insight_cn": "",
+                    "impact_category": None, "failure_mode": None}]
+
+        result = generate_excel([], reviews, analytics=_analytics(), output_path=str(tmp_path / "label_test.xlsx"))
         wb = openpyxl.load_workbook(result)
         ws = wb["问题标签"]
-        # Header row + 2 label rows
+
         assert ws.max_row == 3
         assert ws.cell(row=2, column=3).value == "quality"
         assert ws.cell(row=3, column=3).value == "price"
 
     def test_trend_sheet_flattened(self, tmp_path, monkeypatch):
-        """趋势数据 sheet should flatten nested series to one row per date×SKU."""
         from qbu_crawler import config
+
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
-        analytics = {
-            "kpis": {},
-            "self": {},
-            "_trend_series": [
+        analytics = _analytics(
+            _trend_series=[
                 {"product_name": "P1", "product_sku": "S1", "series": [
                     {"date": "2026-04-08", "price": 10.0, "rating": 4.0, "review_count": 5, "stock_status": "in_stock"},
                     {"date": "2026-04-09", "price": 11.0, "rating": 4.1, "review_count": 6, "stock_status": "in_stock"},
                 ]},
             ],
-        }
-        path = str(tmp_path / "trend_test.xlsx")
-        result = generate_excel([], [], analytics=analytics, output_path=path)
+        )
+
+        result = generate_excel([], [], analytics=analytics, output_path=str(tmp_path / "trend_test.xlsx"))
         wb = openpyxl.load_workbook(result)
         ws = wb["趋势数据"]
-        # Header + 2 data rows
+
         assert ws.max_row == 3
         assert ws.cell(row=2, column=1).value == "2026-04-08"
         assert ws.cell(row=3, column=1).value == "2026-04-09"
         assert ws.cell(row=2, column=2).value == "S1"
+
+    def test_today_change_sheet_bootstrap_shows_monitoring_start(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        analytics = _analytics(
+            report_semantics="bootstrap",
+            change_digest={
+                **_analytics("bootstrap")["change_digest"],
+                "summary": {
+                    "ingested_review_count": 6,
+                    "ingested_own_review_count": 4,
+                    "ingested_competitor_review_count": 2,
+                    "ingested_own_negative_count": 1,
+                    "fresh_review_count": 2,
+                    "historical_backfill_count": 4,
+                    "fresh_own_negative_count": 1,
+                    "issue_new_count": 0,
+                    "issue_escalated_count": 0,
+                    "issue_improving_count": 0,
+                    "state_change_count": 0,
+                },
+            },
+        )
+
+        result = generate_excel([], [], analytics=analytics, output_path=str(tmp_path / "bootstrap.xlsx"))
+        wb = openpyxl.load_workbook(result)
+        text = _sheet_text(wb["今日变化"])
+
+        assert "监控起点" in text
+        assert "今日新增" not in text
+
+    def test_product_overview_collected_reviews_uses_real_review_aggregate(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        products = [{"name": "P1", "sku": "S1", "site": "test", "ownership": "own",
+                     "price": 50.0, "stock_status": "in_stock", "rating": 4.5,
+                     "review_count": 20, "scraped_at": "2026-04-10"}]
+        reviews = [
+            {"id": 1, "product_name": "P1", "product_sku": "S1", "author": "u1",
+             "headline": "H1", "body": "B1", "headline_cn": "H1", "body_cn": "B1",
+             "rating": 5.0, "date_published_parsed": "2026-04-01", "ownership": "own",
+             "sentiment": "positive", "images": None, "translate_status": "done"},
+            {"id": 2, "product_name": "P1", "product_sku": "S1", "author": "u2",
+             "headline": "H2", "body": "B2", "headline_cn": "H2", "body_cn": "B2",
+             "rating": 2.0, "date_published_parsed": "2026-04-02", "ownership": "own",
+             "sentiment": "negative", "images": None, "translate_status": "done"},
+        ]
+        analytics = _analytics(
+            self={"risk_products": [
+                {"product_name": "P1", "product_sku": "S1", "negative_review_rows": 1,
+                 "negative_rate": 0.5, "risk_score": 5, "ingested_reviews": 99,
+                 "top_features_display": "质量"}
+            ]},
+        )
+
+        result = generate_excel(products, reviews, analytics=analytics, output_path=str(tmp_path / "overview.xlsx"))
+        wb = openpyxl.load_workbook(result)
+        ws = wb["产品概览"]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        count_col = headers.index("采集评论数") + 1
+
+        assert ws.cell(row=2, column=count_col).value == 2
+
+    def test_review_sheet_new_flag_uses_bootstrap_and_incremental_semantics(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        products = [{"name": "P1", "sku": "S1", "site": "test", "ownership": "own",
+                     "price": 50.0, "stock_status": "in_stock", "rating": 4.5,
+                     "review_count": 20, "scraped_at": "2026-04-23"}]
+        reviews = [
+            {"id": 1, "product_name": "P1", "product_sku": "S1", "author": "u1",
+             "headline": "Recent headline", "body": "B1", "headline_cn": "", "body_cn": "",
+             "rating": 5.0, "date_published_parsed": "2026-04-20", "ownership": "own",
+             "sentiment": "positive", "images": None, "translate_status": "done",
+             "analysis_labels": "[]", "analysis_features": "[]", "analysis_insight_cn": "",
+             "impact_category": None, "failure_mode": None},
+            {"id": 2, "product_name": "P1", "product_sku": "S1", "author": "u2",
+             "headline": "Motor failed", "body": "B2", "headline_cn": "", "body_cn": "",
+             "rating": 1.0, "date_published_parsed": "2026-01-01", "ownership": "own",
+             "sentiment": "negative", "images": None, "translate_status": "done",
+             "analysis_labels": "[]", "analysis_features": "[]", "analysis_insight_cn": "",
+             "impact_category": None, "failure_mode": "电机损坏"},
+        ]
+
+        bootstrap_result = generate_excel(
+            products,
+            reviews,
+            report_date=datetime(2026, 4, 23),
+            analytics=_analytics(report_semantics="bootstrap"),
+            output_path=str(tmp_path / "bootstrap-flags.xlsx"),
+        )
+        bootstrap_wb = openpyxl.load_workbook(bootstrap_result)
+        bootstrap_ws = bootstrap_wb["评论明细"]
+        bootstrap_headers = [bootstrap_ws.cell(row=1, column=c).value for c in range(1, bootstrap_ws.max_column + 1)]
+        new_col = bootstrap_headers.index("本次新增") + 1
+        impact_col = bootstrap_headers.index("影响类别") + 1
+        headline_cn_col = bootstrap_headers.index("标题(中文)") + 1
+
+        assert bootstrap_ws.cell(row=2, column=new_col).value == "新近"
+        assert bootstrap_ws.cell(row=3, column=new_col).value == "补采"
+        assert bootstrap_ws.cell(row=3, column=impact_col).value == "电机损坏"
+        assert bootstrap_ws.cell(row=3, column=headline_cn_col).value == "Motor failed"
+
+        incremental_result = generate_excel(
+            products,
+            reviews,
+            report_date=datetime(2026, 4, 23),
+            analytics=_analytics(report_semantics="incremental", window_review_ids=[2]),
+            output_path=str(tmp_path / "incremental-flags.xlsx"),
+        )
+        incremental_wb = openpyxl.load_workbook(incremental_result)
+        incremental_ws = incremental_wb["评论明细"]
+        incremental_headers = [incremental_ws.cell(row=1, column=c).value for c in range(1, incremental_ws.max_column + 1)]
+        incremental_new_col = incremental_headers.index("本次新增") + 1
+
+        assert incremental_ws.cell(row=2, column=incremental_new_col).value in ("", None)
+        assert incremental_ws.cell(row=3, column=incremental_new_col).value == "新增"

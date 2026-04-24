@@ -1,5 +1,7 @@
 """Tests for server/report_common.py — shared constants and helpers."""
 
+from datetime import date
+
 import pytest
 from qbu_crawler.server.report_common import (
     _LABEL_DISPLAY,
@@ -32,11 +34,65 @@ def test_normalize_handles_none():
     assert result["mode"] == "baseline"
 
 
+def test_normalize_exposes_semantic_contract_fields():
+    analytics = {
+        "mode": "baseline",
+        "kpis": {"ingested_review_rows": 5},
+    }
+
+    result = normalize_deep_report_analytics(analytics)
+
+    assert result["report_semantics"] == "bootstrap"
+    assert result["is_bootstrap"] is True
+    assert result["change_digest"] == {}
+    assert result["trend_digest"] == {}
+    assert result["kpis"]["ingested_review_rows"] == 5
+
+
+def test_normalize_preserves_trend_digest_contract():
+    analytics = {
+        "mode": "incremental",
+        "kpis": {"ingested_review_rows": 5},
+        "trend_digest": {
+            "views": ["week", "month", "year"],
+            "dimensions": ["sentiment", "issues", "products", "competition"],
+            "default_view": "month",
+            "default_dimension": "sentiment",
+            "data": {
+                "month": {
+                    "sentiment": {
+                        "status": "ready",
+                        "status_message": "",
+                        "kpis": {"status": "ready", "items": []},
+                        "primary_chart": {"status": "ready", "labels": [], "series": []},
+                        "table": {"status": "ready", "columns": [], "rows": []},
+                    }
+                }
+            },
+        },
+    }
+
+    result = normalize_deep_report_analytics(analytics)
+
+    assert result["trend_digest"]["default_view"] == "month"
+    assert result["trend_digest"]["default_dimension"] == "sentiment"
+    assert result["trend_digest"]["data"]["month"]["sentiment"]["status"] == "ready"
+
+
 def test_normalize_computes_rates():
     analytics = {"kpis": {"ingested_review_rows": 100, "negative_review_rows": 10, "translated_count": 90}}
     result = normalize_deep_report_analytics(analytics)
     assert result["kpis"]["negative_review_rate_display"] == "10.0%"
     assert result["kpis"]["translation_completion_rate_display"] == "90.0%"
+
+
+def test_parse_date_flexible_supports_hours_ago():
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    anchor = date(2026, 4, 23)
+
+    assert _parse_date_flexible("12 hours ago", anchor_date=anchor) == anchor
+    assert _parse_date_flexible("30 hours ago", anchor_date=anchor) == date(2026, 4, 22)
 
 
 def test_issue_cards_complete_fields():

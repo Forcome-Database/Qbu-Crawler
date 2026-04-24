@@ -1338,6 +1338,509 @@ def _build_trend_data(products, days=30):
     return result
 
 
+_TREND_VIEWS = {
+    "week": {"days": 7, "grain": "day"},
+    "month": {"days": 30, "grain": "day"},
+    "year": {"days": 365, "grain": "month"},
+}
+
+_TREND_DIMENSIONS = ("sentiment", "issues", "products", "competition")
+
+
+def _shift_month(year_value, month_value, delta):
+    total = year_value * 12 + (month_value - 1) + delta
+    shifted_year = total // 12
+    shifted_month = total % 12 + 1
+    return shifted_year, shifted_month
+
+
+def _trend_bucket_labels(logical_day, view):
+    config_view = _TREND_VIEWS[view]
+    if config_view["grain"] == "day":
+        start = logical_day - timedelta(days=config_view["days"] - 1)
+        labels = [(start + timedelta(days=index)).isoformat() for index in range(config_view["days"])]
+
+        def _bucket_for(day_value):
+            if not day_value or day_value < start or day_value > logical_day:
+                return None
+            return day_value.isoformat()
+
+        return labels, _bucket_for
+
+    labels = []
+    for offset in range(11, -1, -1):
+        year_value, month_value = _shift_month(logical_day.year, logical_day.month, -offset)
+        labels.append(f"{year_value:04d}-{month_value:02d}")
+
+    label_set = set(labels)
+
+    def _bucket_for(day_value):
+        if not day_value:
+            return None
+        label = f"{day_value.year:04d}-{day_value.month:02d}"
+        return label if label in label_set else None
+
+    return labels, _bucket_for
+
+
+def _review_publish_date(review, logical_day):
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    raw = review.get("date_published_parsed") or review.get("date_published")
+    return _parse_date_flexible(raw, anchor_date=logical_day) if raw else None
+
+
+def _scraped_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _trend_dimension_payload(*, status, message, kpis, primary_chart, table):
+    return {
+        "status": status,
+        "status_message": message,
+        "kpis": kpis,
+        "primary_chart": primary_chart,
+        "table": table,
+    }
+
+
+def _empty_trend_dimension(status, message, chart_title, table_columns):
+    return _trend_dimension_payload(
+        status=status,
+        message=message,
+        kpis={"status": status, "items": []},
+        primary_chart={
+            "status": status,
+            "chart_type": "line",
+            "title": chart_title,
+            "labels": [],
+            "series": [],
+        },
+        table={
+            "status": status,
+            "columns": table_columns,
+            "rows": [],
+        },
+    )
+
+
+def _build_sentiment_trend(view, logical_day, labeled_reviews):
+    labels, bucket_for = _trend_bucket_labels(logical_day, view)
+    review_count_by_bucket = {label: 0 for label in labels}
+    own_total_by_bucket = {label: 0 for label in labels}
+    own_negative_by_bucket = {label: 0 for label in labels}
+
+    for item in labeled_reviews:
+        review = item["review"]
+        bucket = bucket_for(_review_publish_date(review, logical_day))
+        if not bucket:
+            continue
+        review_count_by_bucket[bucket] += 1
+        if review.get("ownership") != "own":
+            continue
+        own_total_by_bucket[bucket] += 1
+        if float(review.get("rating") or 0) <= config.NEGATIVE_THRESHOLD:
+            own_negative_by_bucket[bucket] += 1
+
+    review_counts = [review_count_by_bucket[label] for label in labels]
+    own_negative_counts = [own_negative_by_bucket[label] for label in labels]
+    own_negative_rates = [
+        round((own_negative_by_bucket[label] / own_total_by_bucket[label]) * 100, 1)
+        if own_total_by_bucket[label]
+        else 0
+        for label in labels
+    ]
+    health_scores = [round(100 - rate, 1) if own_total_by_bucket[label] else 0 for label, rate in zip(labels, own_negative_rates)]
+
+    non_zero_points = sum(1 for value in review_counts if value > 0)
+    ready = sum(review_counts) > 0 and (view != "year" or non_zero_points >= 2)
+    if not ready:
+        return _empty_trend_dimension(
+            "accumulating",
+            "评论发布时间样本仍在积累，当前不足以形成稳定趋势。",
+            "舆情趋势",
+            ["日期", "评论量", "自有差评", "自有差评率", "健康分"],
+        )
+
+    rows = []
+    for label in labels:
+        if review_count_by_bucket[label] <= 0:
+            continue
+        rows.append(
+            {
+                "bucket": label,
+                "review_count": review_count_by_bucket[label],
+                "own_negative_count": own_negative_by_bucket[label],
+                "own_negative_rate": own_negative_rates[labels.index(label)],
+                "health_index": health_scores[labels.index(label)],
+            }
+        )
+
+    total_own_reviews = sum(own_total_by_bucket.values())
+    total_own_negative = sum(own_negative_by_bucket.values())
+    total_own_negative_rate = round((total_own_negative / total_own_reviews) * 100, 1) if total_own_reviews else 0
+
+    return _trend_dimension_payload(
+        status="ready",
+        message="",
+        kpis={
+            "status": "ready",
+            "items": [
+                {"label": "窗口评论量", "value": sum(review_counts)},
+                {"label": "自有差评数", "value": total_own_negative},
+                {"label": "自有差评率", "value": f"{total_own_negative_rate:.1f}%"},
+                {"label": "有效时间点", "value": non_zero_points},
+            ],
+        },
+        primary_chart={
+            "status": "ready",
+            "chart_type": "line",
+            "title": "舆情趋势",
+            "labels": labels,
+            "series": [
+                {"name": "评论量", "data": review_counts},
+                {"name": "自有差评数", "data": own_negative_counts},
+                {"name": "健康分", "data": health_scores},
+            ],
+        },
+        table={
+            "status": "ready",
+            "columns": ["日期", "评论量", "自有差评", "自有差评率", "健康分"],
+            "rows": rows,
+        },
+    )
+
+
+def _build_issue_trend(view, logical_day, labeled_reviews):
+    from qbu_crawler.server.report_common import _label_display
+
+    labels, bucket_for = _trend_bucket_labels(logical_day, view)
+    counts_by_label: dict[str, dict[str, int]] = {}
+    affected_products: dict[str, set[str]] = {}
+
+    for item in labeled_reviews:
+        review = item["review"]
+        if review.get("ownership") != "own":
+            continue
+        bucket = bucket_for(_review_publish_date(review, logical_day))
+        if not bucket:
+            continue
+        product_marker = review.get("product_sku") or review.get("product_name") or ""
+        for label in item.get("labels") or []:
+            if label.get("label_polarity") != "negative":
+                continue
+            code = label.get("label_code") or "_uncategorized"
+            counts_by_label.setdefault(code, {name: 0 for name in labels})
+            counts_by_label[code][bucket] += 1
+            affected_products.setdefault(code, set()).add(product_marker)
+
+    if not counts_by_label:
+        return _empty_trend_dimension(
+            "accumulating",
+            "问题标签样本仍在积累，当前不足以形成稳定趋势。",
+            "问题趋势",
+            ["问题", "评论数", "影响产品数"],
+        )
+
+    ranked_codes = sorted(
+        counts_by_label,
+        key=lambda code: (-sum(counts_by_label[code].values()), code),
+    )[:3]
+    non_zero_points = sum(
+        1
+        for label in labels
+        if sum(counts_by_label[code].get(label, 0) for code in ranked_codes) > 0
+    )
+    ready = non_zero_points > 0 and (view != "year" or non_zero_points >= 2)
+    if not ready:
+        return _empty_trend_dimension(
+            "accumulating",
+            "问题标签时间分布仍在积累，当前不足以形成年度趋势。",
+            "问题趋势",
+            ["问题", "评论数", "影响产品数"],
+        )
+
+    rows = []
+    for code in ranked_codes:
+        rows.append(
+            {
+                "label_code": code,
+                "label_display": _label_display(code),
+                "review_count": sum(counts_by_label[code].values()),
+                "affected_product_count": len([name for name in affected_products.get(code, set()) if name]),
+            }
+        )
+
+    top_code = ranked_codes[0]
+    return _trend_dimension_payload(
+        status="ready",
+        message="",
+        kpis={
+            "status": "ready",
+            "items": [
+                {"label": "问题信号数", "value": sum(sum(counts_by_label[code].values()) for code in ranked_codes)},
+                {"label": "活跃问题数", "value": len(ranked_codes)},
+                {"label": "头号问题", "value": _label_display(top_code)},
+                {"label": "涉及产品数", "value": rows[0]["affected_product_count"]},
+            ],
+        },
+        primary_chart={
+            "status": "ready",
+            "chart_type": "line",
+            "title": "问题趋势",
+            "labels": labels,
+            "series": [
+                {
+                    "name": _label_display(code),
+                    "data": [counts_by_label[code].get(label, 0) for label in labels],
+                }
+                for code in ranked_codes
+            ],
+        },
+        table={
+            "status": "ready",
+            "columns": ["问题", "评论数", "影响产品数"],
+            "rows": rows,
+        },
+    )
+
+
+def _build_product_trend(view, logical_day, trend_series, snapshot_products):
+    labels, bucket_for = _trend_bucket_labels(logical_day, view)
+    own_products = [product for product in snapshot_products if product.get("ownership") == "own"]
+    rows = []
+    ready_series = None
+
+    for product in own_products:
+        sku = product.get("sku") or ""
+        matching = next((item for item in trend_series if item.get("product_sku") == sku), None) or {}
+        filtered = []
+        for point in matching.get("series") or []:
+            point_day = _scraped_date(point.get("date"))
+            bucket = bucket_for(point_day)
+            if not bucket:
+                continue
+            filtered.append({**point, "bucket": bucket})
+        rows.append(
+            {
+                "sku": sku,
+                "name": product.get("name") or sku,
+                "current_rating": product.get("rating"),
+                "current_review_count": product.get("review_count"),
+                "snapshot_points": len(filtered),
+                "scraped_at": product.get("scraped_at"),
+            }
+        )
+        if ready_series is None and len(filtered) >= 2:
+            ready_series = {
+                "product_name": product.get("name") or sku,
+                "points": filtered,
+            }
+
+    if ready_series is None:
+        return _trend_dimension_payload(
+            status="accumulating",
+            message="产品快照样本不足，连续状态趋势仍在积累。",
+            kpis={
+                "status": "ready" if rows else "accumulating",
+                "items": [
+                    {"label": "跟踪产品数", "value": len(own_products)},
+                    {"label": "有快照产品数", "value": sum(1 for row in rows if row["snapshot_points"] > 0)},
+                    {"label": "可成图产品数", "value": 0},
+                    {"label": "快照点数", "value": sum(row["snapshot_points"] for row in rows)},
+                ],
+            },
+            primary_chart={
+                "status": "accumulating",
+                "chart_type": "line",
+                "title": "产品评分趋势",
+                "labels": [],
+                "series": [],
+            },
+            table={
+                "status": "ready" if rows else "accumulating",
+                "columns": ["SKU", "产品", "当前评分", "当前评论总数", "快照点数", "最新抓取时间"],
+                "rows": rows,
+            },
+        )
+
+    bucket_to_rating = {label: None for label in labels}
+    bucket_to_review_count = {label: None for label in labels}
+    for point in ready_series["points"]:
+        bucket_to_rating[point["bucket"]] = point.get("rating")
+        bucket_to_review_count[point["bucket"]] = point.get("review_count")
+
+    return _trend_dimension_payload(
+        status="ready",
+        message="",
+        kpis={
+            "status": "ready",
+            "items": [
+                {"label": "跟踪产品数", "value": len(own_products)},
+                {"label": "有快照产品数", "value": sum(1 for row in rows if row["snapshot_points"] > 0)},
+                {"label": "可成图产品数", "value": 1},
+                {"label": "快照点数", "value": len(ready_series["points"])},
+            ],
+        },
+        primary_chart={
+            "status": "ready",
+            "chart_type": "line",
+            "title": f"产品趋势 - {ready_series['product_name']}",
+            "labels": labels,
+            "series": [
+                {"name": "评分", "data": [bucket_to_rating[label] for label in labels]},
+                {"name": "评论总数", "data": [bucket_to_review_count[label] for label in labels]},
+            ],
+        },
+        table={
+            "status": "ready",
+            "columns": ["SKU", "产品", "当前评分", "当前评论总数", "快照点数", "最新抓取时间"],
+            "rows": rows,
+        },
+    )
+
+
+def _build_competition_trend(view, logical_day, labeled_reviews):
+    labels, bucket_for = _trend_bucket_labels(logical_day, view)
+    own_ratings = {label: [] for label in labels}
+    competitor_ratings = {label: [] for label in labels}
+    own_total = {label: 0 for label in labels}
+    own_negative = {label: 0 for label in labels}
+    competitor_total = {label: 0 for label in labels}
+    competitor_positive = {label: 0 for label in labels}
+
+    for item in labeled_reviews:
+        review = item["review"]
+        bucket = bucket_for(_review_publish_date(review, logical_day))
+        if not bucket:
+            continue
+        rating = float(review.get("rating") or 0)
+        if review.get("ownership") == "own":
+            own_ratings[bucket].append(rating)
+            own_total[bucket] += 1
+            if rating <= config.NEGATIVE_THRESHOLD:
+                own_negative[bucket] += 1
+        elif review.get("ownership") == "competitor":
+            competitor_ratings[bucket].append(rating)
+            competitor_total[bucket] += 1
+            if rating >= 4:
+                competitor_positive[bucket] += 1
+
+    shared_points = sum(1 for label in labels if own_total[label] > 0 and competitor_total[label] > 0)
+    ready = shared_points > 0 and (view != "year" or shared_points >= 2)
+    if not ready:
+        return _empty_trend_dimension(
+            "accumulating",
+            "自有与竞品的可比样本仍在积累，当前不足以形成稳定趋势。",
+            "竞品趋势",
+            ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
+        )
+
+    own_avg_rating = [
+        round(sum(own_ratings[label]) / len(own_ratings[label]), 2) if own_ratings[label] else None
+        for label in labels
+    ]
+    competitor_avg_rating = [
+        round(sum(competitor_ratings[label]) / len(competitor_ratings[label]), 2) if competitor_ratings[label] else None
+        for label in labels
+    ]
+    own_negative_rate = [
+        round((own_negative[label] / own_total[label]) * 100, 1) if own_total[label] else None
+        for label in labels
+    ]
+    competitor_positive_rate = [
+        round((competitor_positive[label] / competitor_total[label]) * 100, 1) if competitor_total[label] else None
+        for label in labels
+    ]
+
+    rows = []
+    for label in labels:
+        if own_total[label] <= 0 and competitor_total[label] <= 0:
+            continue
+        rows.append(
+            {
+                "bucket": label,
+                "own_avg_rating": own_avg_rating[labels.index(label)],
+                "competitor_avg_rating": competitor_avg_rating[labels.index(label)],
+                "own_negative_rate": own_negative_rate[labels.index(label)],
+                "competitor_positive_rate": competitor_positive_rate[labels.index(label)],
+            }
+        )
+
+    latest_row = rows[-1] if rows else {}
+    rating_gap = None
+    if latest_row.get("own_avg_rating") is not None and latest_row.get("competitor_avg_rating") is not None:
+        rating_gap = round(latest_row["competitor_avg_rating"] - latest_row["own_avg_rating"], 2)
+
+    return _trend_dimension_payload(
+        status="ready",
+        message="",
+        kpis={
+            "status": "ready",
+            "items": [
+                {"label": "可比时间点", "value": shared_points},
+                {"label": "最新评分差", "value": rating_gap if rating_gap is not None else "—"},
+                {"label": "最新自有差评率", "value": f"{latest_row.get('own_negative_rate', 0):.1f}%" if latest_row else "0.0%"},
+                {"label": "最新竞品好评率", "value": f"{latest_row.get('competitor_positive_rate', 0):.1f}%" if latest_row else "0.0%"},
+            ],
+        },
+        primary_chart={
+            "status": "ready",
+            "chart_type": "line",
+            "title": "竞品趋势",
+            "labels": labels,
+            "series": [
+                {"name": "自有均分", "data": own_avg_rating},
+                {"name": "竞品均分", "data": competitor_avg_rating},
+            ],
+        },
+        table={
+            "status": "ready",
+            "columns": ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
+            "rows": rows,
+        },
+    )
+
+
+def _build_trend_dimension(builder, *args):
+    try:
+        return builder(*args)
+    except Exception as exc:
+        return _empty_trend_dimension(
+            "degraded",
+            f"趋势数据生成失败：{exc}",
+            "趋势",
+            [],
+        )
+
+
+def _build_trend_digest(snapshot, labeled_reviews, trend_series):
+    logical_day = date.fromisoformat(snapshot["logical_date"])
+    data = {}
+    snapshot_products = snapshot.get("products") or []
+
+    for view in _TREND_VIEWS:
+        data[view] = {
+            "sentiment": _build_trend_dimension(_build_sentiment_trend, view, logical_day, labeled_reviews),
+            "issues": _build_trend_dimension(_build_issue_trend, view, logical_day, labeled_reviews),
+            "products": _build_trend_dimension(_build_product_trend, view, logical_day, trend_series, snapshot_products),
+            "competition": _build_trend_dimension(_build_competition_trend, view, logical_day, labeled_reviews),
+        }
+
+    return {
+        "views": list(_TREND_VIEWS.keys()),
+        "dimensions": list(_TREND_DIMENSIONS),
+        "default_view": "month",
+        "default_dimension": "sentiment",
+        "data": data,
+    }
+
+
 def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
@@ -1447,11 +1950,15 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
         "logical_date": snapshot["logical_date"],
         "snapshot_hash": snapshot["snapshot_hash"],
         "mode": mode_info["mode"],
+        "report_semantics": "bootstrap" if mode_info["mode"] == "baseline" else "incremental",
+        "is_bootstrap": mode_info["mode"] == "baseline",
         "baseline_run_ids": mode_info["baseline_run_ids"],
         "baseline_sample_days": mode_info["baseline_sample_days"],
         "taxonomy_version": TAXONOMY_VERSION,
         "label_mode": config.REPORT_LABEL_MODE,
         "generated_at": config.now_shanghai().isoformat(),
+        "change_digest": {},
+        "trend_digest": _build_trend_digest(snapshot, labeled_reviews, _trend_series),
         "_products_for_charts": products_for_charts,
         "metric_semantics": {
             "ingested_review_rows": "reviews 实际入库行数（按 scraped_at 窗口，含历史补采）",

@@ -219,6 +219,34 @@ def test_build_report_analytics_uses_incremental_mode_with_prior_runs(analytics_
     assert analytics["baseline_sample_days"] == 3
 
 
+def test_build_report_analytics_exposes_report_semantics_fields(analytics_db):
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    _create_daily_run("2026-03-20", analytics_path="a.json")
+    _create_daily_run("2026-03-21", analytics_path="b.json")
+    _create_daily_run("2026-03-25", analytics_path="c.json")
+    run = _create_daily_run("2026-03-29", status="reporting")
+
+    analytics = build_report_analytics(_build_snapshot(run["id"], "2026-03-29"))
+
+    assert analytics["report_semantics"] == "incremental"
+    assert analytics["is_bootstrap"] is False
+    assert analytics["change_digest"] == {}
+    trend = analytics["trend_digest"]
+    assert set(trend["views"]) == {"week", "month", "year"}
+    assert set(trend["dimensions"]) == {"sentiment", "issues", "products", "competition"}
+    assert trend["default_view"] == "month"
+    assert trend["default_dimension"] == "sentiment"
+    for view in trend["views"]:
+        for dimension in trend["dimensions"]:
+            item = trend["data"][view][dimension]
+            assert item["status"] in {"ready", "accumulating", "degraded"}
+            assert "status_message" in item
+            assert "kpis" in item
+            assert "primary_chart" in item
+            assert "table" in item
+
+
 def test_self_focus_on_negative_clusters(analytics_db):
     from qbu_crawler.server.report_analytics import build_report_analytics
 
@@ -1209,3 +1237,19 @@ def test_build_dual_window_analytics_has_no_delta_keys(analytics_db):
     if window_analytics:
         delta_keys = [k for k in window_analytics.get("kpis", {}) if k.endswith("_delta")]
         assert delta_keys == [], f"Window analytics should have no delta keys, found: {delta_keys}"
+
+
+def test_build_dual_trend_digest_has_mixed_ready_and_accumulating_states(analytics_db):
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+
+    result = build_dual_report_analytics(snapshot)
+
+    month = result["trend_digest"]["data"]["month"]
+    assert month["sentiment"]["status"] == "ready"
+    assert month["issues"]["status"] == "ready"
+    assert month["competition"]["status"] == "ready"
+    assert month["products"]["status"] == "accumulating"
+    assert month["products"]["primary_chart"]["status"] == "accumulating"

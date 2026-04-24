@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from qbu_crawler import config, models
@@ -73,26 +73,126 @@ def should_send_quiet_email(run_id):
     return False, None, consecutive
 
 
+def _artifact_search_roots(stored_path: str | None = None) -> list[Path]:
+    roots: list[Path] = []
+
+    report_dir = getattr(config, "REPORT_DIR", "")
+    if report_dir:
+        roots.append(Path(report_dir))
+
+    db_path = getattr(config, "DB_PATH", "")
+    if db_path:
+        roots.append(Path(db_path).resolve().parent / "reports")
+
+    if stored_path:
+        stored = Path(stored_path)
+        if str(stored.parent) not in {"", "."}:
+            roots.append(stored.parent)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
+
+
+def _artifact_glob_patterns(run_id: int | None, kind: str | None) -> list[str]:
+    if not run_id or not kind:
+        return []
+    if kind == "snapshot":
+        return [f"workflow-run-{run_id}-snapshot-*.json"]
+    if kind == "analytics":
+        return [f"workflow-run-{run_id}-analytics-*.json"]
+    if kind == "excel":
+        return [f"workflow-run-{run_id}-full-report.xlsx"]
+    if kind == "html":
+        return [f"workflow-run-{run_id}-full-report.html"]
+    return []
+
+
+def _resolve_artifact_path(
+    stored_path: str | None,
+    *,
+    run_id: int | None = None,
+    kind: str | None = None,
+) -> str | None:
+    if not stored_path:
+        return None
+
+    raw = Path(stored_path)
+    if raw.is_file():
+        return str(raw)
+
+    basename = raw.name
+    for root in _artifact_search_roots(stored_path):
+        if basename:
+            candidate = root / basename
+            if candidate.is_file():
+                return str(candidate)
+        for pattern in _artifact_glob_patterns(run_id, kind):
+            matches = sorted(root.glob(pattern))
+            if matches:
+                return str(matches[-1])
+    return None
+
+
+def _artifact_db_value(path: str | None) -> str | None:
+    if not path:
+        return None
+
+    target = Path(path).resolve()
+    for root in _artifact_search_roots(path):
+        try:
+            relative = target.relative_to(root.resolve())
+        except ValueError:
+            continue
+        return str(relative).replace("\\", "/")
+    return str(target)
+
+
 def load_previous_report_context(run_id):
     """Load most recent completed run's analytics and snapshot.
 
     Skips runs without analytics (quiet/change mode runs).
     Returns (analytics_dict, snapshot_dict) or (None, None).
     """
-    prev_run = models.get_previous_completed_run(run_id)
+    try:
+        prev_run = models.get_previous_completed_run(run_id)
+    except Exception as e:
+        _logger.warning("Failed to locate previous report context: %s", e)
+        return None, None
     if not prev_run or not prev_run.get("analytics_path"):
         return None, None
 
+    analytics_path = _resolve_artifact_path(
+        prev_run.get("analytics_path"),
+        run_id=prev_run.get("id"),
+        kind="analytics",
+    )
+    if not analytics_path:
+        return None, None
+
     try:
-        analytics = json.loads(Path(prev_run["analytics_path"]).read_text(encoding="utf-8"))
+        analytics = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as e:
         _logger.warning("Failed to load previous analytics: %s", e)
         return None, None
 
     snapshot = None
     if prev_run.get("snapshot_path"):
+        snapshot_path = _resolve_artifact_path(
+            prev_run.get("snapshot_path"),
+            run_id=prev_run.get("id"),
+            kind="snapshot",
+        )
+        if not snapshot_path:
+            return analytics, None
         try:
-            snapshot = json.loads(Path(prev_run["snapshot_path"]).read_text(encoding="utf-8"))
+            snapshot = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError) as e:
             _logger.warning("Failed to load previous snapshot: %s", e)
 
@@ -228,8 +328,12 @@ def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
 
         if prev is None:
             changes["new"].append({
+                "label_code": code,
                 "label_display": cluster.get("label_display", code),
                 "review_count": cluster.get("review_count", 0),
+                "severity": cluster.get("severity", "low"),
+                "affected_product_count": cluster.get("affected_product_count")
+                or len(cluster.get("affected_products") or []),
                 "affected_products": cluster.get("affected_products", []),
             })
             continue
@@ -240,18 +344,25 @@ def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
 
         if delta > 0:
             changes["escalated"].append({
+                "label_code": code,
                 "label_display": cluster.get("label_display", code),
                 "delta": delta,
                 "old_count": prev.get("review_count", 0),
                 "new_count": cluster.get("review_count", 0),
                 "severity": cluster.get("severity", "low"),
                 "severity_changed": cur_sev > prev_sev,
+                "affected_product_count": cluster.get("affected_product_count")
+                or len(cluster.get("affected_products") or []),
             })
         elif cur_sev < prev_sev:
             changes["de_escalated"].append({
+                "label_code": code,
                 "label_display": cluster.get("label_display", code),
                 "old_severity": prev.get("severity"),
                 "new_severity": cluster.get("severity"),
+                "review_count": cluster.get("review_count", 0),
+                "affected_product_count": cluster.get("affected_product_count")
+                or len(cluster.get("affected_products") or []),
             })
 
     # Improving: clusters unchanged for 7+ days
@@ -282,11 +393,214 @@ def compute_cluster_changes(current_clusters, previous_clusters, logical_date):
             days_quiet = (logical_date - last_seen_date).days
             if days_quiet >= 7 and cluster.get("review_count", 0) == prev.get("review_count", 0):
                 changes["improving"].append({
+                    "label_code": code,
                     "label_display": cluster.get("label_display", code),
                     "days_quiet": days_quiet,
+                    "review_count": cluster.get("review_count", 0),
+                    "severity": cluster.get("severity", "low"),
+                    "affected_product_count": cluster.get("affected_product_count")
+                    or len(cluster.get("affected_products") or []),
                 })
 
     return changes
+
+
+def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_analytics=None):
+    from qbu_crawler.server.report_common import _parse_date_flexible, has_estimated_dates
+
+    logical_date_str = snapshot.get("logical_date") or config.now_shanghai().date().isoformat()
+    logical_day = date.fromisoformat(logical_date_str)
+    cutoff = logical_day - timedelta(days=30)
+    reviews = snapshot.get("reviews") or []
+    kpis = analytics.get("kpis") or {}
+    report_semantics = analytics.get("report_semantics") or (
+        "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
+    )
+
+    review_contexts = []
+    for review in reviews:
+        published = (
+            _parse_date_flexible(review.get("date_published_parsed"), anchor_date=logical_day)
+            or _parse_date_flexible(review.get("date_published"), anchor_date=logical_day)
+        )
+        review_contexts.append({"review": review, "published": published})
+
+    fresh_contexts = [
+        item for item in review_contexts
+        if item["published"] and item["published"] >= cutoff
+    ]
+    fresh_reviews = [item["review"] for item in fresh_contexts]
+
+    own_reviews = [review for review in reviews if review.get("ownership") == "own"]
+    competitor_reviews = [review for review in reviews if review.get("ownership") == "competitor"]
+    own_negative_reviews = [
+        review for review in own_reviews
+        if (review.get("rating") or 5) <= config.NEGATIVE_THRESHOLD
+    ]
+    fresh_own_negative_contexts = [
+        item for item in fresh_contexts
+        if item["review"].get("ownership") == "own"
+        and (item["review"].get("rating") or 5) <= config.NEGATIVE_THRESHOLD
+    ]
+
+    if report_semantics == "bootstrap":
+        product_changes = {
+            "has_changes": False,
+            "price_changes": [],
+            "stock_changes": [],
+            "rating_changes": [],
+            "new_products": [],
+            "removed_products": [],
+        }
+        cluster_changes = {"new": [], "escalated": [], "improving": [], "de_escalated": []}
+    else:
+        product_changes = detect_snapshot_changes(snapshot, previous_snapshot)
+        cluster_changes = compute_cluster_changes(
+            ((analytics.get("self") or {}).get("top_negative_clusters") or []),
+            ((previous_analytics or {}).get("self") or {}).get("top_negative_clusters") or [],
+            logical_date_str,
+        )
+
+    issue_changes = {"new": [], "escalated": [], "improving": [], "de_escalated": []}
+    for key, change_type in (
+        ("new", "new"),
+        ("escalated", "escalated"),
+        ("improving", "improving"),
+        ("de_escalated", "de_escalated"),
+    ):
+        for item in cluster_changes.get(key, []):
+            issue_changes[key].append(
+                {
+                    "label_code": item.get("label_code"),
+                    "label_display": item.get("label_display") or item.get("label_code") or "",
+                    "change_type": change_type,
+                    "current_review_count": item.get("new_count", item.get("review_count", 0)),
+                    "delta_review_count": item.get("delta", item.get("review_count", 0) if key == "new" else 0),
+                    "affected_product_count": item.get("affected_product_count", 0),
+                    "severity": item.get("severity"),
+                    "severity_changed": bool(item.get("severity_changed", False)),
+                    "days_quiet": item.get("days_quiet", 0),
+                }
+            )
+
+    def _state_change_count():
+        return sum(
+            len(product_changes.get(name, []))
+            for name in ("price_changes", "stock_changes", "rating_changes", "new_products", "removed_products")
+        )
+
+    def _sort_by_published_desc(item):
+        published = item["published"]
+        return published.toordinal() if published else -1
+
+    fresh_negative_reviews = sorted(
+        fresh_own_negative_contexts,
+        key=lambda item: (
+            item["review"].get("rating") if item["review"].get("rating") is not None else 5,
+            -_sort_by_published_desc(item),
+            0 if (item["review"].get("images") or []) else 1,
+        ),
+    )
+    fresh_competitor_positive_reviews = sorted(
+        [
+            item for item in fresh_contexts
+            if item["review"].get("ownership") == "competitor"
+            and (item["review"].get("rating") or 0) >= 4
+        ],
+        key=lambda item: (
+            -(item["review"].get("rating") or 0),
+            -_sort_by_published_desc(item),
+        ),
+    )
+
+    review_signals = {
+        "fresh_negative_reviews": [
+            item["review"] for item in fresh_negative_reviews[:5]
+        ],
+        "fresh_competitor_positive_reviews": [
+            item["review"] for item in fresh_competitor_positive_reviews[:3]
+        ],
+    }
+
+    ingested_review_count = len(reviews)
+    fresh_review_count = len(fresh_reviews)
+    historical_backfill_count = ingested_review_count - fresh_review_count
+    backfill_ratio = (
+        historical_backfill_count / ingested_review_count
+        if ingested_review_count
+        else 0
+    )
+
+    warnings = {
+        "translation_incomplete": {
+            "enabled": (kpis.get("untranslated_count", snapshot.get("untranslated_count", 0)) or 0) > 0,
+            "message": (
+                f"{kpis.get('untranslated_count', snapshot.get('untranslated_count', 0)) or 0} 条评论翻译未完成，中文分析可能不完整"
+                if (kpis.get("untranslated_count", snapshot.get("untranslated_count", 0)) or 0) > 0
+                else ""
+            ),
+        },
+        "estimated_dates": {
+            "enabled": has_estimated_dates(reviews, logical_date_str),
+            "message": "评论发布时间存在较高比例的相对时间估算，新增与趋势口径可能降级"
+            if has_estimated_dates(reviews, logical_date_str)
+            else "",
+        },
+        "backfill_dominant": {
+            "enabled": backfill_ratio >= 0.7,
+            "message": f"本次入库以历史补采为主，占比 {backfill_ratio:.0%}" if backfill_ratio >= 0.7 else "",
+        },
+    }
+
+    empty_state_enabled = (
+        report_semantics == "incremental"
+        and not any(issue_changes[key] for key in issue_changes)
+        and _state_change_count() == 0
+        and not review_signals["fresh_negative_reviews"]
+        and not review_signals["fresh_competitor_positive_reviews"]
+    )
+
+    view_state = "bootstrap"
+    if report_semantics != "bootstrap":
+        view_state = "empty" if empty_state_enabled else "active"
+
+    return {
+        "enabled": True,
+        "view_state": view_state,
+        "suppressed_reason": "",
+        "summary": {
+            "ingested_review_count": ingested_review_count,
+            "ingested_own_review_count": len(own_reviews),
+            "ingested_competitor_review_count": len(competitor_reviews),
+            "ingested_own_negative_count": len(own_negative_reviews),
+            "fresh_review_count": fresh_review_count,
+            "historical_backfill_count": historical_backfill_count,
+            "fresh_own_negative_count": len(fresh_own_negative_contexts),
+            "issue_new_count": len(issue_changes["new"]),
+            "issue_escalated_count": len(issue_changes["escalated"]),
+            "issue_improving_count": len(issue_changes["improving"]),
+            "state_change_count": _state_change_count(),
+        },
+        "issue_changes": issue_changes,
+        "product_changes": {
+            "price_changes": product_changes.get("price_changes", []),
+            "stock_changes": product_changes.get("stock_changes", []),
+            "rating_changes": product_changes.get("rating_changes", []),
+            "new_products": product_changes.get("new_products", []),
+            "removed_products": product_changes.get("removed_products", []),
+        },
+        "review_signals": review_signals,
+        "warnings": warnings,
+        "empty_state": {
+            "enabled": empty_state_enabled,
+            "title": "本期无显著变化" if empty_state_enabled else "",
+            "description": (
+                "本次运行未发现需要立即处理的新增问题或明显产品状态变化。"
+                if empty_state_enabled
+                else ""
+            ),
+        },
+    }
 
 
 class FullReportGenerationError(RuntimeError):
@@ -304,15 +618,20 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         raise ValueError(f"Workflow run {run_id} not found")
 
     existing_path = run.get("snapshot_path") or ""
-    if existing_path and os.path.isfile(existing_path):
-        snapshot = load_report_snapshot(existing_path)
-        models.update_workflow_run(
+    resolved_existing_path = _resolve_artifact_path(existing_path, run_id=run_id, kind="snapshot")
+    if resolved_existing_path:
+        snapshot = load_report_snapshot(resolved_existing_path)
+        updated = models.update_workflow_run(
             run_id,
             snapshot_at=snapshot.get("snapshot_at"),
-            snapshot_path=existing_path,
+            snapshot_path=_artifact_db_value(resolved_existing_path),
             snapshot_hash=snapshot.get("snapshot_hash"),
             report_phase=run.get("report_phase") or "none",
         )
+        if updated:
+            updated = dict(updated)
+            updated["snapshot_path"] = resolved_existing_path
+            return updated
         return models.get_workflow_run(run_id) or run
 
     products, reviews = report.query_report_data(run["data_since"], until=run["data_until"])
@@ -382,18 +701,26 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         encoding="utf-8",
     )
 
-    return models.update_workflow_run(
+    updated = models.update_workflow_run(
         run_id,
         snapshot_at=snapshot_at,
-        snapshot_path=snapshot_path,
+        snapshot_path=_artifact_db_value(snapshot_path),
         snapshot_hash=snapshot_hash,
     )
+    if updated:
+        updated = dict(updated)
+        updated["snapshot_path"] = snapshot_path
+        return updated
+    return run
 
 
 def load_report_snapshot(path: str) -> dict:
-    snapshot = json.loads(Path(path).read_text(encoding="utf-8"))
+    resolved_path = _resolve_artifact_path(path, kind="snapshot")
+    if not resolved_path:
+        raise FileNotFoundError(path)
+    snapshot = json.loads(Path(resolved_path).read_text(encoding="utf-8"))
     if "snapshot_hash" not in snapshot:
-        raise ValueError(f"Snapshot at {path} is missing snapshot_hash")
+        raise ValueError(f"Snapshot at {resolved_path} is missing snapshot_hash")
     return snapshot
 
 
@@ -931,6 +1258,15 @@ def generate_full_report_from_snapshot(
         # Pre-normalize so LLM gets gap_analysis, enriched clusters, and top_symptoms
         from qbu_crawler.server.report_common import normalize_deep_report_analytics
         pre_normalized = normalize_deep_report_analytics(analytics)
+        prev_analytics_ctx, prev_snapshot = load_previous_report_context(snapshot.get("run_id", 0))
+        change_digest = build_change_digest(
+            snapshot,
+            pre_normalized,
+            previous_snapshot=prev_snapshot,
+            previous_analytics=prev_analytics_ctx,
+        )
+        analytics["change_digest"] = change_digest
+        pre_normalized["change_digest"] = change_digest
 
         # LLM insights with full context (gap_analysis, top_symptoms, etc.)
         insights = report_llm.generate_report_insights(pre_normalized, snapshot=snapshot)
@@ -942,11 +1278,15 @@ def generate_full_report_from_snapshot(
             top_clusters = analytics.get("self", {}).get("top_negative_clusters", [])
             for cluster in top_clusters[:config.REPORT_MAX_CLUSTER_ANALYSIS]:
                 if cluster.get("review_count", 0) >= 5:
-                    cluster_reviews = models.query_cluster_reviews(
-                        label_code=cluster["label_code"],
-                        ownership="own",
-                        limit=30,
-                    )
+                    try:
+                        cluster_reviews = models.query_cluster_reviews(
+                            label_code=cluster["label_code"],
+                            ownership="own",
+                            limit=30,
+                        )
+                    except Exception:
+                        _logger.warning("Failed to load cluster reviews for deep analysis", exc_info=True)
+                        continue
                     deep = analyze_cluster_deep(cluster, cluster_reviews)
                     if deep:
                         cluster["deep_analysis"] = deep

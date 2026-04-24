@@ -1170,3 +1170,391 @@ def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
     assert quiet_result["analytics_path"] is not None
     assert quiet_result.get("cumulative_computed") is True
     assert Path(quiet_result["analytics_path"]).is_file()
+
+
+def test_build_change_digest_summarizes_incremental_fresh_and_backfill_mix():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    snapshot = {
+        "logical_date": "2026-04-15",
+        "untranslated_count": 1,
+        "products": [
+            {
+                "sku": "SKU-1",
+                "name": "Digest Product",
+                "price": 89.99,
+                "stock_status": "in_stock",
+                "rating": 4.2,
+            }
+        ],
+        "reviews": [
+            {"id": 1, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "own", "rating": 1, "date_published": "2026-04-14", "images": []},
+            {"id": 2, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "competitor", "rating": 5, "date_published": "2026-04-10", "images": ["https://img.example.com/1.jpg"]},
+            {"id": 3, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "own", "rating": 4, "date_published": "2026-02-01", "images": []},
+            {"id": 4, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "competitor", "rating": 4, "date_published": "2026-01-15", "images": []},
+            {"id": 5, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "own", "rating": 5, "date_published": "2025-12-20", "images": []},
+            {"id": 6, "product_name": "Digest Product", "product_sku": "SKU-1", "ownership": "competitor", "rating": 3, "date_published": "2025-11-11", "images": []},
+        ],
+    }
+    analytics = {
+        "report_semantics": "incremental",
+        "kpis": {"untranslated_count": 1},
+        "self": {
+            "top_negative_clusters": [
+                {
+                    "label_code": "quality_stability",
+                    "label_display": "质量稳定性",
+                    "review_count": 2,
+                    "severity": "high",
+                    "affected_product_count": 1,
+                    "last_seen": "2026-04-15",
+                }
+            ]
+        },
+    }
+    previous_snapshot = {
+        "products": [
+            {
+                "sku": "SKU-1",
+                "name": "Digest Product",
+                "price": 99.99,
+                "stock_status": "in_stock",
+                "rating": 4.2,
+            }
+        ]
+    }
+    previous_analytics = {"self": {"top_negative_clusters": []}}
+
+    digest = build_change_digest(snapshot, analytics, previous_snapshot, previous_analytics)
+
+    assert digest["enabled"] is True
+    assert digest["view_state"] == "active"
+    assert digest["summary"]["ingested_review_count"] == 6
+    assert digest["summary"]["fresh_review_count"] == 2
+    assert digest["summary"]["historical_backfill_count"] == 4
+    assert digest["summary"]["fresh_own_negative_count"] == 1
+    assert digest["summary"]["issue_new_count"] == 1
+    assert digest["summary"]["issue_escalated_count"] == 0
+    assert digest["summary"]["issue_improving_count"] == 0
+    assert digest["summary"]["state_change_count"] == 1
+    assert digest["warnings"]["translation_incomplete"]["enabled"] is True
+
+
+def test_build_change_digest_bootstrap_keeps_summary_and_warning_contract():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    digest = build_change_digest(
+        {
+            "logical_date": "2026-04-15",
+            "products": [],
+            "reviews": [
+                {"ownership": "own", "rating": 2, "date_published": "2026-04-14"},
+                {"ownership": "competitor", "rating": 5, "date_published": "2025-01-01"},
+            ],
+        },
+        {
+            "report_semantics": "bootstrap",
+            "kpis": {"untranslated_count": 0},
+            "self": {"top_negative_clusters": []},
+        },
+        None,
+        None,
+    )
+
+    assert digest["enabled"] is True
+    assert digest["view_state"] == "bootstrap"
+    assert digest["summary"]["ingested_review_count"] == 2
+    assert set(digest["warnings"]) == {
+        "translation_incomplete",
+        "estimated_dates",
+        "backfill_dominant",
+    }
+
+
+def test_build_change_digest_uses_empty_state_for_incremental_without_significant_changes():
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    digest = build_change_digest(
+        {
+            "logical_date": "2026-04-15",
+            "products": [
+                {"sku": "SKU-1", "name": "Digest Product", "price": 99.99, "stock_status": "in_stock", "rating": 4.2}
+            ],
+            "reviews": [],
+        },
+        {
+            "report_semantics": "incremental",
+            "kpis": {"untranslated_count": 0},
+            "self": {"top_negative_clusters": []},
+        },
+        {
+            "products": [
+                {"sku": "SKU-1", "name": "Digest Product", "price": 99.99, "stock_status": "in_stock", "rating": 4.2}
+            ]
+        },
+        {"self": {"top_negative_clusters": []}},
+    )
+
+    assert digest["view_state"] == "empty"
+    assert digest["empty_state"]["enabled"] is True
+    assert digest["issue_changes"]["new"] == []
+    assert digest["product_changes"]["price_changes"] == []
+
+
+def test_render_full_email_html_prefers_top_level_kpis_and_change_digest(monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda run_id: ({}, None))
+    monkeypatch.setattr(
+        report_snapshot,
+        "detect_snapshot_changes",
+        lambda snapshot, previous_snapshot: {
+            "has_changes": True,
+            "price_changes": [{"name": "旧价格来源", "old": 100, "new": 90}],
+            "stock_changes": [{"name": "旧库存来源", "old": "unknown", "new": "in_stock"}],
+            "rating_changes": [],
+            "new_products": [],
+            "removed_products": [],
+        },
+    )
+    monkeypatch.setattr(
+        report_snapshot,
+        "compute_cluster_changes",
+        lambda current, previous, logical_date: {
+            "new": [{"label_display": "旧问题来源", "review_count": 7}],
+            "escalated": [],
+            "improving": [],
+            "de_escalated": [],
+        },
+    )
+
+    html = report_snapshot._render_full_email_html(
+        {
+            "run_id": 8,
+            "logical_date": "2026-04-23",
+            "snapshot_at": "2026-04-23T09:00:00+08:00",
+            "products_count": 1,
+            "reviews_count": 0,
+            "translated_count": 0,
+            "untranslated_count": 0,
+            "reviews": [],
+        },
+        {
+            "report_semantics": "incremental",
+            "kpis": {
+                "health_index": 88,
+                "own_review_rows": 12,
+                "high_risk_count": 1,
+                "own_product_count": 1,
+                "competitor_product_count": 0,
+                "translated_count": 0,
+                "untranslated_count": 0,
+            },
+            "cumulative_kpis": {
+                "health_index": 11,
+                "own_review_rows": 999,
+                "high_risk_count": 9,
+                "own_product_count": 9,
+                "competitor_product_count": 9,
+            },
+            "change_digest": {
+                "enabled": True,
+                "view_state": "active",
+                "suppressed_reason": "",
+                "summary": {
+                    "ingested_review_count": 6,
+                    "ingested_own_review_count": 4,
+                    "ingested_competitor_review_count": 2,
+                    "ingested_own_negative_count": 1,
+                    "fresh_review_count": 2,
+                    "historical_backfill_count": 4,
+                    "fresh_own_negative_count": 1,
+                    "issue_new_count": 1,
+                    "issue_escalated_count": 0,
+                    "issue_improving_count": 0,
+                    "state_change_count": 2,
+                },
+                "issue_changes": {
+                    "new": [{
+                        "label_display": "新问题来源",
+                        "change_type": "new",
+                        "current_review_count": 3,
+                        "delta_review_count": 3,
+                        "affected_product_count": 1,
+                        "severity": "high",
+                        "days_quiet": 0,
+                    }],
+                    "escalated": [],
+                    "improving": [],
+                    "de_escalated": [],
+                },
+                "product_changes": {
+                    "price_changes": [{"name": "新价格来源", "old": 100, "new": 90}],
+                    "stock_changes": [{"name": "新库存来源", "old": "unknown", "new": "in_stock"}],
+                    "rating_changes": [],
+                    "new_products": [],
+                    "removed_products": [],
+                },
+                "review_signals": {
+                    "fresh_negative_reviews": [],
+                    "fresh_competitor_positive_reviews": [],
+                },
+                "warnings": {
+                    "translation_incomplete": {"enabled": False, "message": ""},
+                    "estimated_dates": {"enabled": False, "message": ""},
+                    "backfill_dominant": {"enabled": False, "message": ""},
+                },
+                "empty_state": {"enabled": False, "title": "", "description": ""},
+            },
+            "report_copy": {"hero_headline": "", "executive_bullets": []},
+            "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+            "competitor": {
+                "top_positive_themes": [],
+                "benchmark_examples": [],
+                "negative_opportunities": [],
+            },
+            "window": {"reviews_count": 999},
+        },
+    )
+
+    assert "999" not in html
+    assert "新问题来源" in html
+    assert "旧问题来源" not in html
+    assert "新价格来源" in html
+    assert "旧价格来源" not in html
+
+
+def test_render_full_email_html_includes_competitor_positive_review_signals(monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda run_id: ({}, None))
+    monkeypatch.setattr(
+        report_snapshot,
+        "detect_snapshot_changes",
+        lambda snapshot, previous_snapshot: {
+            "has_changes": False,
+            "price_changes": [],
+            "stock_changes": [],
+            "rating_changes": [],
+            "new_products": [],
+            "removed_products": [],
+        },
+    )
+    monkeypatch.setattr(
+        report_snapshot,
+        "compute_cluster_changes",
+        lambda current, previous, logical_date: {
+            "new": [],
+            "escalated": [],
+            "improving": [],
+            "de_escalated": [],
+        },
+    )
+
+    html = report_snapshot._render_full_email_html(
+        {
+            "run_id": 8,
+            "logical_date": "2026-04-23",
+            "snapshot_at": "2026-04-23T09:00:00+08:00",
+            "products_count": 1,
+            "reviews_count": 0,
+            "translated_count": 0,
+            "untranslated_count": 0,
+            "reviews": [],
+        },
+        {
+            "report_semantics": "incremental",
+            "kpis": {
+                "health_index": 88,
+                "own_review_rows": 12,
+                "high_risk_count": 1,
+                "own_product_count": 1,
+                "competitor_product_count": 1,
+                "translated_count": 0,
+                "untranslated_count": 0,
+            },
+            "change_digest": {
+                "enabled": True,
+                "view_state": "active",
+                "summary": {
+                    "ingested_review_count": 2,
+                    "fresh_review_count": 2,
+                    "historical_backfill_count": 0,
+                    "fresh_own_negative_count": 0,
+                    "issue_new_count": 0,
+                    "issue_escalated_count": 0,
+                    "issue_improving_count": 0,
+                    "state_change_count": 0,
+                },
+                "issue_changes": {"new": [], "escalated": [], "improving": [], "de_escalated": []},
+                "product_changes": {
+                    "price_changes": [],
+                    "stock_changes": [],
+                    "rating_changes": [],
+                    "new_products": [],
+                    "removed_products": [],
+                },
+                "review_signals": {
+                    "fresh_negative_reviews": [],
+                    "fresh_competitor_positive_reviews": [
+                        {
+                            "product_name": "Competitor Pro",
+                            "headline_display": "Worth every penny",
+                            "body_display": "Quiet, stable, and easy to clean.",
+                        }
+                    ],
+                },
+                "warnings": {
+                    "translation_incomplete": {"enabled": False, "message": ""},
+                    "estimated_dates": {"enabled": False, "message": ""},
+                    "backfill_dominant": {"enabled": False, "message": ""},
+                },
+                "empty_state": {"enabled": False, "title": "", "description": ""},
+            },
+            "report_copy": {"hero_headline": "", "executive_bullets": []},
+            "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+            "competitor": {
+                "top_positive_themes": [],
+                "benchmark_examples": [],
+                "negative_opportunities": [],
+            },
+        },
+    )
+
+    assert "Competitor Pro" in html
+    assert "Worth every penny" in html
+
+
+def test_load_previous_report_context_resolves_stale_absolute_artifact_paths(snapshot_db):
+    from qbu_crawler.server.report_snapshot import load_previous_report_context
+
+    prev_run_id = snapshot_db["run"]["id"]
+    Path(config.REPORT_DIR).mkdir(parents=True, exist_ok=True)
+    analytics_file = Path(config.REPORT_DIR) / "workflow-run-1-analytics-2026-03-29.json"
+    snapshot_file = Path(config.REPORT_DIR) / "workflow-run-1-snapshot-2026-03-29.json"
+    analytics_file.write_text(json.dumps({"kpis": {"ingested_review_rows": 3}}), encoding="utf-8")
+    snapshot_file.write_text(json.dumps({"snapshot_hash": "snapshot-1", "products": []}), encoding="utf-8")
+
+    models.update_workflow_run(
+        prev_run_id,
+        status="completed",
+        analytics_path=r"C:\Users\User\Desktop\QBU\reports\workflow-run-1-analytics-2026-03-29.json",
+        snapshot_path=r"C:\Users\User\Desktop\QBU\reports\workflow-run-1-snapshot-2026-03-29.json",
+    )
+    current_run = models.create_workflow_run(
+        {
+            "workflow_type": "daily",
+            "status": "reporting",
+            "logical_date": "2026-03-30",
+            "trigger_key": "daily:2026-03-30:snapshot",
+            "data_since": "2026-03-30T00:00:00+08:00",
+            "data_until": "2026-03-31T00:00:00+08:00",
+            "requested_by": "systemd",
+            "service_version": "test",
+        }
+    )
+
+    analytics, snapshot = load_previous_report_context(current_run["id"])
+
+    assert analytics["kpis"]["ingested_review_rows"] == 3
+    assert snapshot["snapshot_hash"] == "snapshot-1"

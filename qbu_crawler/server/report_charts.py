@@ -598,6 +598,20 @@ def build_chartjs_configs(analytics):
     if heatmap and len(heatmap.get("y_labels", [])) >= 3:
         configs["heatmap"] = _chartjs_heatmap_table(heatmap)
 
+    trend_digest = analytics.get("trend_digest") or {}
+    for view, dimensions in (trend_digest.get("data") or {}).items():
+        for dimension, payload in (dimensions or {}).items():
+            primary_chart = (payload or {}).get("primary_chart") or {}
+            if payload.get("status") != "ready":
+                continue
+            if primary_chart.get("status") != "ready":
+                continue
+            if primary_chart.get("chart_type") != "line":
+                continue
+            if not primary_chart.get("labels") or not primary_chart.get("series"):
+                continue
+            configs[f"trend_{view}_{dimension}"] = _chartjs_trend_line(primary_chart)
+
     return configs
 
 
@@ -742,4 +756,43 @@ def _chartjs_heatmap_table(heatmap_data):
         "x_labels": heatmap_data.get("x_labels", []),
         "y_labels": heatmap_data.get("y_labels", []),
         "z": heatmap_data.get("z", []),
+    }
+
+
+def _chartjs_trend_line(chart_data):
+    palette = [_ACCENT, _GREEN, _GOLD, _MUTED, "#6b3328", "#b7633f"]
+    datasets = []
+
+    for index, series in enumerate(chart_data.get("series") or []):
+        color = palette[index % len(palette)]
+        datasets.append(
+            {
+                "label": series.get("name") or f"Series {index + 1}",
+                "data": series.get("data") or [],
+                "borderColor": color,
+                "backgroundColor": color,
+                "borderWidth": 2,
+                "pointRadius": 3,
+                "pointHoverRadius": 4,
+                "tension": 0.25,
+                "fill": False,
+            }
+        )
+
+    return {
+        "type": "line",
+        "data": {
+            "labels": chart_data.get("labels") or [],
+            "datasets": datasets,
+        },
+        "options": {
+            "scales": {
+                "x": {"ticks": {"maxRotation": 45}},
+                "y": {"beginAtZero": True},
+            },
+            "plugins": {
+                "legend": {"position": "bottom"},
+            },
+            "responsive": True,
+        },
     }
