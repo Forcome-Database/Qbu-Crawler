@@ -793,3 +793,148 @@ def test_generate_report_insights_bootstrap_forbidden_new_language_falls_back(mo
 
     assert result["hero_headline"] == fallback["hero_headline"]
     assert result["executive_bullets"] == fallback["executive_bullets"]
+
+
+# ── T0 hotfix (2026-04-24) · LLM relational-word correctness ───────────────
+
+
+def _relation_analytics():
+    return {
+        "report_semantics": "bootstrap",
+        "self": {
+            "risk_products": [
+                {"product_name": "Walton's Quick Patty Maker", "risk_score": 35.1},
+                {"product_name": ".75 HP Grinder (#12)", "risk_score": 33.3},
+                {"product_name": ".5 HP Dual Grind Grinder (#8)", "risk_score": 29.6},
+            ],
+            "top_negative_clusters": [
+                {"label_display": "结构设计", "label_code": "structure_design", "review_count": 17},
+                {"label_display": "质量稳定性", "label_code": "quality_stability", "review_count": 12},
+            ],
+        },
+    }
+
+
+def test_check_relation_claims_flags_non_top_sku_labeled_leading():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    result = {
+        "executive_bullets": [
+            ".5 HP Dual Grind Grinder (#8)以29.6分风险值领跑，建议立即冻结发货。",
+        ],
+    }
+    violations = _check_relation_claims(result, analytics)
+    assert violations, "expected violation when non-top SKU is labelled as 领跑"
+    assert any("领跑" in v for v in violations)
+    assert any(".5 HP Dual Grind Grinder (#8)" in v for v in violations)
+
+
+def test_check_relation_claims_passes_when_top_sku_is_correct():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    result = {
+        "hero_headline": "Walton's Quick Patty Maker 风险最高，建议优先干预。",
+        "executive_bullets": ["Walton's Quick Patty Maker 以 35.1 分登顶风险榜"],
+    }
+    assert _check_relation_claims(result, analytics) == []
+
+
+def test_check_relation_claims_flags_false_tied_cluster_counts():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    result = {
+        "executive_bullets": [
+            "17条结构设计缺陷与12条质量稳定性问题并列首位。",
+        ],
+    }
+    violations = _check_relation_claims(result, analytics)
+    assert violations, "expected violation when unequal cluster counts are called 并列"
+    assert any("并列" in v for v in violations)
+
+
+def test_check_relation_claims_accepts_true_tied_cluster_counts():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    analytics["self"]["top_negative_clusters"][1]["review_count"] = 17
+    result = {
+        "executive_bullets": ["结构设计与质量稳定性并列首位（各 17 条）"],
+    }
+    assert _check_relation_claims(result, analytics) == []
+
+
+def test_check_relation_claims_scans_long_text_fields():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    # Hallucination placed in competitive_insight and benchmark_takeaway —
+    # fields not covered by the old bootstrap-language check.
+    result = {
+        "hero_headline": "",
+        "competitive_insight": "自有端以 .75 HP Grinder (#12) 为首位风险，差距指数 13。",
+        "benchmark_takeaway": "",
+    }
+    violations = _check_relation_claims(result, analytics)
+    assert violations, "expected violation in competitive_insight field"
+    assert any("competitive_insight" in v for v in violations)
+
+
+def test_generate_report_insights_falls_back_on_relation_hallucination(monkeypatch):
+    from qbu_crawler.server import report_llm
+    from qbu_crawler.server.report_llm import _fallback_insights
+
+    mock_response_json = json.dumps({
+        "hero_headline": ".5 HP Dual Grind Grinder (#8) 29.6 分领跑风险榜，请优先处理。",
+        "executive_summary": ".5 HP Dual Grind Grinder (#8) 是当前风险最高的 SKU。",
+        "executive_bullets": [".5 HP Dual Grind Grinder (#8) 领跑风险榜"],
+        "improvement_priorities": [],
+        "competitive_insight": "",
+        "benchmark_takeaway": "",
+    })
+
+    class MockMessage:
+        content = mock_response_json
+
+    class MockChoice:
+        message = MockMessage()
+
+    class MockResponse:
+        choices = [MockChoice()]
+
+    class MockClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    return MockResponse()
+
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_BASE", "http://fake")
+    monkeypatch.setattr("qbu_crawler.server.report_llm.config.LLM_API_KEY", "fake-key")
+
+    import types
+    mock_openai = types.ModuleType("openai")
+    mock_openai.OpenAI = lambda **kwargs: MockClient()
+    monkeypatch.setitem(__import__("sys").modules, "openai", mock_openai)
+
+    analytics = _insights_analytics()
+    # Use incremental semantics so the bootstrap-language detector cannot
+    # trigger — we want to prove the relation detector itself drives fallback.
+    analytics["report_semantics"] = "incremental"
+    analytics["self"] = {
+        "risk_products": [
+            {"product_name": "Walton's Quick Patty Maker", "risk_score": 35.1},
+            {"product_name": ".75 HP Grinder (#12)", "risk_score": 33.3},
+            {"product_name": ".5 HP Dual Grind Grinder (#8)", "risk_score": 29.6},
+        ],
+        "top_negative_clusters": [],
+        "recommendations": [],
+    }
+
+    result = report_llm.generate_report_insights(analytics)
+    fallback = _fallback_insights(analytics)
+
+    assert result["hero_headline"] == fallback["hero_headline"]
+    assert result["executive_bullets"] == fallback["executive_bullets"]

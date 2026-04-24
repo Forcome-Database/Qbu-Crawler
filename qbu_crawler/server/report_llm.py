@@ -298,6 +298,87 @@ def _has_bootstrap_language_violation(result, analytics):
     return any(re.search(pattern, merged) for pattern in forbidden_patterns)
 
 
+# Relational-word correctness check (T0 hotfix, 2026-04-24).
+# LLM was observed claiming a non-top risk SKU is "领跑" or that unequal cluster
+# counts are "并列". _validate_insights only caps numbers; it does not verify
+# ordering/comparison claims, so we add a conservative post-check here.
+_RELATION_TOP_WORDS = ("领跑", "最高", "第一", "榜首", "首位", "登顶", "最严重")
+_RELATION_TIED_WORDS = ("并列", "打平", "持平")
+
+
+def _check_relation_claims(result: dict, analytics: dict) -> list[str]:
+    """Detect relational-word hallucinations in LLM output.
+
+    Conservative: a violation is only emitted when evidence is definitive.
+      - TOP word + a non-top SKU name appears in the same text, AND
+        the actual top SKU name does NOT appear in that same text
+      - TIED word + both top-2 cluster labels present in the text, AND
+        their review_count values are not equal
+    Returns empty list if nothing definitive was found.
+    """
+    risks = (analytics.get("self") or {}).get("risk_products") or []
+    clusters = (analytics.get("self") or {}).get("top_negative_clusters") or []
+
+    top_risk_name = (risks[0].get("product_name") or "").strip() if risks else ""
+    non_top_risk_names = [
+        (r.get("product_name") or "").strip()
+        for r in risks[1:]
+        if (r.get("product_name") or "").strip()
+    ]
+
+    texts: dict[str, str] = {
+        "hero_headline": str(result.get("hero_headline", "") or ""),
+        "executive_summary": str(result.get("executive_summary", "") or ""),
+        "competitive_insight": str(result.get("competitive_insight", "") or ""),
+        "benchmark_takeaway": str(result.get("benchmark_takeaway", "") or ""),
+    }
+    for idx, bullet in enumerate(result.get("executive_bullets") or []):
+        texts[f"bullet_{idx}"] = str(bullet or "")
+    for idx, priority in enumerate(result.get("improvement_priorities") or []):
+        texts[f"priority_{idx}_action"] = str((priority or {}).get("action", "") or "")
+
+    violations: list[str] = []
+    for source, text in texts.items():
+        if not text:
+            continue
+
+        if top_risk_name and non_top_risk_names:
+            for word in _RELATION_TOP_WORDS:
+                if word not in text:
+                    continue
+                if top_risk_name in text:
+                    # Top SKU is explicitly mentioned; assume claim is about top.
+                    continue
+                for non_top in non_top_risk_names:
+                    if non_top and non_top in text:
+                        violations.append(
+                            f"{source}: 关系词 '{word}' 指向非最高风险 SKU '{non_top}'，"
+                            f"真实最高风险是 '{top_risk_name}'"
+                        )
+                        break
+
+        if len(clusters) >= 2:
+            c1 = clusters[0] or {}
+            c2 = clusters[1] or {}
+            c1_count = int(c1.get("review_count", 0) or 0)
+            c2_count = int(c2.get("review_count", 0) or 0)
+            if c1_count == c2_count:
+                continue
+            c1_label = (c1.get("label_display") or c1.get("label_code") or "").strip()
+            c2_label = (c2.get("label_display") or c2.get("label_code") or "").strip()
+            if not c1_label or not c2_label:
+                continue
+            for word in _RELATION_TIED_WORDS:
+                if word in text and c1_label in text and c2_label in text:
+                    violations.append(
+                        f"{source}: '{word}' 声称 '{c1_label}'({c1_count}) 与 "
+                        f"'{c2_label}'({c2_count}) 对等，实际不等"
+                    )
+                    break
+
+    return violations
+
+
 def _select_insight_samples(snapshot, analytics):
     """Select 15-20 diverse reviews for LLM synthesis from snapshot only.
 
@@ -680,6 +761,14 @@ def generate_report_insights(analytics, snapshot=None):
         result = _validate_insights(result, analytics)
         if _has_bootstrap_language_violation(result, analytics):
             logger.warning("LLM insights violated bootstrap semantics, using fallback")
+            return _fallback_insights(analytics)
+        relation_violations = _check_relation_claims(result, analytics)
+        if relation_violations:
+            logger.warning(
+                "LLM insights contain relational-word hallucinations (%d), using fallback: %s",
+                len(relation_violations),
+                "; ".join(relation_violations[:3]),
+            )
             return _fallback_insights(analytics)
         return result
 
