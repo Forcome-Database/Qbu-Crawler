@@ -51,7 +51,7 @@ CODE_TO_DIMENSION = {
 
 METRIC_TOOLTIPS = {
     # KPI cards (P1)
-    "健康指数": "综合评分 = 20%站点评分 + 25%样本评分 + 35%(1−差评率) + 20%(1−高风险占比)，满分100",
+    "健康指数": "贝叶斯 NPS 代理：(promoters − detractors) / own_reviews × 100 线性映射到 0-100；自有评论 < 30 时按样本量向先验 50 收缩，避免小样本极端值",
     "差评率": "自有产品 ≤{threshold}星评论数 ÷ 自有评论总数",
     "自有评论": "本期采集窗口内入库的自有产品评论行数（按抓取时间计）",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
@@ -531,6 +531,27 @@ def compute_health_index(analytics: dict) -> tuple[float, str]:
         confidence = "high"
 
     return round(max(0.0, min(100.0, health)), 1), confidence
+
+
+def _bayesian_bucket_health(own_total: int, own_neg: int, own_pos: int) -> float | None:
+    """Bayesian-shrunk health score for a single trend bucket.
+
+    Mirrors compute_health_index() but operates on bucket-local counts rather
+    than top-level analytics. Returns None for empty buckets so the chart can
+    render a break point (null) instead of a misleading 0 or 50.
+    """
+    if own_total <= 0:
+        return None
+    nps = ((own_pos - own_neg) / own_total) * 100
+    raw_health = (nps + 100) / 2
+    MIN_RELIABLE = 30
+    PRIOR = 50.0
+    if own_total < MIN_RELIABLE:
+        weight = own_total / MIN_RELIABLE
+        health = weight * raw_health + (1 - weight) * PRIOR
+    else:
+        health = raw_health
+    return round(max(0.0, min(100.0, health)), 1)
 
 
 def compute_competitive_gap_index(gap_analysis: list[dict]) -> int:

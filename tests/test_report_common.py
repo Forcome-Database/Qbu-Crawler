@@ -1591,3 +1591,43 @@ def test_normalize_injects_health_confidence():
     assert "health_confidence" in result["kpis"]
     assert result["kpis"]["health_confidence"] in ("low", "medium", "high", "no_data")
     assert isinstance(result["kpis"]["health_index"], float)
+
+
+def test_bayesian_bucket_health_empty_returns_none():
+    from qbu_crawler.server.report_common import _bayesian_bucket_health
+    assert _bayesian_bucket_health(own_total=0, own_neg=0, own_pos=0) is None
+
+
+def test_bayesian_bucket_health_large_sample_is_raw_nps():
+    from qbu_crawler.server.report_common import _bayesian_bucket_health
+    # 100 reviews, 90 promoters, 5 detractors → NPS = (90-5)/100*100 = 85
+    # raw_health = (85+100)/2 = 92.5, sample >= 30 so no shrinkage
+    assert _bayesian_bucket_health(own_total=100, own_neg=5, own_pos=90) == 92.5
+
+
+def test_bayesian_bucket_health_small_sample_shrinks_toward_prior():
+    from qbu_crawler.server.report_common import _bayesian_bucket_health
+    # 10 reviews, 10 detractors, 0 promoters → NPS = -100, raw = 0
+    # weight = 10/30, shrunk = 10/30*0 + 20/30*50 = 33.33
+    result = _bayesian_bucket_health(own_total=10, own_neg=10, own_pos=0)
+    assert 33.0 <= result <= 34.0
+
+
+def test_bayesian_bucket_health_single_positive_review_not_perfect():
+    from qbu_crawler.server.report_common import _bayesian_bucket_health
+    # Should not be 100 — shrinkage must pull toward 50
+    result = _bayesian_bucket_health(own_total=1, own_neg=0, own_pos=1)
+    assert result is not None
+    assert result < 70, f"1 promoter should not yield health > 70, got {result}"
+
+
+def test_health_index_tooltip_reflects_bayesian_formula():
+    from qbu_crawler.server.report_common import METRIC_TOOLTIPS
+    tooltip = METRIC_TOOLTIPS["健康指数"]
+    # Old weighted formula must be gone
+    assert "20%站点评分" not in tooltip
+    assert "25%样本评分" not in tooltip
+    # New Bayesian-NPS description must be present
+    assert "NPS" in tooltip or "贝叶斯" in tooltip
+    assert "50" in tooltip  # prior mentioned
+    assert "30" in tooltip  # min-reliable sample mentioned

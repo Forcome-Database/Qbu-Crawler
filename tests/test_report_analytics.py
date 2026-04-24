@@ -1253,3 +1253,39 @@ def test_build_dual_trend_digest_has_mixed_ready_and_accumulating_states(analyti
     assert month["competition"]["status"] == "ready"
     assert month["products"]["status"] == "accumulating"
     assert month["products"]["primary_chart"]["status"] == "accumulating"
+
+
+def test_sentiment_trend_bucket_health_is_bayesian_shrunk():
+    """趋势 health_scores 必须用 _bayesian_bucket_health，
+    不能再是 100 - own_negative_rate 的简化公式。
+
+    场景：某 bucket 只有 1 条 5 星评论 → 旧公式给 100，新公式必须 < 70。
+    """
+    from qbu_crawler.server.report_analytics import _build_sentiment_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    labeled_reviews = [
+        # 只在 '2026-04' bucket 有 1 条 5 星自有评论，其它 bucket 空
+        {
+            "review": {
+                "ownership": "own",
+                "rating": 5,
+                "date_published_parsed": "2026-04-10",
+            },
+            "published": date(2026, 4, 10),
+        },
+    ]
+    result = _build_sentiment_trend("month", logical_day, labeled_reviews)
+    # 找到 primary_chart 里名为 '健康分' 的 series
+    series = next(
+        s for s in result["primary_chart"]["series"]
+        if "健康" in s["name"]
+    )
+    # 非空 bucket 的值必须 < 70（贝叶斯收缩后）；空 bucket 必须 None
+    non_null = [v for v in series["data"] if v is not None]
+    assert non_null, "expected at least one non-null bucket"
+    assert all(v < 70 for v in non_null), \
+        f"small-sample bucket should shrink toward 50, got {non_null}"
+    # 空 bucket 应该是 None 而不是 0
+    assert series["data"].count(None) >= 1

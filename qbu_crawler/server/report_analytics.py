@@ -1430,10 +1430,13 @@ def _empty_trend_dimension(status, message, chart_title, table_columns):
 
 
 def _build_sentiment_trend(view, logical_day, labeled_reviews):
+    from qbu_crawler.server.report_common import _bayesian_bucket_health
+
     labels, bucket_for = _trend_bucket_labels(logical_day, view)
     review_count_by_bucket = {label: 0 for label in labels}
     own_total_by_bucket = {label: 0 for label in labels}
     own_negative_by_bucket = {label: 0 for label in labels}
+    own_positive_by_bucket = {label: 0 for label in labels}
 
     for item in labeled_reviews:
         review = item["review"]
@@ -1444,18 +1447,28 @@ def _build_sentiment_trend(view, logical_day, labeled_reviews):
         if review.get("ownership") != "own":
             continue
         own_total_by_bucket[bucket] += 1
-        if float(review.get("rating") or 0) <= config.NEGATIVE_THRESHOLD:
+        rating = float(review.get("rating") or 0)
+        if rating <= config.NEGATIVE_THRESHOLD:
             own_negative_by_bucket[bucket] += 1
+        elif rating >= 4:
+            own_positive_by_bucket[bucket] += 1
 
     review_counts = [review_count_by_bucket[label] for label in labels]
     own_negative_counts = [own_negative_by_bucket[label] for label in labels]
     own_negative_rates = [
         round((own_negative_by_bucket[label] / own_total_by_bucket[label]) * 100, 1)
         if own_total_by_bucket[label]
-        else 0
+        else None
         for label in labels
     ]
-    health_scores = [round(100 - rate, 1) if own_total_by_bucket[label] else 0 for label, rate in zip(labels, own_negative_rates)]
+    health_scores = [
+        _bayesian_bucket_health(
+            own_total=own_total_by_bucket[label],
+            own_neg=own_negative_by_bucket[label],
+            own_pos=own_positive_by_bucket[label],
+        )
+        for label in labels
+    ]
 
     non_zero_points = sum(1 for value in review_counts if value > 0)
     ready = sum(review_counts) > 0 and (view != "year" or non_zero_points >= 2)
