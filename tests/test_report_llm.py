@@ -768,6 +768,8 @@ def test_incremental_prompt_drops_window_today_new_segment():
     assert "本次入库评论" in prompt
     assert "近30天业务新增" in prompt or "近 30 天业务新增" in prompt
     assert "历史补采" in prompt
+    # 确保风格 directive 也在 prompt 中
+    assert "不要使用「今日新增」" in prompt
 
 
 def test_incremental_prompt_forbids_business_new_when_backfill_dominant():
@@ -791,8 +793,8 @@ def test_incremental_prompt_forbids_business_new_when_backfill_dominant():
         "competitor": {"gap_analysis": [], "benchmark_examples": []},
     }
     prompt = _build_insights_prompt(analytics)
-    assert "补采" in prompt
-    assert any(kw in prompt for kw in ["禁止", "不得", "不要"])
+    assert "禁止把补采评论计入业务新增" in prompt
+    assert "历史补采为主" in prompt
 
 
 def test_build_insights_prompt_includes_bootstrap_semantics_guard():

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from qbu_crawler import config, models
 from qbu_crawler.server import report, report_analytics, report_html, report_llm
+from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO
 
 _logger = logging.getLogger(__name__)
 
@@ -547,8 +548,8 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
             else "",
         },
         "backfill_dominant": {
-            "enabled": backfill_ratio >= 0.7,
-            "message": f"本次入库以历史补采为主，占比 {backfill_ratio:.0%}" if backfill_ratio >= 0.7 else "",
+            "enabled": backfill_ratio >= BACKFILL_DOMINANT_RATIO,
+            "message": f"本次入库以历史补采为主，占比 {backfill_ratio:.0%}" if backfill_ratio >= BACKFILL_DOMINANT_RATIO else "",
         },
     }
 

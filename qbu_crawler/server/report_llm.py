@@ -7,6 +7,7 @@ from json_repair import repair_json
 
 from qbu_crawler import config, models
 from qbu_crawler.server import report_analytics
+from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO
 
 logger = logging.getLogger(__name__)
 
@@ -605,7 +606,7 @@ def _build_insights_prompt(analytics, snapshot=None):
                     f"\n其中自有近30天差评 {fresh_neg} 条，"
                     "请在 executive_bullets 中优先提示。"
                 )
-            if ingested > 0 and backfill / ingested >= 0.7:
+            if ingested > 0 and backfill / ingested >= BACKFILL_DOMINANT_RATIO:
                 prompt += (
                     "\n⚠️ 本次入库以历史补采为主。禁止把补采评论计入业务新增，"
                     "不要使用「今日新增」或「暴增」等措辞。"

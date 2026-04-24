@@ -72,6 +72,12 @@ METRIC_TOOLTIPS = {
     "差距": "基于比率的差距指数(0-100)：(竞品好评率+自有差评率)/2×100",
 }
 
+# Shared threshold for warnings.backfill_dominant (spec §7.6) — used by both
+# the LLM prompt guard (report_llm) and the report-snapshot warning banner.
+# Changing this requires updating docs/superpowers/specs and re-verifying both
+# sites emit consistent wording.
+BACKFILL_DOMINANT_RATIO = 0.7
+
 
 def _resolve_tooltip(key: str, threshold=None, **kw) -> str:
     """Resolve a tooltip template with runtime threshold values."""
