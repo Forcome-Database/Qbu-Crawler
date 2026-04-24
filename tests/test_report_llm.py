@@ -864,6 +864,52 @@ def test_generate_report_insights_bootstrap_forbidden_new_language_falls_back(mo
     assert result["executive_bullets"] == fallback["executive_bullets"]
 
 
+# ── T-A-4 (Stage A) · bootstrap 违禁词检测扩面 ────────────────────────────
+
+
+def test_bootstrap_violation_covers_competitive_insight():
+    from qbu_crawler.server.report_llm import _has_bootstrap_language_violation
+    analytics = {"report_semantics": "bootstrap"}
+    result = {"hero_headline": "ok", "competitive_insight": "今日新增 20 条评论说明竞品领先"}
+    assert _has_bootstrap_language_violation(result, analytics) is True
+
+
+def test_bootstrap_violation_covers_benchmark_takeaway():
+    from qbu_crawler.server.report_llm import _has_bootstrap_language_violation
+    analytics = {"report_semantics": "bootstrap"}
+    result = {"hero_headline": "ok", "benchmark_takeaway": "较昨日提升明显"}
+    assert _has_bootstrap_language_violation(result, analytics) is True
+
+
+def test_bootstrap_violation_covers_priority_actions():
+    from qbu_crawler.server.report_llm import _has_bootstrap_language_violation
+    analytics = {"report_semantics": "bootstrap"}
+    result = {"hero_headline": "ok",
+              "improvement_priorities": [{"action": "针对今日暴增的投诉立即介入"}]}
+    assert _has_bootstrap_language_violation(result, analytics) is True
+
+
+def test_bootstrap_violation_catches_generic_new_review_pattern():
+    from qbu_crawler.server.report_llm import _has_bootstrap_language_violation
+    analytics = {"report_semantics": "bootstrap"}
+    result = {"hero_headline": "新增 450 条评论说明用户基础增长"}
+    assert _has_bootstrap_language_violation(result, analytics) is True
+
+
+def test_bootstrap_violation_passes_clean_baseline_copy():
+    from qbu_crawler.server.report_llm import _has_bootstrap_language_violation
+    analytics = {"report_semantics": "bootstrap"}
+    result = {
+        "hero_headline": "首次基线扫描 593 条评论完成",
+        "executive_summary": "当前截面 5 款自有产品健康指数 94.9",
+        "competitive_insight": "竞品在做工维度 gap_rate=13 暂无增长性叙述",
+        "benchmark_takeaway": "自有可借鉴竞品的售后沟通机制",
+        "executive_bullets": ["监控起点已建立"],
+        "improvement_priorities": [{"action": "优先处理 Walton's Quick Patty Maker 的结构设计问题"}],
+    }
+    assert _has_bootstrap_language_violation(result, analytics) is False
+
+
 # ── T0 hotfix (2026-04-24) · LLM relational-word correctness ───────────────
 
 

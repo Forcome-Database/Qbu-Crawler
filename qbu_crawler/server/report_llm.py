@@ -282,10 +282,14 @@ def _has_bootstrap_language_violation(result, analytics):
     if _report_semantics(analytics) != "bootstrap":
         return False
 
+    priorities = result.get("improvement_priorities") or []
     texts = [
         result.get("hero_headline", ""),
         result.get("executive_summary", ""),
+        result.get("competitive_insight", ""),
+        result.get("benchmark_takeaway", ""),
         *[str(item) for item in (result.get("executive_bullets") or [])],
+        *[str((p or {}).get("action", "")) for p in priorities],
     ]
     merged = "\n".join(texts)
     forbidden_patterns = (
@@ -294,7 +298,10 @@ def _has_bootstrap_language_violation(result, analytics):
         r"较昨日",
         r"较上期",
         r"环比",
+        r"同比",
         r"今日.*新增",
+        r"本日.*新增",
+        r"新增\s*\d+\s*条\s*评论",   # generic fallback pattern — covers "新增 450 条评论" etc.
     )
     return any(re.search(pattern, merged) for pattern in forbidden_patterns)
 
