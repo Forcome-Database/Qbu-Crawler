@@ -291,49 +291,63 @@
               <span class="badge badge-{{ 'low' if trend_block.status == 'ready' else 'medium' if trend_block.status == 'accumulating' else 'high' }}">{{ trend_block.status or "unknown" }}</span>
             </div>
 
-            {% if trend_block.status == "ready" %}
-            <div class="trend-kpi-grid">
-              {% for item in (trend_kpis["items"] if "items" in trend_kpis else []) %}
-              <article class="trend-kpi-card">
-                <span class="trend-kpi-label">{{ item.label or "" }}</span>
-                <strong class="trend-kpi-value">{{ item.value if item.value is not none else "-" }}</strong>
-              </article>
-              {% endfor %}
-            </div>
+            {% set _kpi_ready = (trend_kpis.get("status") == "ready") and trend_kpis.get("items") %}
+            {% set _chart_ready = trend_block.primary_chart and trend_block.primary_chart.get("status") == "ready" %}
+            {% set _table_ready = (trend_table.get("status") == "ready") and trend_table.get("rows") %}
 
-            {% if chart_key in charts %}
-            <div class="chart-container trend-chart-container">
-              {% if trend_block.primary_chart and trend_block.primary_chart.title %}<h3>{{ trend_block.primary_chart.title }}</h3>{% endif %}
-              <canvas data-chart-config='{{ charts[chart_key] | tojson }}'></canvas>
-            </div>
-            {% endif %}
-
-            {% if trend_table.rows %}
-            <div class="table-wrap trend-table-wrap">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    {% for column in trend_table.columns or [] %}
-                    <th>{{ column }}</th>
-                    {% endfor %}
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for row in trend_table.rows %}
-                  <tr>
-                    {% for value in row.values() %}
-                    <td>{{ value if value is not none else "-" }}</td>
-                    {% endfor %}
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            {% endif %}
-            {% else %}
+            {% if not (_kpi_ready or _chart_ready or _table_ready) %}
             <div class="trend-status trend-status-{{ trend_block.status or 'degraded' }}">
               {{ trend_block.status_message or "样本暂未就绪，请继续积累日报样本。" }}
             </div>
+            {% else %}
+              {% if trend_block.status != "ready" and trend_block.status_message %}
+              <div class="trend-partial-note">{{ trend_block.status_message }}</div>
+              {% endif %}
+
+              {% if _kpi_ready %}
+              <div class="trend-kpi-grid">
+                {% for item in trend_kpis["items"] %}
+                <article class="trend-kpi-card">
+                  <span class="trend-kpi-label">{{ item.label or "" }}</span>
+                  <strong class="trend-kpi-value">{{ item.value if item.value is not none else "-" }}</strong>
+                </article>
+                {% endfor %}
+              </div>
+              {% endif %}
+
+              {% if _chart_ready and chart_key in charts %}
+              <div class="chart-container trend-chart-container">
+                {% if trend_block.primary_chart and trend_block.primary_chart.title %}
+                <h3>{{ trend_block.primary_chart.title }}</h3>
+                {% endif %}
+                <canvas data-chart-config='{{ charts[chart_key] | tojson }}'></canvas>
+              </div>
+              {% elif trend_block.primary_chart and trend_block.primary_chart.get("status") != "ready" %}
+              <div class="trend-chart-placeholder">主图数据积累中</div>
+              {% endif %}
+
+              {% if _table_ready %}
+              <div class="table-wrap trend-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      {% for column in trend_table.columns or [] %}
+                      <th>{{ column }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in trend_table.rows %}
+                    <tr>
+                      {% for value in row.values() %}
+                      <td>{{ value if value is not none else "-" }}</td>
+                      {% endfor %}
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% endif %}
             {% endif %}
           </section>
         {% endfor %}

@@ -1289,3 +1289,33 @@ def test_sentiment_trend_bucket_health_is_bayesian_shrunk():
         f"small-sample bucket should shrink toward 50, got {non_null}"
     # 空 bucket 应该是 None 而不是 0
     assert series["data"].count(None) >= 1
+
+
+def test_competition_trend_mixed_state_keeps_ready_table_when_chart_accumulating():
+    """spec §8.5 要求：竞品趋势允许按子组件混合状态输出，
+    不能整维度一刀切成同一状态。
+
+    场景：自有有评论但竞品无评论 → primary_chart 无法 ready，
+    但表格仍应列出自有侧数据（status=ready）。
+    """
+    from qbu_crawler.server.report_analytics import _build_competition_trend
+    from datetime import date
+
+    labeled_reviews = [
+        {
+            "review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-10"},
+            "published": date(2026, 4, 10),
+        },
+        {
+            "review": {"ownership": "own", "rating": 1, "date_published_parsed": "2026-03-15"},
+            "published": date(2026, 3, 15),
+        },
+    ]
+    result = _build_competition_trend("month", date(2026, 4, 24), labeled_reviews)
+    # 顶层 status 允许是 accumulating
+    assert result["status"] in {"accumulating", "ready"}
+    # 但表格组件必须 ready（因为自有侧有数据）
+    assert result["table"]["status"] == "ready"
+    assert len(result["table"]["rows"]) >= 1
+    # primary_chart 可以 accumulating（缺竞品不能对比）
+    assert result["primary_chart"]["status"] in {"accumulating", "ready"}

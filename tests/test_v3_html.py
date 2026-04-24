@@ -361,3 +361,44 @@ class TestV3TemplateRender:
         assert 'id="tab-issues"' in html
         assert 'id="tab-products"' in html
         assert 'id="tab-competitive"' in html
+
+    def test_trend_panel_renders_ready_components_when_block_accumulating(self):
+        """spec §8.5 + Codex P1-B：趋势组件必须按 kpis.status / primary_chart.status /
+        table.status 独立判断，不能被外层 block.status='accumulating' 一刀切。"""
+        context = _render_context("incremental", "incremental", "active")
+        # Override month/products 为混合状态：block.status=accumulating 但 kpis/table 是 ready
+        trend_digest = context["analytics"]["trend_digest"]
+        trend_digest["data"]["month"]["products"] = {
+            "status": "accumulating",
+            "status_message": "产品快照样本不足，连续状态趋势仍在积累。",
+            "kpis": {
+                "status": "ready",
+                "items": [
+                    {"label": "跟踪 SKU", "value": 3},
+                    {"label": "累计快照", "value": 12},
+                ],
+            },
+            "primary_chart": {
+                "status": "accumulating",
+                "chart_type": "line",
+                "title": "",
+                "labels": [],
+                "series": [],
+            },
+            "table": {
+                "status": "ready",
+                "columns": ["SKU"],
+                "rows": [
+                    {"SKU": "SKU-1"},
+                    {"SKU": "SKU-2"},
+                    {"SKU": "SKU-3"},
+                ],
+            },
+        }
+        html = _template().render(**context)
+
+        # month/products 块必须渲染 KPI 与 table（status ready 的组件），而不是被整块吞掉
+        assert "跟踪 SKU" in html
+        assert "SKU-1" in html
+        # status_message（主图未就绪的说明）也应该可见
+        assert "产品快照样本不足" in html

@@ -1745,8 +1745,13 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
                 competitor_positive[bucket] += 1
 
     shared_points = sum(1 for label in labels if own_total[label] > 0 and competitor_total[label] > 0)
-    ready = shared_points > 0 and (view != "year" or shared_points >= 2)
-    if not ready:
+    chart_ready = shared_points > 0 and (view != "year" or shared_points >= 2)
+    own_points = sum(1 for label in labels if own_total[label] > 0)
+    competitor_points = sum(1 for label in labels if competitor_total[label] > 0)
+    any_side_has_data = own_points > 0 or competitor_points > 0
+
+    if not any_side_has_data:
+        # Neither side has data → integral accumulating is correct.
         return _empty_trend_dimension(
             "accumulating",
             "自有与竞品的可比样本仍在积累，当前不足以形成稳定趋势。",
@@ -1790,30 +1795,38 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
     if latest_row.get("own_avg_rating") is not None and latest_row.get("competitor_avg_rating") is not None:
         rating_gap = round(latest_row["competitor_avg_rating"] - latest_row["own_avg_rating"], 2)
 
+    kpis_ready = shared_points > 0
+    kpi_status = "ready" if kpis_ready else "accumulating"
+    top_status = "ready" if chart_ready else "accumulating"
+    top_message = "" if chart_ready else "可比样本仍在积累，图表暂未稳定但已有数据点可查。"
+
+    _own_neg = latest_row.get("own_negative_rate") if latest_row else None
+    _comp_pos = latest_row.get("competitor_positive_rate") if latest_row else None
+
     return _trend_dimension_payload(
-        status="ready",
-        message="",
+        status=top_status,
+        message=top_message,
         kpis={
-            "status": "ready",
+            "status": kpi_status,
             "items": [
                 {"label": "可比时间点", "value": shared_points},
                 {"label": "最新评分差", "value": rating_gap if rating_gap is not None else "—"},
-                {"label": "最新自有差评率", "value": f"{latest_row.get('own_negative_rate', 0):.1f}%" if latest_row else "0.0%"},
-                {"label": "最新竞品好评率", "value": f"{latest_row.get('competitor_positive_rate', 0):.1f}%" if latest_row else "0.0%"},
+                {"label": "最新自有差评率", "value": f"{_own_neg:.1f}%" if _own_neg is not None else "—"},
+                {"label": "最新竞品好评率", "value": f"{_comp_pos:.1f}%" if _comp_pos is not None else "—"},
             ],
         },
         primary_chart={
-            "status": "ready",
+            "status": "ready" if chart_ready else "accumulating",
             "chart_type": "line",
             "title": "竞品趋势",
-            "labels": labels,
+            "labels": labels if chart_ready else [],
             "series": [
                 {"name": "自有均分", "data": own_avg_rating},
                 {"name": "竞品均分", "data": competitor_avg_rating},
-            ],
+            ] if chart_ready else [],
         },
         table={
-            "status": "ready",
+            "status": "ready" if any_side_has_data else "accumulating",
             "columns": ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
             "rows": rows,
         },
