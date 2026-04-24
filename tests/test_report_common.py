@@ -1631,3 +1631,53 @@ def test_health_index_tooltip_reflects_bayesian_formula():
     assert "NPS" in tooltip or "贝叶斯" in tooltip
     assert "50" in tooltip  # prior mentioned
     assert "30" in tooltip  # min-reliable sample mentioned
+
+
+def test_fallback_executive_bullets_bootstrap_uses_baseline_wording():
+    """spec §10.3：deterministic fallback 在 bootstrap 下禁用「新增评论」
+    措辞，改用「建立监控基线」话术。"""
+    from qbu_crawler.server.report_common import _fallback_executive_bullets
+    normalized = {
+        "report_semantics": "bootstrap",
+        "is_bootstrap": True,
+        "kpis": {"product_count": 5, "ingested_review_rows": 593},
+        "self": {"risk_products": []},
+        "competitor": {"top_positive_themes": [], "negative_opportunities": []},
+        "change_digest": {"summary": {}},
+    }
+    bullets = _fallback_executive_bullets(normalized)
+    merged = "\n".join(bullets)
+    assert "新增评论" not in merged, "bootstrap fallback 仍在写「新增评论」"
+    assert "基线" in merged or "监控起点" in merged
+
+
+def test_fallback_executive_bullets_incremental_cites_change_digest_fields():
+    from qbu_crawler.server.report_common import _fallback_executive_bullets
+    normalized = {
+        "report_semantics": "incremental",
+        "is_bootstrap": False,
+        "kpis": {"product_count": 5, "ingested_review_rows": 100},
+        "self": {"risk_products": []},
+        "competitor": {"top_positive_themes": [], "negative_opportunities": []},
+        "change_digest": {"summary": {
+            "fresh_review_count": 3, "historical_backfill_count": 97,
+        }},
+    }
+    bullets = _fallback_executive_bullets(normalized)
+    merged = "\n".join(bullets)
+    assert "本次入库评论" in merged or "本次入库" in merged
+    assert "近30天业务新增" in merged or "近 30 天业务新增" in merged
+
+
+def test_fallback_hero_headline_bootstrap_falls_back_to_baseline_when_no_risk():
+    from qbu_crawler.server.report_common import _fallback_hero_headline
+    normalized = {
+        "report_semantics": "bootstrap",
+        "is_bootstrap": True,
+        "kpis": {"ingested_review_rows": 593},
+        "self": {"risk_products": [], "top_negative_clusters": []},
+        "competitor": {"top_positive_themes": []},
+    }
+    headline = _fallback_hero_headline(normalized)
+    assert "基线" in headline or "监控起点" in headline
+    assert "今日新增" not in headline

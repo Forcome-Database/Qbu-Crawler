@@ -637,6 +637,12 @@ def _fallback_hero_headline(normalized):
         return (
             f"当前竞品用户认可以 {normalized['competitor']['top_positive_themes'][0].get('label_display')} 为主。"
         )
+    # Final baseline fallback — must be mode-aware
+    semantics = normalized.get("report_semantics") or "incremental"
+    is_boot = bool(normalized.get("is_bootstrap")) or semantics == "bootstrap"
+    ingested = (normalized.get("kpis") or {}).get("ingested_review_rows", 0)
+    if is_boot:
+        return f"首次基线扫描 {ingested} 条评论完成，建立监控起点。"
     return "当前样本不足以形成明确主结论，建议继续积累样本后再判断。"
 
 
@@ -664,9 +670,23 @@ def _fallback_executive_bullets(normalized):
             f"{product_name}{sku_text}：{top_opportunity.get('label_display_list') or '暂无主要短板'}"
         )
     if not bullets:
-        bullets.append(
-            f"当前纳入分析产品 {normalized['kpis']['product_count']} 个，新增评论 {normalized['kpis']['ingested_review_rows']} 条。"
-        )
+        semantics = normalized.get("report_semantics") or "incremental"
+        is_boot = bool(normalized.get("is_bootstrap")) or semantics == "bootstrap"
+        ingested = normalized["kpis"].get("ingested_review_rows", 0)
+        products = normalized["kpis"].get("product_count", 0)
+        if is_boot:
+            bullets.append(
+                f"当前纳入分析产品 {products} 个，本次入库评论 {ingested} 条，"
+                f"用于建立监控基线。"
+            )
+        else:
+            digest_summary = (normalized.get("change_digest") or {}).get("summary", {}) or {}
+            fresh = digest_summary.get("fresh_review_count", 0)
+            backfill = digest_summary.get("historical_backfill_count", 0)
+            bullets.append(
+                f"当前纳入分析产品 {products} 个，本次入库评论 {ingested} 条"
+                f"（近30天业务新增 {fresh}，历史补采 {backfill}）。"
+            )
     return bullets[:3]
 
 

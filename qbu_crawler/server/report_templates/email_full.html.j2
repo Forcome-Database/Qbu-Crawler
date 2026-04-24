@@ -219,7 +219,13 @@
             {% endfor %}
             {% else %}
             <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:12px;color:#64748b;">
-              当前纳入分析产品 {{ _kpis.get("own_product_count", 0) }} 个，新增评论 {{ _summary.get("ingested_review_count", 0) }} 条。
+              {% if _semantics == "bootstrap" or _view_state == "bootstrap" %}
+              首次基线已完成，本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条，用于建立监控基线。
+              {% else %}
+              {% set _fresh = _summary.get("fresh_review_count", 0) %}
+              {% set _backfill = _summary.get("historical_backfill_count", 0) %}
+              本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条（近30天业务新增 {{ _fresh }}，历史补采 {{ _backfill }}）。
+              {% endif %}
             </div>
             {% endif %}
           </td>
