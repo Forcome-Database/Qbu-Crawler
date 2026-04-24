@@ -293,7 +293,7 @@ def _has_bootstrap_language_violation(result, analytics):
     ]
     merged = "\n".join(texts)
     forbidden_patterns = (
-        r"今日新增",
+        r"今日新增",  # forbidden_patterns 条目：禁止使用
         r"今日暴增",
         r"较昨日",
         r"较上期",
@@ -627,7 +627,7 @@ def _build_insights_prompt(analytics, snapshot=None):
     _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
     if _window_count < 5:
         prompt += (
-            f"\n\n⚠️ 重要提示：本期新增评论仅 {_window_count} 条，样本极少。"
+            f"\n\n⚠️ 重要提示：本次入库评论仅 {_window_count} 条，样本极少。"
             "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
             "hero_headline 应体现「样本不足」或「数据有限」。"
         )
@@ -637,7 +637,7 @@ def _build_insights_prompt(analytics, snapshot=None):
     if report_semantics != "bootstrap" and analytics.get("perspective") == "dual" \
             and not (change_digest.get("summary") or {}).get("fresh_review_count", 0):
         prompt += (
-            "\n\n本期无近30天业务新增评论。"
+            "\n\n本次入库近30天业务评论为 0。"
             "executive_bullets 应聚焦累积数据中的持续性问题。"
         )
 
