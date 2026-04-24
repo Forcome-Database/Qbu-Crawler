@@ -591,14 +591,29 @@ def _build_insights_prompt(analytics, snapshot=None):
     else:
         summary = change_digest.get("summary") or {}
         if summary:
+            ingested = summary.get("ingested_review_count", total)
+            fresh = summary.get("fresh_review_count", 0)
+            backfill = summary.get("historical_backfill_count", 0)
+            fresh_neg = summary.get("fresh_own_negative_count", 0)
             prompt += "\n\n--- 今日变化 ---"
-            prompt += f"\n本次入库评论 {summary.get('ingested_review_count', total)} 条"
             prompt += (
-                f"\n其中近30天业务新增 {summary.get('fresh_review_count', 0)} 条，"
-                f"历史补采 {summary.get('historical_backfill_count', 0)} 条"
+                f"\n本次入库评论 {ingested} 条"
+                f"（近30天业务新增 {fresh} 条、历史补采 {backfill} 条）"
             )
-            if summary.get("fresh_own_negative_count", 0) > 0:
-                prompt += f"\n近30天自有差评 {summary.get('fresh_own_negative_count', 0)} 条"
+            if fresh_neg > 0:
+                prompt += (
+                    f"\n其中自有近30天差评 {fresh_neg} 条，"
+                    "请在 executive_bullets 中优先提示。"
+                )
+            if ingested > 0 and backfill / ingested >= 0.7:
+                prompt += (
+                    "\n⚠️ 本次入库以历史补采为主。禁止把补采评论计入业务新增，"
+                    "不要使用「今日新增」或「暴增」等措辞。"
+                )
+            prompt += (
+                "\n叙述请使用「本次入库」「近30天业务新增」，"
+                "不要使用「今日新增」。"
+            )
 
     # Low-sample warning (Fix-5: use window review count, not cumulative ingested_review_rows)
     _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
@@ -609,17 +624,14 @@ def _build_insights_prompt(analytics, snapshot=None):
             "hero_headline 应体现「样本不足」或「数据有限」。"
         )
 
-    # Window summary section (P007 Task 5)
-    window = analytics.get("window", {})
-    if report_semantics != "bootstrap" and window.get("reviews_count", 0) > 0:
-        prompt += f"\n\n--- 今日变化 ---"
-        prompt += f"\n今日新增评论 {window['reviews_count']} 条"
-        prompt += f"（自有 {window.get('own_reviews_count', 0)}，竞品 {window.get('competitor_reviews_count', 0)}）"
-        if window.get("new_negative_count", 0) > 0:
-            prompt += f"\n注意：新增自有差评 {window['new_negative_count']} 条"
-        prompt += "\n请在 executive_bullets 中提及今日新增变化（如有值得关注的新评论）。"
-    elif report_semantics != "bootstrap" and analytics.get("perspective") == "dual":
-        prompt += "\n\n今日无新增评论。executive_bullets 应聚焦累积数据中的关键洞察和持续存在的问题。"
+    # Fallback for dual-perspective incremental with zero fresh reviews —
+    # the main "--- 今日变化 ---" section is already written above (change_digest branch).
+    if report_semantics != "bootstrap" and analytics.get("perspective") == "dual" \
+            and not (change_digest.get("summary") or {}).get("fresh_review_count", 0):
+        prompt += (
+            "\n\n本期无近30天业务新增评论。"
+            "executive_bullets 应聚焦累积数据中的持续性问题。"
+        )
 
     # Inject review samples for grounded insights
     if snapshot:

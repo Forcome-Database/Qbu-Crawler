@@ -681,7 +681,8 @@ def test_select_insight_samples_works_without_cumulative():
 
 
 def test_build_insights_prompt_includes_window_summary():
-    """_build_insights_prompt should append a 浠婃棩鍙樺寲 section when window data is present."""
+    """_build_insights_prompt should append a 今日变化 section driven by
+    change_digest.summary (post T-A-3: window-based「今日新增评论」 literal is gone)."""
     from qbu_crawler.server.report_llm import _build_insights_prompt
 
     analytics = _insights_analytics()
@@ -692,13 +693,22 @@ def test_build_insights_prompt_includes_window_summary():
         "competitor_reviews_count": 4,
         "new_negative_count": 3,
     }
+    analytics["change_digest"] = {
+        "summary": {
+            "ingested_review_count": 12,
+            "fresh_review_count": 8,
+            "historical_backfill_count": 4,
+            "fresh_own_negative_count": 3,
+        }
+    }
     analytics["perspective"] = "dual"
 
     prompt = _build_insights_prompt(analytics)
 
-    assert "今日" in prompt, "Prompt should contain '今日' when window data is present"
-    assert "12" in prompt, "Prompt should mention window reviews_count (12)"
-    assert "今日新增评论" in prompt, "Prompt should contain '今日新增评论' section"
+    assert "今日变化" in prompt, "Prompt should contain '今日变化' section when change_digest.summary is present"
+    assert "12" in prompt, "Prompt should mention ingested_review_count (12)"
+    assert "本次入库评论" in prompt, "Prompt should use the new『本次入库评论』 wording"
+    assert "今日新增评论" not in prompt, "Legacy『今日新增评论』 literal must be gone"
 
 
 def test_build_insights_prompt_small_window_warning_uses_window_count():
@@ -728,6 +738,63 @@ def test_build_insights_prompt_small_window_warning_uses_window_count():
     prompt = _build_insights_prompt(analytics)
 
     assert "样本极少" in prompt, "Small sample warning should fire for window_count=3"
+def test_incremental_prompt_drops_window_today_new_segment():
+    """spec §5.2 / §10.2：incremental 路径禁止把 window.reviews_count
+    叙述为「今日新增评论」；只能用 change_digest.summary 的口径。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "incremental",
+        "kpis": {"ingested_review_rows": 50, "own_review_rows": 40,
+                 "own_negative_review_rows": 3, "negative_review_rows": 5,
+                 "own_product_count": 3, "competitor_product_count": 2,
+                 "competitor_review_rows": 10, "health_index": 80,
+                 "negative_review_rate": 0.1, "own_negative_review_rate": 0.075},
+        "window": {"reviews_count": 50, "own_reviews_count": 40,
+                   "competitor_reviews_count": 10, "new_negative_count": 3},
+        "change_digest": {"summary": {
+            "ingested_review_count": 50,
+            "fresh_review_count": 4,
+            "historical_backfill_count": 46,
+            "fresh_own_negative_count": 0,
+        }},
+        "self": {"top_negative_clusters": [], "recommendations": [], "risk_products": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    prompt = _build_insights_prompt(analytics)
+    # 违禁字面必须消失
+    assert "今日新增评论" not in prompt, "L531-541 重复段未清理"
+    # 应改用 fresh/backfill 叙述
+    assert "本次入库评论" in prompt
+    assert "近30天业务新增" in prompt or "近 30 天业务新增" in prompt
+    assert "历史补采" in prompt
+
+
+def test_incremental_prompt_forbids_business_new_when_backfill_dominant():
+    """spec §7.6：backfill >= 70% 时 prompt 必须显式禁止把补采计入业务新增。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "incremental",
+        "kpis": {"ingested_review_rows": 500, "own_review_rows": 400,
+                 "own_negative_review_rows": 10, "negative_review_rows": 15,
+                 "own_product_count": 3, "competitor_product_count": 2,
+                 "competitor_review_rows": 100, "health_index": 80,
+                 "negative_review_rate": 0.03, "own_negative_review_rate": 0.025},
+        "window": {"reviews_count": 500},
+        "change_digest": {"summary": {
+            "ingested_review_count": 500,
+            "fresh_review_count": 10,
+            "historical_backfill_count": 490,  # 98% backfill
+        }},
+        "self": {"top_negative_clusters": [], "recommendations": [], "risk_products": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    prompt = _build_insights_prompt(analytics)
+    assert "补采" in prompt
+    assert any(kw in prompt for kw in ["禁止", "不得", "不要"])
+
+
 def test_build_insights_prompt_includes_bootstrap_semantics_guard():
     from qbu_crawler.server.report_llm import _build_insights_prompt
 
