@@ -11,14 +11,13 @@
 ## 🧭 当前 Stage 指针
 
 ```
-status:         Stage-A-PLAN-WRITTEN · READY-TO-EXECUTE
-last_updated:   2026-04-24 23:xx
-last_commit:    (即将 commit) docs: continuity + Stage A plan
-last_tag:       v0.3.17-t0-hotfix
-next_action:    执行 Stage A · 调用 superpowers:subagent-driven-development
-                （基于 docs/superpowers/plans/2026-04-24-stage-a-p1-remediation.md）
-next_stage:     Stage A · 6 Task · 预计 1-2 天完成
-blocked_by:     无（Task 5 Step 5.6 测试已核对真实入口 _render_full_email_html）
+status:         Stage-A-COMPLETE · Stage-B-PLAN-NOT-WRITTEN
+last_updated:   2026-04-25 18:xx
+last_commit:    0696624 chore: bump version 0.3.17 -> 0.3.18（Stage A 完成）
+last_tag:       v0.3.18-stage-a
+next_action:    写 Stage B implementation plan via superpowers:writing-plans
+next_stage:     Stage B · 4 修 · 契约冻结期同步启动
+blocked_by:     无（契约冻结期生效）
 ```
 
 ---
@@ -110,6 +109,26 @@ blocked_by:     无（Task 5 Step 5.6 测试已核对真实入口 _render_full_e
 
 ## 📝 进度日志（追加型，最新 3 条 → 最上方）
 
+### 2026-04-25 第 1 session (Stage A 执行)
+- **Who**：Claude（Opus 4.7 1M · subagent-driven-development）
+- **Done**：
+  - Task 1: 581dfe1 · 贝叶斯健康指数统一
+  - Task 2: c1b682b · 趋势页组件级 status
+  - Task 3: 14910db + 98270fc (fix weak-Red + extract BACKFILL_DOMINANT_RATIO 常量) · LLM prompt 清理
+  - Task 4: 3811266 · bootstrap 违禁词扩面
+  - Task 5: ff50479 · fallback 与邮件 semantics
+  - Task 6: 0696624 · chore version bump + tag v0.3.18-stage-a
+  - 5 条 grep 门禁全绿
+  - 报告相关 11 个测试文件全绿（2 pre-existing 失败已核对非本 Stage 引入）
+  - subagent-driven → TDD → spec review → code quality review → finishing 全流程
+- **Carry-over（follow-up，不阻塞契约冻结）**：
+  - POSITIVE_THRESHOLD 常量提取（5 处魔数 4）
+  - MIN_RELIABLE / PRIOR 常量提模块级
+  - Task 2 template duplicate status_message（289 vs 304）
+  - Task 4 `同比` pattern 假阳性风险 + 字符串形式 priority
+  - Task 5 纯 Jinja-level email else 分支测试（test fidelity）
+- **Next**：新 session 开场读本文件 → 按 next_action 写 Stage B implementation plan
+
 ### 2026-04-24 第 1 session
 - **Who**：Claude（Opus 4.7 1M）+ Codex（失败 1 次后完成 1 次）
 - **Done**：
@@ -156,6 +175,8 @@ blocked_by:     无（Task 5 Step 5.6 测试已核对真实入口 _render_full_e
 - ❌ 不得新增第二套 KPI（`kpis_v2` / `metric_new_*` 等）
 - ❌ 模板不得绕过 `trend_digest` 直接读 `analytics.window` / `analytics._trend_series` / `cumulative_kpis`
 - ❌ 不得改 Phase 1 已稳定的 `change_digest` / `kpis` 键名
+
+> **契约冻结期启动**：自 `v0.3.18-stage-a` 打 tag 起生效。连续 3 个 daily run 不允许改 `change_digest / trend_digest / kpis` 顶层键名。
 
 ---
 
