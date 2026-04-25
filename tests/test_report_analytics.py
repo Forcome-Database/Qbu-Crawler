@@ -1474,3 +1474,91 @@ def test_sentiment_trend_emits_comparison_with_start_vs_end():
     assert sve["change_pct"] < 0, "差评率下降 → change_pct 应为负"
     assert sve["change_pct"] == -100.0, \
         f"差评率从 50% (1/2) 降到 0% (0/2)，相对变化应为 -100.0，得到 {sve['change_pct']}"
+
+
+def test_issue_trend_emits_two_secondary_charts_when_ready():
+    """Phase 2 T9: issues dim ready 时必须输出 2 张辅图：
+    1) Top3 问题分时段堆叠 (stacked_bar)
+    2) Top3 问题影响 SKU 数 (bar, x=问题, y=affected_product_count)
+    标题精确锁，避免未来重命名导致测试失效."""
+    from qbu_crawler.server.report_analytics import _build_issue_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    labeled_reviews = [
+        {
+            "review": {"ownership": "own", "rating": 1, "product_sku": "A1",
+                       "date_published_parsed": "2026-04-10"},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}],
+        },
+        {
+            "review": {"ownership": "own", "rating": 1, "product_sku": "B2",
+                       "date_published_parsed": "2026-04-12"},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}],
+        },
+        {
+            "review": {"ownership": "own", "rating": 2, "product_sku": "C3",
+                       "date_published_parsed": "2026-04-15"},
+            "labels": [{"label_code": "shipping_delay", "label_polarity": "negative"}],
+        },
+    ]
+    result = _build_issue_trend("month", logical_day, labeled_reviews)
+
+    assert result["status"] == "ready"
+    secondary = result["secondary_charts"]
+    assert isinstance(secondary, list) and len(secondary) >= 2
+
+    titles = {chart["title"] for chart in secondary}
+    assert "Top3 问题分时段堆叠" in titles, f"missing exact title; got {titles}"
+    assert "Top3 问题影响 SKU 数" in titles, f"missing exact title; got {titles}"
+
+    chart_types = {chart["chart_type"] for chart in secondary}
+    # 至少有 stacked_bar 或 bar
+    assert chart_types & {"stacked_bar", "bar"}, \
+        f"expected at least one stacked_bar/bar chart, got {chart_types}"
+
+    for chart in secondary:
+        assert set(chart.keys()) >= {"status", "chart_type", "title", "labels", "series"}
+        assert chart["status"] in {"ready", "accumulating", "degraded"}
+
+
+def test_issue_trend_emits_comparison_with_top_issue_heat():
+    """Phase 2 T9: issues dim comparison.start_vs_end 度量为「头号问题在窗口首尾的评论数」。
+    change_pct 语义：相对百分比变化（与 sentiment dim 同口径）。"""
+    from qbu_crawler.server.report_analytics import _build_issue_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    # quality_stability 是头号问题：3 条
+    # 月初 (3-26) 1 条，中间 (4-10) 1 条，月末 (4-23) 1 条
+    labeled_reviews = [
+        {
+            "review": {"ownership": "own", "product_sku": "A1",
+                       "date_published_parsed": "2026-03-26"},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}],
+        },
+        {
+            "review": {"ownership": "own", "product_sku": "B2",
+                       "date_published_parsed": "2026-04-10"},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}],
+        },
+        {
+            "review": {"ownership": "own", "product_sku": "C3",
+                       "date_published_parsed": "2026-04-23"},
+            "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}],
+        },
+    ]
+    result = _build_issue_trend("month", logical_day, labeled_reviews)
+    comp = result["comparison"]
+    assert set(comp.keys()) == {"period_over_period", "year_over_year", "start_vs_end"}
+
+    sve = comp["start_vs_end"]
+    assert sve["start"] == 1, f"start: 月初有 1 条 quality_stability，got {sve['start']}"
+    assert sve["end"] == 1, f"end: 月末有 1 条 quality_stability，got {sve['end']}"
+    # start=1, end=1 → change_pct = 0.0
+    assert sve["change_pct"] == 0.0, \
+        f"start=1, end=1, 相对变化应 0.0，got {sve['change_pct']}"
+
+    # PoP / YoY 仍留 None
+    assert comp["period_over_period"]["current"] is None
+    assert comp["year_over_year"]["current"] is None

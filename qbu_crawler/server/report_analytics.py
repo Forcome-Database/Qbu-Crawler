@@ -1729,12 +1729,86 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
                 for code in ranked_codes
             ],
         },
+        secondary_charts=_build_issue_secondary_charts(
+            labels, ranked_codes, counts_by_label, affected_products,
+        ),
+        comparison=_build_issue_comparison(labels, ranked_codes, counts_by_label),
         table={
             "status": "ready",
             "columns": ["问题", "评论数", "影响产品数"],
             "rows": rows,
         },
     )
+
+
+def _build_issue_secondary_charts(labels, ranked_codes, counts_by_label, affected_products):
+    """Phase 2 T9: issues dim 辅图 —
+    1) Top3 问题在 buckets 上的分时段堆叠 (stacked_bar)
+    2) Top3 问题受影响 SKU 数 (bar，x=问题，y=affected_product_count)
+
+    status：ranked_codes 为空时返回 []（即 0 条辅图，由调用方决定 fallback）；
+    否则两张图均 ready。"""
+    from qbu_crawler.server.report_common import _label_display
+
+    if not ranked_codes:
+        return []
+
+    stacked = {
+        "status": "ready",
+        "chart_type": "stacked_bar",
+        "title": "Top3 问题分时段堆叠",
+        "labels": labels,
+        # series 故意复用 primary_chart 的数据；视觉形态 (stacked vs line) 是两张图的差异点
+        "series": [
+            {
+                "name": _label_display(code),
+                "data": [counts_by_label[code].get(label, 0) for label in labels],
+            }
+            for code in ranked_codes
+        ],
+    }
+
+    affected = {
+        "status": "ready",
+        "chart_type": "bar",
+        "title": "Top3 问题影响 SKU 数",
+        "labels": [_label_display(code) for code in ranked_codes],
+        "series": [
+            {
+                "name": "影响 SKU 数",
+                "data": [
+                    len([name for name in affected_products.get(code, set()) if name])
+                    for code in ranked_codes
+                ],
+            },
+        ],
+    }
+    return [stacked, affected]
+
+
+def _build_issue_comparison(labels, ranked_codes, counts_by_label):
+    """Phase 2 T9: issues dim comparison — 度量「头号问题在 bucket 上的评论数」。
+    start_vs_end: 第一个非 0 bucket vs 最后一个非 0 bucket
+    change_pct 语义：相对百分比变化（与 sentiment dim 同口径），start=0 时返回 None。
+    period_over_period / year_over_year 当前留 null（待 Phase 2 后续历史扩展）。"""
+    comparison = _empty_comparison()
+    if not ranked_codes:
+        return comparison
+
+    top_code = ranked_codes[0]
+    bucket_counts = [counts_by_label[top_code].get(label, 0) for label in labels]
+    non_zero = [count for count in bucket_counts if count > 0]
+    start_value = non_zero[0] if non_zero else None
+    end_value = non_zero[-1] if non_zero else None
+    change_pct = None
+    if start_value is not None and end_value is not None and start_value != 0:
+        change_pct = round((end_value - start_value) / start_value * 100, 1)
+
+    comparison["start_vs_end"]["label"] = "头号问题首尾热度对比"
+    comparison["start_vs_end"]["start"] = start_value
+    comparison["start_vs_end"]["end"] = end_value
+    comparison["start_vs_end"]["change_pct"] = change_pct
+    return comparison
 
 
 def _build_product_trend(view, logical_day, trend_series, snapshot_products):
