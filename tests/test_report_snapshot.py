@@ -1573,9 +1573,11 @@ def test_load_previous_report_context_resolves_stale_absolute_artifact_paths(sna
     assert snapshot["snapshot_hash"] == "snapshot-1"
 
 
-def test_workflow_run_stores_relative_artifact_paths(snapshot_db, monkeypatch):
-    """修 7: report_snapshot.* 返回 dict 中的 analytics_path / excel_path /
-    html_path 必须是相对 REPORT_DIR 的相对路径，便于跨机器迁移后 resolver 仍能恢复。"""
+def test_generate_full_report_returns_relative_artifact_paths(snapshot_db, monkeypatch):
+    """修 7: report_snapshot.generate_report_from_snapshot 返回 dict 中的
+    analytics_path / excel_path / html_path 必须是相对 REPORT_DIR 的相对路径，
+    便于跨机器迁移后 resolver 仍能恢复。下游 WorkflowWorker._finish_report 会
+    将这些 value 原样落到 workflow_runs 表，所以这里只验证生产端契约。"""
     from qbu_crawler.server import report_snapshot
 
     # Stub all heavyweight collaborators — we only test the path-shaping behavior

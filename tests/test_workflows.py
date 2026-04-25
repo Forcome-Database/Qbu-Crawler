@@ -1407,14 +1407,17 @@ class TestWorkflowReconcile:
 
         monkeypatch.setattr(workflows_module.config, "WORKFLOW_NOTIFICATION_TARGET", "chat:cid-workflow")
         monkeypatch.setattr(workflows_module, "load_report_snapshot", lambda path: {"snapshot_hash": "hash-fast", "logical_date": "2026-03-29", "run_id": run["id"]})
+        # Stage B 修 7 follow-up: production raise site at report_snapshot.py:1337-1342
+        # already wraps paths through _artifact_db_value before raising, so the
+        # exception carries RELATIVE paths. Mirror that contract here.
         monkeypatch.setattr(
             workflows_module,
             "generate_report_from_snapshot",
             lambda snapshot, send_email=True: (_ for _ in ()).throw(
                 FullReportGenerationError(
                     "pdf exploded",
-                    analytics_path=str(tmp_path / "analytics.json"),
-                    excel_path=str(tmp_path / "full.xlsx"),
+                    analytics_path="analytics.json",
+                    excel_path="full.xlsx",
                 )
             ),
         )
@@ -1435,8 +1438,10 @@ class TestWorkflowReconcile:
         assert refreshed["report_phase"] == "fast_sent"
         assert refreshed["snapshot_path"] == snapshot_path
         assert refreshed["snapshot_hash"] == "hash-fast"
-        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
-        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
+        # workflows.py FullReportGenerationError handler stores exc.* verbatim;
+        # production already wrapped them to relative basenames above.
+        assert refreshed["analytics_path"] == "analytics.json"
+        assert refreshed["excel_path"] == "full.xlsx"
 
     def test_smtp_failure_keeps_generated_pdf_artifact(self, workflow_db, monkeypatch, tmp_path):
         from qbu_crawler.server import workflows as workflows_module
