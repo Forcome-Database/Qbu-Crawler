@@ -13,7 +13,7 @@
 ```
 status:         Stage-B-COMPLETE · Phase2-T9-PLAN-NOT-WRITTEN
 last_updated:   2026-04-25 13:21
-last_commit:    072aafd chore: bump version 0.3.18 -> 0.3.19 (Stage B 完成 · 修 7-10)
+last_commit:    d7a538e chore: bump version 0.3.18 -> 0.3.19 (Stage B 完成 · 修 7-10)
 last_tag:       v0.3.19-stage-b
 next_action:    Phase 2 T9 implementation plan via superpowers:writing-plans (trend_digest.data.[view].[dim].secondary_charts 数据层扩展)
 next_stage:     Phase 2 T9 · trend_digest 数据层扩展（契约冻结期 Day 5+ 触发，视前 3 天 daily run 观测情况）
@@ -116,7 +116,7 @@ blocked_by:     契约冻结期观测中（Day 1 起算 → Day 5 解锁 T9）
   - Task 2 (T-B-2): d493027 + a0de39e · kpis 字段消歧（negative_review_rate → all_sample_negative_rate；模板/LLM 改读 own_*；dead variable + delta block 清理）
   - Task 3 (T-B-3): b9ddeea · trend year 视图语义 banner（trend_digest.view_notes 数据驱动）
   - Task 4 (T-B-4): 88b0bd3 + e54a1df · LLM low-sample 改读 change_digest.summary.fresh_review_count（bootstrap 跳过；fresh=0 平滑措辞；legacy-analytics 测试覆盖）
-  - Task 5 (T-B-5): 072aafd · 版本号 bump 0.3.18 → 0.3.19 + Continuity 推进 + tag v0.3.19-stage-b
+  - Task 5 (T-B-5): d7a538e · 版本号 bump 0.3.18 → 0.3.19 + Continuity 推进 + tag v0.3.19-stage-b
   - 5 + 2 条 grep 门禁全绿（Stage A 5 条 + Stage B 新增 2 条）
   - report 相关 13 个测试文件全绿
   - subagent-driven → spec compliance review → code quality review → 二阶段 review 全流程
