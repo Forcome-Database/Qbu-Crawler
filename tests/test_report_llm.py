@@ -713,7 +713,9 @@ def test_build_insights_prompt_includes_window_summary():
 
 def test_build_insights_prompt_small_window_warning_uses_window_count():
     """修 10 之后：warning 基于 change_digest.summary.fresh_review_count，
-    不再读 window.reviews_count。保留测试名作为历史回归锁。"""
+    不再读 window.reviews_count。
+    保留测试名作为历史回归锁；fixture 故意把 window 设为大数（旧逻辑不会触发），
+    确保此测试在 pre-fix code 上失败、在 post-fix code 上通过。"""
     from qbu_crawler.server.report_llm import _build_insights_prompt
 
     analytics = {
@@ -728,22 +730,25 @@ def test_build_insights_prompt_small_window_warning_uses_window_count():
         "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
         "competitor": {"gap_analysis": [], "benchmark_examples": []},
         "window": {
-            "reviews_count": 3,
-            "own_reviews_count": 2,
-            "competitor_reviews_count": 1,
+            "reviews_count": 100,            # 旧逻辑：window>=5 → 不触发
+            "own_reviews_count": 60,
+            "competitor_reviews_count": 40,
             "new_negative_count": 0,
         },
         "change_digest": {"summary": {
-            "ingested_review_count": 3,
-            "fresh_review_count": 3,             # 修 10: 基于 fresh，3 < 5 仍触发
-            "historical_backfill_count": 0,
+            "ingested_review_count": 100,
+            "fresh_review_count": 3,         # 新逻辑：fresh<5 → 触发
+            "historical_backfill_count": 97,
             "fresh_own_negative_count": 0,
         }},
         "perspective": "dual",
         "report_semantics": "incremental",
     }
     prompt = _build_insights_prompt(analytics)
-    assert "样本极少" in prompt, "Small sample warning should fire when fresh < 5"
+    # 在 post-fix 实现下应触发；pre-fix 实现（读 window.reviews_count=100）不会触发
+    assert "样本极少" in prompt, (
+        "Post-fix: should fire when fresh_count<5 even though window.reviews_count>=5"
+    )
 def test_incremental_prompt_drops_window_today_new_segment():
     """spec §5.2 / §10.2：incremental 路径禁止把 window.reviews_count
     叙述为「今日新增评论」；只能用 change_digest.summary 的口径。"""
@@ -1181,3 +1186,29 @@ def test_build_insights_prompt_low_sample_skips_when_fresh_above_threshold():
     }
     prompt = _build_insights_prompt(analytics)
     assert "样本极少" not in prompt, "fresh>=5 不该触发 low-sample warning"
+
+
+def test_build_insights_prompt_low_sample_fires_when_change_digest_absent():
+    """修 10 后向兼容：legacy analytics 没有 change_digest 时，
+    fresh_count 默认 0，触发 low-sample warning（不抛 KeyError）。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "incremental",
+        "perspective": "dual",
+        "kpis": {
+            "ingested_review_rows": 50,
+            "own_review_rows": 40, "own_negative_review_rows": 2,
+            "own_negative_review_rate": 0.05,
+            "own_product_count": 3, "competitor_product_count": 2,
+            "competitor_review_rows": 10, "health_index": 75,
+            "all_sample_negative_rate": 0.04, "negative_review_rows": 2,
+        },
+        # 故意不提供 change_digest（legacy analytics）
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    # 不抛 KeyError 即通过基本契约
+    prompt = _build_insights_prompt(analytics)
+    # fresh 默认 0，应触发 warning
+    assert "样本极少" in prompt

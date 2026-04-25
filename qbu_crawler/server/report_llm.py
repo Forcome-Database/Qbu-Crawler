@@ -629,8 +629,11 @@ def _build_insights_prompt(analytics, snapshot=None):
         _summary = (change_digest.get("summary") or {})
         _fresh_count = _summary.get("fresh_review_count", 0)
         if _fresh_count < 5:
+            _count_phrase = (
+                f"仅 {_fresh_count} 条" if _fresh_count > 0 else f"{_fresh_count} 条"
+            )
             prompt += (
-                f"\n\n⚠️ 本期近30天业务新增仅 {_fresh_count} 条，样本极少。"
+                f"\n\n⚠️ 本期近30天业务新增{_count_phrase}，样本极少。"
                 "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
                 "hero_headline 应体现「样本不足」或「数据有限」。"
             )
