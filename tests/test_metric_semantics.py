@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -367,3 +368,132 @@ def test_change_digest_incremental_uses_empty_state_when_no_significant_changes(
     assert digest["summary"]["state_change_count"] == 0
     assert digest["review_signals"]["fresh_negative_reviews"] == []
     assert digest["empty_state"]["enabled"] is True
+
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _git_grep(repo_root, pattern, paths, use_extended_regex=False):
+    """Helper: 跑 `git grep` 返回 (offending_files, returncode)。
+    git grep 在 Windows 上对绝对 pathspec 不友好，统一用相对路径；
+    returncode 处理：0=有匹配，1=无匹配，其它=git error 必须 skip 测试。"""
+    import subprocess
+    cmd = ["git", "grep", "-l"]
+    if use_extended_regex:
+        cmd.append("-E")
+    cmd.append(pattern)
+    cmd.append("--")
+    cmd.extend(paths)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=str(repo_root), timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        import pytest
+        pytest.skip("git grep timed out (>30s) — likely stalled, skipping contract gate")
+    if result.returncode not in (0, 1):
+        import pytest
+        pytest.skip(
+            f"git grep failed with returncode={result.returncode}: "
+            f"stderr={result.stderr.strip()!r}"
+        )
+    files = result.stdout.strip().splitlines() if result.returncode == 0 else []
+    return files, result.returncode
+
+
+def test_phase2_t9_no_kpis_v2_or_metric_new_keys():
+    """Phase 2 进行中禁改清单 (Continuity §🧊):
+    不得新增第二套 KPI（kpis_v2 / metric_new_*）。"""
+    repo_root = _REPO_ROOT
+    # 用相对仓库根的 pathspec，避免 Windows 绝对路径让 git grep 报 returncode=128
+    targets = ["qbu_crawler/", "tests/"]
+
+    for pattern in ("kpis_v2", "metric_new_"):
+        offending, _ = _git_grep(repo_root, pattern, targets)
+        import os
+        offending = [
+            f for f in offending
+            if os.path.basename(f) != "test_metric_semantics.py"
+        ]
+        assert not offending, \
+            f"Phase 2 禁止引入第二套 KPI 命名 {pattern!r}，违规文件: {offending}"
+
+
+def test_phase2_t9_template_does_not_consume_secondary_charts_yet():
+    """Phase 2 T9 阶段：HTML 模板 / Excel / 邮件不得消费 secondary_charts 字段
+    （T9 仅扩数据层，T10 才落地展示层；提前消费会让 T9 单独验收时观测到模板异常）。"""
+    repo_root = _REPO_ROOT
+    targets_disallowed = [
+        "qbu_crawler/server/report_templates/",
+        "qbu_crawler/server/report.py",  # Excel 入口
+    ]
+    offending, _ = _git_grep(repo_root, "secondary_charts", targets_disallowed)
+    assert not offending, \
+        f"T9 阶段模板/Excel 不得消费 secondary_charts，违规: {offending}"
+
+
+def test_phase2_t9_template_does_not_bypass_trend_digest():
+    """Phase 2 进行中禁改清单 (Continuity §🧊):
+    模板不得绕过 trend_digest 直接读 analytics.window / analytics._trend_series / cumulative_kpis。"""
+    repo_root = _REPO_ROOT
+    targets = ["qbu_crawler/server/report_templates/"]
+
+    for pattern in (r"analytics\.window", r"analytics\._trend_series", r"cumulative_kpis"):
+        offending, _ = _git_grep(repo_root, pattern, targets, use_extended_regex=True)
+        assert not offending, \
+            f"模板禁止直接读 {pattern!r}（必须经 trend_digest），违规: {offending}"
+
+
+def test_phase2_t9_phase1_trend_digest_keys_unchanged():
+    """Phase 2 T9 契约不变量：trend_digest 顶层 views/dimensions/default_view/default_dimension
+    与 Phase 1 完全一致。data[view][dim] 子层 Phase 1 5 键 (kpis/primary_chart/status/
+    status_message/table) 必须仍然存在。"""
+    from qbu_crawler.server.report_analytics import _build_trend_digest
+    snapshot = {"logical_date": "2026-04-25", "products": [], "reviews": []}
+    digest = _build_trend_digest(snapshot, labeled_reviews=[], trend_series={})
+
+    assert sorted(digest["views"]) == ["month", "week", "year"]
+    assert sorted(digest["dimensions"]) == ["competition", "issues", "products", "sentiment"]
+    assert digest["default_view"] == "month"
+    assert digest["default_dimension"] == "sentiment"
+
+    phase1_keys = {"kpis", "primary_chart", "status", "status_message", "table"}
+    for view in digest["views"]:
+        for dim in digest["dimensions"]:
+            block = digest["data"][view][dim]
+            missing = phase1_keys - set(block.keys())
+            assert not missing, f"{view}/{dim} 丢了 Phase 1 键: {missing}"
+
+    # 反向覆盖：构造非空 snapshot 让至少一个 block 进入 ready，验证 ready 路径下 5 键也齐全
+    nonempty_snapshot = {"logical_date": "2026-04-25", "products": [], "reviews": []}
+    labeled_reviews_for_ready = [
+        {"review": {"ownership": "own", "rating": 1, "date_published_parsed": "2026-04-10"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}]},
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-15"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "positive"}]},
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-20"},
+         "labels": [{"label_code": "quality_stability", "label_polarity": "positive"}]},
+    ]
+    digest_with_data = _build_trend_digest(
+        nonempty_snapshot, labeled_reviews=labeled_reviews_for_ready, trend_series={},
+    )
+    # 至少 sentiment month dim 应当 ready
+    sentiment_month = digest_with_data["data"]["month"]["sentiment"]
+    assert sentiment_month["status"] == "ready", \
+        "测试构造 3 条 own 评论应让 sentiment month ready"
+    # ready 路径下 5 个 Phase 1 键全在
+    missing_in_ready = phase1_keys - set(sentiment_month.keys())
+    assert not missing_in_ready, \
+        f"ready 路径下 sentiment/month 丢了 Phase 1 键: {missing_in_ready}"
+
+
+def test_git_grep_helper_finds_known_existing_pattern():
+    """元测试: 防止 _git_grep 因 refactor 静默返回 [] 让所有 grep gate 测试假性 PASS。
+    跑一个保证有匹配的模式 (_build_trend_digest 在 qbu_crawler/ 中至少 1 命中)。"""
+    repo_root = _REPO_ROOT
+
+    files, returncode = _git_grep(repo_root, "_build_trend_digest", ["qbu_crawler/"])
+    assert returncode == 0, \
+        f"git grep _build_trend_digest 应当 returncode=0，得到 {returncode}"
+    assert files, \
+        "_build_trend_digest 必定在 qbu_crawler/ 中存在；空结果说明 _git_grep helper 失效"

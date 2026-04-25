@@ -1719,3 +1719,85 @@ def test_competition_trend_negative_gap_change_pct_keeps_sign():
     # 关键：abs(start)=0.5 作分母，change_pct=-100.0 表示 gap 向 own 优势方向扩大 100%
     assert sve["change_pct"] == -100.0, \
         f"abs(start) 分母时 change_pct=-100.0；若误用 start 会变成 +100.0；得到 {sve['change_pct']}"
+
+
+def test_trend_dimensions_use_correct_time_field():
+    """Phase 2 T9 + 原始 plan T9 step 2:
+    sentiment / issues / competition 必须基于 review.date_published_parsed (评论发布时间);
+    products 必须基于 product_snapshot.scraped_at (抓取时间).
+
+    关键防御：构造一条评论 date_published_parsed 在月窗口内、date_published 落到窗口外，
+    若实现误用 date_published 而非 date_published_parsed，桶为空 → sentiment 变 accumulating。"""
+    from qbu_crawler.server.report_analytics import (
+        _build_sentiment_trend, _build_issue_trend,
+        _build_product_trend,
+    )
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+
+    # case 1: parsed 在窗口内 (2026-04-10)，原始 date_published 字段在窗口外 (2026-01-01)
+    # 这能区分实现是用 date_published_parsed 还是 fallback 到 date_published
+    review_published_parsed = {
+        "ownership": "own",
+        "rating": 1,
+        "date_published_parsed": "2026-04-10",  # 月窗口内
+        "date_published": "2026-01-01",          # 月窗口外（陷阱字段）
+    }
+    labeled_reviews = [
+        {"review": review_published_parsed,
+         "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}]},
+    ]
+
+    sentiment = _build_sentiment_trend("month", logical_day, labeled_reviews)
+    assert sentiment["status"] == "ready", \
+        "sentiment 必须优先用 date_published_parsed 落桶 → 落入 4 月 → ready；" \
+        "若误读 date_published 会落到 1 月窗口外 → accumulating"
+
+    issues = _build_issue_trend("month", logical_day, labeled_reviews)
+    assert issues["status"] == "ready", \
+        "issues 必须优先用 date_published_parsed 落桶（同 sentiment 口径）"
+
+    # case 2: products 应基于 scraped_at（snapshot 字段），评论时间字段不影响
+    snapshot_products = [
+        {"sku": "A1", "name": "Prod A", "ownership": "own", "rating": 4.0,
+         "review_count": 100, "scraped_at": "2026-04-24T08:00:00+08:00"},
+    ]
+    trend_series = [
+        {
+            "product_sku": "A1",
+            # series 用的 date 字段对应 product_snapshots.scraped_at
+            "series": [
+                {"date": "2026-04-01", "rating": 3.8, "review_count": 90, "price": 99.0},
+                {"date": "2026-04-23", "rating": 4.0, "review_count": 100, "price": 95.0},
+            ],
+        },
+    ]
+    products = _build_product_trend("month", logical_day, trend_series, snapshot_products)
+    assert products["status"] == "ready", \
+        "products 必须按 scraped_at（即 series[*].date）落桶"
+
+    # case 3: 反向 trap — parsed=out-of-window + raw=in-window
+    # 若实现误读 date_published 或做 fallback，会让评论被错误地纳入窗口 → ready
+    # 正确实现应只读 date_published_parsed → 桶为空 → accumulating
+    review_parsed_outside = {
+        "ownership": "own",
+        "rating": 1,
+        "date_published_parsed": "2026-01-01",  # 月窗口外
+        "date_published": "2026-04-10",          # 月窗口内（陷阱）
+    }
+    sentiment_neg = _build_sentiment_trend(
+        "month", logical_day,
+        [{"review": review_parsed_outside,
+          "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}]}]
+    )
+    assert sentiment_neg["status"] == "accumulating", \
+        "若实现 fallback 到 date_published，会让 review 错误落入 4 月窗口 → 测试失败"
+
+    issues_neg = _build_issue_trend(
+        "month", logical_day,
+        [{"review": review_parsed_outside,
+          "labels": [{"label_code": "quality_stability", "label_polarity": "negative"}]}]
+    )
+    assert issues_neg["status"] == "accumulating", \
+        "issues 同口径：parsed 在窗口外则桶为空，不应 fallback"
