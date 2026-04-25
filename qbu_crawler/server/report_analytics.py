@@ -1898,12 +1898,88 @@ def _build_product_trend(view, logical_day, trend_series, snapshot_products):
                 {"name": "评论总数", "data": [bucket_to_review_count[label] for label in labels]},
             ],
         },
+        secondary_charts=_build_product_secondary_charts(
+            labels, ready_series, bucket_to_review_count,
+        ),
+        comparison=_build_product_comparison(ready_series),
         table={
             "status": "ready",
             "columns": ["SKU", "产品", "当前评分", "当前评论总数", "快照点数", "最新抓取时间"],
             "rows": rows,
         },
     )
+
+
+def _build_product_secondary_charts(labels, ready_series, bucket_to_review_count):
+    """Phase 2 T9: products dim 辅图 —
+    1) 重点 SKU 评论总数走势 (line)
+    2) 重点 SKU 价格走势 (line) — series 用 trend_series 中的 price
+
+    status：评论总数总是 ready（数据来自既有 bucket_to_review_count）；
+    价格在 price 全 None 时降级到 accumulating。"""
+    if ready_series is None:
+        return []
+
+    bucket_to_price = {label: None for label in labels}
+    for point in ready_series.get("points") or []:
+        bucket = point.get("bucket")
+        if bucket and bucket in bucket_to_price:
+            bucket_to_price[bucket] = point.get("price")
+
+    review_chart = {
+        "status": "ready",
+        "chart_type": "line",
+        "title": f"重点 SKU 评论总数 - {ready_series['product_name']}",
+        "labels": labels,
+        "series": [
+            {"name": "评论总数", "data": [bucket_to_review_count[label] for label in labels]},
+        ],
+    }
+
+    has_price = any(v is not None for v in bucket_to_price.values())
+    price_status = "ready" if has_price else "accumulating"
+    price_chart = {
+        "status": price_status,
+        "chart_type": "line",
+        "title": f"重点 SKU 价格 - {ready_series['product_name']}",
+        "labels": labels if has_price else [],
+        "series": [
+            {"name": "价格", "data": [bucket_to_price[label] for label in labels]},
+        ] if has_price else [],
+    }
+    return [review_chart, price_chart]
+
+
+def _build_product_comparison(ready_series):
+    """Phase 2 T9: products dim comparison — 度量「重点 SKU 评分」。
+    start_vs_end: trend_series 第一个 / 最后一个有 rating 的 point。
+    helper 内部按 bucket 排序作防御 — 生产路径 _build_trend_data 已 ORDER BY scraped_at ASC，
+    但单测/未来调用方传入乱序 points 时这层排序保证语义不被静默颠倒。
+    change_pct 语义：相对百分比变化（与 sentiment / issues dim 同口径）。
+    period_over_period / year_over_year 当前留 null（待 Phase 2 后续历史扩展）。"""
+    comparison = _empty_comparison()
+    if ready_series is None:
+        return comparison
+
+    points = ready_series.get("points") or []
+    rating_points = sorted(
+        [p for p in points if p.get("rating") is not None],
+        key=lambda p: p.get("bucket") or "",
+    )
+    if len(rating_points) < 2:
+        return comparison
+
+    start_value = rating_points[0]["rating"]
+    end_value = rating_points[-1]["rating"]
+    change_pct = None
+    if start_value not in (None, 0):
+        change_pct = round((end_value - start_value) / start_value * 100, 1)
+
+    comparison["start_vs_end"]["label"] = "重点 SKU 评分首尾对比"
+    comparison["start_vs_end"]["start"] = start_value
+    comparison["start_vs_end"]["end"] = end_value
+    comparison["start_vs_end"]["change_pct"] = change_pct
+    return comparison
 
 
 def _build_competition_trend(view, logical_day, labeled_reviews):

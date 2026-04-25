@@ -1562,3 +1562,76 @@ def test_issue_trend_emits_comparison_with_top_issue_heat():
     # PoP / YoY 仍留 None
     assert comp["period_over_period"]["current"] is None
     assert comp["year_over_year"]["current"] is None
+
+
+def test_product_trend_emits_two_secondary_charts_when_ready():
+    """Phase 2 T9: products dim ready 时辅图 2 张：
+    1) 重点 SKU 评论总数趋势 (line)
+    2) 重点 SKU 价格趋势 (line)
+    依赖 product_snapshots 已有 >=2 个时间点。"""
+    from qbu_crawler.server.report_analytics import _build_product_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    snapshot_products = [
+        {"sku": "A1", "name": "Prod A", "ownership": "own", "rating": 4.2,
+         "review_count": 200, "scraped_at": "2026-04-24T08:00:00+08:00"},
+    ]
+    # 模拟 trend_series 提供 >=2 个时间点
+    trend_series = [
+        {
+            "product_sku": "A1",
+            "series": [
+                {"date": "2026-04-01", "rating": 4.0, "review_count": 180, "price": 99.0},
+                {"date": "2026-04-15", "rating": 4.2, "review_count": 200, "price": 95.0},
+            ],
+        },
+    ]
+    result = _build_product_trend("month", logical_day, trend_series, snapshot_products)
+    assert result["status"] == "ready"
+
+    secondary = result["secondary_charts"]
+    assert len(secondary) >= 2
+
+    titles = {c["title"] for c in secondary}
+    # 标题精确含 product_name
+    assert any("评论总数" in t and "Prod A" in t for t in titles), \
+        f"missing 评论总数 chart with product name: {titles}"
+    assert any("价格" in t and "Prod A" in t for t in titles), \
+        f"missing 价格 chart with product name: {titles}"
+
+    for chart in secondary:
+        assert set(chart.keys()) >= {"status", "chart_type", "title", "labels", "series"}
+
+
+def test_product_trend_emits_comparison_with_focus_sku_rating():
+    """Phase 2 T9: products dim comparison.start_vs_end 度量为「重点 SKU 评分」。
+    使用 trend_series 首尾点；change_pct 语义：相对百分比变化。"""
+    from qbu_crawler.server.report_analytics import _build_product_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    snapshot_products = [
+        {"sku": "A1", "name": "Prod A", "ownership": "own", "rating": 4.2,
+         "review_count": 200, "scraped_at": "2026-04-24T08:00:00+08:00"},
+    ]
+    trend_series = [
+        {
+            "product_sku": "A1",
+            "series": [
+                {"date": "2026-04-01", "rating": 3.8, "review_count": 100, "price": 99.0},
+                {"date": "2026-04-23", "rating": 4.2, "review_count": 200, "price": 95.0},
+            ],
+        },
+    ]
+    result = _build_product_trend("month", logical_day, trend_series, snapshot_products)
+    sve = result["comparison"]["start_vs_end"]
+    assert sve["start"] == 3.8
+    assert sve["end"] == 4.2
+    # change_pct: (4.2 - 3.8) / 3.8 * 100 = 10.526..., round to 10.5
+    assert sve["change_pct"] == 10.5, \
+        f"start=3.8, end=4.2, 相对变化应 ≈ 10.5，得到 {sve['change_pct']}"
+
+    # PoP/YoY 仍 None
+    assert result["comparison"]["period_over_period"]["current"] is None
+    assert result["comparison"]["year_over_year"]["current"] is None
