@@ -130,7 +130,13 @@ blocked_by:     T9 上线后跑 1 个 daily run 验证 trend_digest 扩展数据
   - sentiment _ = labels 标记可移除（labels 在 sentiment comparison 中实际未用）— 但保留对未来 PoP/YoY 是预留
   - issues 标签集合 `["问题信号数", "活跃问题数", "头号问题", "涉及产品数"]` 在 ready/accumulating 共出现 3 次，可抽 `_ISSUE_KPI_LABELS` 模块常量；同理 sentiment / competition
   - readiness 模型（每 dim 不同 readiness 信号）值得在模块级 docstring 总结
+  - **(I-1, latent)** `_build_trend_dimension` 的 degraded fallback 调 `_empty_trend_dimension` 时**未传** `kpi_placeholder_labels=`，导致 builder 异常时 KPI 退化为 4 个 "—"，违反 audit §4.1 契约。当前测试只覆盖 empty-snapshot accumulating 路径，degraded 是潜在违规。修法：给 `_build_trend_dimension` 加 dim-specific labels 参数，或各 dim 自己 try/except
+  - **(I-2, T10 设计决策)** competition `_build_*_secondary_charts` docstring 声称 "mixed-state 解耦"，但 `report_charts.py:605` 用 top-level status gate 把整块吞掉。spec §8.5 要求 mixed-state，二者矛盾。T10 必须明确选边：(a) 保留 collapse + 改 docstring，或 (b) 改 gate 让独立 ready 的 secondary 渲染（且需新增测试）
+  - **(M-2)** products dim accumulating path 直接调 `_trend_dimension_payload` 不走 `_empty_trend_dimension`，与其他 3 dim 不对称。当前靠 helper 默认值兜底，但 T10/T11 维护者可能因不一致踩坑。修法：给 `_empty_trend_dimension` 加可选 KPI items kwargs 让 products 也走它，或在模块 docstring 解释不对称
+  - **(M-5)** `tests/test_workflows.py::test_config_report_defaults` pre-existing 失败（`.env` 含 `REPORT_LABEL_MODE=hybrid`，测试断言默认 `"rule"`）— env 泄漏，不是 T9 引入。修法：测试加 `monkeypatch.delenv`。与 report-upgrade 无关，独立修
+  - **(M-3)** `test_build_chartjs_configs_emits_secondary_chart_keys` 仅覆盖"尾部跳过"场景（idx=0 ready, idx=1 accumulating），未覆盖"中间跳过"（如 idx=0 ready, idx=1 accumulating, idx=2 ready 应得 `_secondary_0` + `_secondary_2`）。enumerate 索引保留契约未充分锁定
 - **Next**：T9 上线后跑 1 个 daily run 验证 trend_digest 扩展数据层产出无回归 → 写 Phase 2 T10 implementation plan
+  - T10 plan 必须显式回应 I-2 的设计决策
 
 ### 2026-04-25 第 3 session (Phase 2 T9 plan 写作)
 - **Who**：Claude (Opus 4.7 1M · executing-plans → writing-plans)
