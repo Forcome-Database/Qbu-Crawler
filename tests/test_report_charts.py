@@ -348,3 +348,128 @@ def test_quadrant_scatter_truncation_length():
     assert "Cabela" in html
     # Should NOT be truncated at 12 chars like the old behavior
     assert html  # renders without error
+
+
+def test_build_chartjs_configs_emits_secondary_chart_keys():
+    """Phase 2 T9: trend_digest.data[view][dim].secondary_charts 中
+    每个 status='ready' 的辅图都必须在 build_chartjs_configs 输出中
+    生成一个独立 key: trend_{view}_{dim}_secondary_{idx}。"""
+    from qbu_crawler.server.report_charts import build_chartjs_configs
+
+    analytics = {
+        "trend_digest": {
+            "data": {
+                "month": {
+                    "sentiment": {
+                        "status": "ready",
+                        "primary_chart": {
+                            "status": "ready",
+                            "chart_type": "line",
+                            "labels": ["2026-04-01", "2026-04-02"],
+                            "series": [{"name": "评论量", "data": [3, 5]}],
+                        },
+                        "secondary_charts": [
+                            {
+                                "status": "ready",
+                                "chart_type": "line",
+                                "title": "自有差评率趋势",
+                                "labels": ["2026-04-01", "2026-04-02"],
+                                "series": [{"name": "自有差评率(%)", "data": [10.0, 5.0]}],
+                            },
+                            {
+                                "status": "accumulating",  # 应被跳过
+                                "chart_type": "line",
+                                "title": "健康分趋势",
+                                "labels": [],
+                                "series": [],
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    configs = build_chartjs_configs(analytics)
+
+    # 主图仍存在
+    assert "trend_month_sentiment" in configs
+    # ready 辅图生成 _secondary_0
+    assert "trend_month_sentiment_secondary_0" in configs
+    # accumulating 辅图被跳过 → _secondary_1 不存在
+    assert "trend_month_sentiment_secondary_1" not in configs
+    # 主图 key 与辅图 key 内容互不污染
+    assert configs["trend_month_sentiment_secondary_0"]["type"] == "line"
+
+
+def test_build_chartjs_configs_skips_secondary_when_primary_not_ready():
+    """primary 不 ready 时连同辅图整体跳过（与 Phase 1 老逻辑一致：
+    模板 chart_ready 判断会先看 trend_block.status，再看 chart 自身 status）"""
+    from qbu_crawler.server.report_charts import build_chartjs_configs
+
+    analytics = {
+        "trend_digest": {
+            "data": {
+                "week": {
+                    "sentiment": {
+                        "status": "accumulating",
+                        "primary_chart": {"status": "accumulating", "chart_type": "line",
+                                           "labels": [], "series": []},
+                        "secondary_charts": [
+                            {
+                                "status": "ready",  # 即便 secondary 单独 ready，块整体 accumulating
+                                "chart_type": "line",
+                                "title": "自有差评率趋势",
+                                "labels": ["a", "b"],
+                                "series": [{"name": "x", "data": [1, 2]}],
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    configs = build_chartjs_configs(analytics)
+    # 块 accumulating → 主图与辅图都不出
+    assert "trend_week_sentiment" not in configs
+    assert "trend_week_sentiment_secondary_0" not in configs
+
+
+def test_build_chartjs_configs_supports_stacked_bar_secondary():
+    """Phase 2 T9: issues dim 的 secondary_chart 可能是 stacked_bar，
+    Chart.js config 仍要能生成（fallback 到 _chartjs_trend_line，输出 type=line）。
+    T10 模板侧再细分样式；这里锁住"不抛异常 + secondary key 必须存在 + 类型保持 line（fallback）"。"""
+    from qbu_crawler.server.report_charts import build_chartjs_configs
+
+    analytics = {
+        "trend_digest": {
+            "data": {
+                "month": {
+                    "issues": {
+                        "status": "ready",
+                        "primary_chart": {
+                            "status": "ready",
+                            "chart_type": "line",
+                            "labels": ["a", "b"],
+                            "series": [{"name": "x", "data": [1, 2]}],
+                        },
+                        "secondary_charts": [
+                            {
+                                "status": "ready",
+                                "chart_type": "stacked_bar",
+                                "title": "Top3 问题分时段堆叠",
+                                "labels": ["a", "b"],
+                                "series": [{"name": "issue_a", "data": [3, 2]}],
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    configs = build_chartjs_configs(analytics)
+    # 主图存在
+    assert "trend_month_issues" in configs
+    # stacked_bar secondary fallback 为 line 配置生成（不抛异常且 key 存在）
+    assert "trend_month_issues_secondary_0" in configs
+    # T9 阶段 fallback 为 line type；T10 模板侧落地时再细分 stacked_bar 渲染
+    assert configs["trend_month_issues_secondary_0"]["type"] == "line"

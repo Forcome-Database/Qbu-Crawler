@@ -601,16 +601,32 @@ def build_chartjs_configs(analytics):
     trend_digest = analytics.get("trend_digest") or {}
     for view, dimensions in (trend_digest.get("data") or {}).items():
         for dimension, payload in (dimensions or {}).items():
-            primary_chart = (payload or {}).get("primary_chart") or {}
+            payload = payload or {}
             if payload.get("status") != "ready":
                 continue
-            if primary_chart.get("status") != "ready":
-                continue
-            if primary_chart.get("chart_type") != "line":
-                continue
-            if not primary_chart.get("labels") or not primary_chart.get("series"):
-                continue
-            configs[f"trend_{view}_{dimension}"] = _chartjs_trend_line(primary_chart)
+            primary_chart = payload.get("primary_chart") or {}
+            if (
+                primary_chart.get("status") == "ready"
+                and primary_chart.get("chart_type") == "line"
+                and primary_chart.get("labels")
+                and primary_chart.get("series")
+            ):
+                configs[f"trend_{view}_{dimension}"] = _chartjs_trend_line(primary_chart)
+
+            # Phase 2 T9: secondary_charts (索引顺序保留)
+            for idx, sec_chart in enumerate(payload.get("secondary_charts") or []):
+                if not sec_chart:
+                    continue
+                if sec_chart.get("status") != "ready":
+                    continue
+                chart_type = sec_chart.get("chart_type")
+                # 当前 Chart.js builder 仅稳妥处理 line；stacked_bar/bar 也走 line 模板（多 series），
+                # 视觉上仍然可读。后续 T10 模板侧再细分样式。
+                if chart_type not in {"line", "bar", "stacked_bar"}:
+                    continue
+                if not sec_chart.get("labels") or not sec_chart.get("series"):
+                    continue
+                configs[f"trend_{view}_{dimension}_secondary_{idx}"] = _chartjs_trend_line(sec_chart)
 
     return configs
 
