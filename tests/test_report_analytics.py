@@ -1406,3 +1406,71 @@ def test_trend_digest_blocks_always_have_four_kpi_items():
             assert all(label and label != "—" for label in labels), \
                 f"{view}/{dim} accumulating 状态每个 KPI 都必须给 dimension-specific 标签，" \
                 f"不能含 \"—\"，当前: {labels}"
+
+
+def test_sentiment_trend_emits_two_secondary_charts_when_ready():
+    """Phase 2 T9: sentiment dim 在 ready 时必须输出 2 张辅图：
+    1) 自有差评率趋势 (line)
+    2) 健康分趋势 (line)
+    每张图都带独立 status，labels 与主图同 buckets，series 至少 1 条。"""
+    from qbu_crawler.server.report_analytics import _build_sentiment_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    labeled_reviews = [
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-10"}},
+        {"review": {"ownership": "own", "rating": 1, "date_published_parsed": "2026-04-11"}},
+        {"review": {"ownership": "own", "rating": 2, "date_published_parsed": "2026-04-12"}},
+    ]
+    result = _build_sentiment_trend("month", logical_day, labeled_reviews)
+
+    assert result["status"] == "ready"
+    secondary = result["secondary_charts"]
+    assert isinstance(secondary, list) and len(secondary) >= 2, \
+        f"expected >=2 secondary charts, got {len(secondary)}"
+
+    titles = {chart["title"] for chart in secondary}
+    assert "自有差评率趋势" in titles, f"missing exact title; got {titles}"
+    assert "健康分趋势" in titles, f"missing exact title; got {titles}"
+
+    for chart in secondary:
+        assert set(chart.keys()) >= {"status", "chart_type", "title", "labels", "series"}
+        assert chart["status"] in {"ready", "accumulating", "degraded"}
+        if chart["status"] == "ready":
+            assert chart["labels"], "ready chart must have non-empty labels"
+            assert chart["series"], "ready chart must have non-empty series"
+
+
+def test_sentiment_trend_emits_comparison_with_start_vs_end():
+    """Phase 2 T9: sentiment dim ready 时 comparison.start_vs_end 必须有
+    start / end / change_pct 三个非 null 值（差评率，单位 %）；
+    period_over_period / year_over_year 在数据不足时填 null 但 key 必须存在。"""
+    from qbu_crawler.server.report_analytics import _build_sentiment_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    # 构造首尾两个 bucket 都有数据的场景
+    labeled_reviews = [
+        {"review": {"ownership": "own", "rating": 1, "date_published_parsed": "2026-03-26"}},  # 月初
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-03-27"}},
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-22"}},  # 月末
+        {"review": {"ownership": "own", "rating": 5, "date_published_parsed": "2026-04-23"}},
+    ]
+    result = _build_sentiment_trend("month", logical_day, labeled_reviews)
+    comp = result["comparison"]
+
+    # shape 永远齐全
+    assert set(comp.keys()) == {"period_over_period", "year_over_year", "start_vs_end"}
+
+    # start_vs_end 在有首尾数据时必须可计算
+    sve = comp["start_vs_end"]
+    assert sve["start"] is not None, "start_vs_end.start should be computable"
+    assert sve["end"] is not None, "start_vs_end.end should be computable"
+    # 月初 1/2 = 50% 差评率，月末 0/2 = 0% → end < start
+    assert sve["end"] < sve["start"], f"end={sve['end']} should be < start={sve['start']}"
+
+    # change_pct 语义锁：相对百分比变化 (end-start)/start*100；50% → 0% 为 -100.0
+    assert sve["change_pct"] is not None
+    assert sve["change_pct"] < 0, "差评率下降 → change_pct 应为负"
+    assert sve["change_pct"] == -100.0, \
+        f"差评率从 50% (1/2) 降到 0% (0/2)，相对变化应为 -100.0，得到 {sve['change_pct']}"

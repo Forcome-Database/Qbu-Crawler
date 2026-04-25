@@ -1571,12 +1571,74 @@ def _build_sentiment_trend(view, logical_day, labeled_reviews):
                 {"name": "健康分", "data": health_scores},
             ],
         },
+        secondary_charts=_build_sentiment_secondary_charts(
+            labels, own_negative_rates, health_scores,
+        ),
+        comparison=_build_sentiment_comparison(labels, own_negative_rates),
         table={
             "status": "ready",
             "columns": ["日期", "评论量", "自有差评", "自有差评率", "健康分"],
             "rows": rows,
         },
     )
+
+
+def _build_sentiment_secondary_charts(labels, own_negative_rates, health_scores):
+    """Phase 2 T9: sentiment dim 辅图 — 差评率与健康分独立走势。
+    各自带 status：当 series 全部为 None（或为空）时降级到 accumulating；
+    全 0 视为有效信号，不降级。"""
+    own_neg_status = "ready" if any(v is not None for v in own_negative_rates) else "accumulating"
+    health_status = "ready" if any(v is not None for v in health_scores) else "accumulating"
+
+    return [
+        {
+            "status": own_neg_status,
+            "chart_type": "line",
+            "title": "自有差评率趋势",
+            "labels": labels if own_neg_status == "ready" else [],
+            "series": [
+                {"name": "自有差评率(%)", "data": own_negative_rates},
+            ] if own_neg_status == "ready" else [],
+        },
+        {
+            "status": health_status,
+            "chart_type": "line",
+            "title": "健康分趋势",
+            "labels": labels if health_status == "ready" else [],
+            "series": [
+                {"name": "健康分", "data": health_scores},
+            ] if health_status == "ready" else [],
+        },
+    ]
+
+
+def _build_sentiment_comparison(labels, own_negative_rates):
+    """Phase 2 T9: sentiment dim comparison — 度量统一为「自有差评率」。
+    start_vs_end: 第一个非 null bucket vs 最后一个非 null bucket
+    period_over_period / year_over_year: 当前实现填 null（待 Phase 2 后续历史扩展）
+
+    change_pct 语义：相对百分比变化 (end - start) / start * 100，
+    例如 start=50%、end=0% 时 change_pct = -100.0 表示「下降 100%」（相对于初值）。
+    Phase 2 全维度 change_pct 统一用此口径，避免各维度不一致；
+    未来若需要"百分点变化"语义，再加 change_pp 字段。"""
+    _ = labels  # reserved for future PoP/YoY bucket alignment
+    non_null = [v for v in own_negative_rates if v is not None]
+    start_value = non_null[0] if non_null else None
+    end_value = non_null[-1] if non_null else None
+    change_pct = None
+    if (
+        start_value is not None
+        and end_value is not None
+        and start_value != 0
+    ):
+        change_pct = round((end_value - start_value) / start_value * 100, 1)
+
+    comparison = _empty_comparison()
+    comparison["start_vs_end"]["label"] = "首尾差评率对比"
+    comparison["start_vs_end"]["start"] = start_value
+    comparison["start_vs_end"]["end"] = end_value
+    comparison["start_vs_end"]["change_pct"] = change_pct
+    return comparison
 
 
 def _build_issue_trend(view, logical_day, labeled_reviews):
