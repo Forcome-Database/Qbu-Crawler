@@ -11,13 +11,13 @@
 ## 🧭 当前 Stage 指针
 
 ```
-status:         Stage-B-COMPLETE · Phase2-T9-PLAN-NOT-WRITTEN
-last_updated:   2026-04-25 13:21
+status:         Phase2-T9-PLAN-WRITTEN · awaiting-contract-freeze-day-5
+last_updated:   2026-04-25
 last_commit:    d7a538e chore: bump version 0.3.18 -> 0.3.19 (Stage B 完成 · 修 7-10)
 last_tag:       v0.3.19-stage-b
-next_action:    Phase 2 T9 implementation plan via superpowers:writing-plans (trend_digest.data.[view].[dim].secondary_charts 数据层扩展)
-next_stage:     Phase 2 T9 · trend_digest 数据层扩展（契约冻结期 Day 5+ 触发，视前 3 天 daily run 观测情况）
-blocked_by:     契约冻结期观测中（Day 1 起算 → Day 5 解锁 T9）
+next_action:    契约冻结期 Day 5（2026-04-30，视前 3 天 daily run 观测）通过后，调用 superpowers:subagent-driven-development 按 docs/superpowers/plans/2026-04-25-phase2-t9-trend-digest-extension.md Task 1 起步执行
+next_stage:     Phase 2 T9 · trend_digest 数据层扩展（plan 已就绪 · 9 task · TDD bite-sized · 每 task 独立 commit）
+blocked_by:     契约冻结期观测中（Day 1 = 2026-04-25 → Day 5 = 2026-04-30 解锁 T9 执行；plan 写作不被阻塞已完成）
 ```
 
 ---
@@ -108,6 +108,18 @@ blocked_by:     契约冻结期观测中（Day 1 起算 → Day 5 解锁 T9）
 ---
 
 ## 📝 进度日志（追加型，最新 3 条 → 最上方）
+
+### 2026-04-25 第 3 session (Phase 2 T9 plan 写作)
+- **Who**：Claude (Opus 4.7 1M · executing-plans → writing-plans)
+- **Done**：
+  - 读 Continuity / execution-plan / phase2-audit §6（T9 scope）/ Phase 1 原始 plan Chunk 3 Task 9 / best-practice §7（Phase 2 前置）/ report_analytics.py 现状（_build_*_trend 4 函数 + _empty_trend_dimension + _trend_dimension_payload）/ report_charts.py build_chartjs_configs / report_templates/daily_report_v3.html.j2 trend 消费段
+  - 写出 `docs/superpowers/plans/2026-04-25-phase2-t9-trend-digest-extension.md`（约 1100 行，9 Task，每 Task TDD bite-sized 步骤完整、代码可直接 paste、grep 门禁 4 条 + 时间口径回归覆盖）
+  - 架构决策：secondary_charts shape 与 primary_chart 同构带独立 status；comparison shape 永远 3 段（PoP/YoY/start_vs_end），值缺失填 null（V2 spec 部分覆盖，PoP/YoY 留待后续 task 扩窗口）；KPI 占位永远 4 项；模板/Excel/邮件/LLM prompt 0 改动（T10/T11 territory）
+  - Continuity 指针推进到 `Phase2-T9-PLAN-WRITTEN`
+- **Carry-over（plan 内已记录）**：
+  - PoP / YoY 实计算待 Phase 2 后续 task 扩 labeled_reviews 查询窗口
+  - secondary chart stacked_bar/bar 渲染细分留 T10
+- **Next**：契约冻结期 Day 5（2026-04-30）通过 → subagent-driven-development 起步执行 T9 Task 1
 
 ### 2026-04-25 第 2 session (Stage B 执行)
 - **Who**：Claude (Opus 4.7 1M · subagent-driven-development)
