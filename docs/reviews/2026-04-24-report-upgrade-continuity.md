@@ -11,13 +11,13 @@
 ## 🧭 当前 Stage 指针
 
 ```
-status:         Phase2-T9-PLAN-WRITTEN · awaiting-contract-freeze-day-5
+status:         Phase2-T9-COMPLETE · Phase2-T10-NOT-STARTED
 last_updated:   2026-04-25
-last_commit:    d7a538e chore: bump version 0.3.18 -> 0.3.19 (Stage B 完成 · 修 7-10)
-last_tag:       v0.3.19-stage-b
-next_action:    契约冻结期 Day 5（2026-04-30，视前 3 天 daily run 观测）通过后，调用 superpowers:subagent-driven-development 按 docs/superpowers/plans/2026-04-25-phase2-t9-trend-digest-extension.md Task 1 起步执行
-next_stage:     Phase 2 T9 · trend_digest 数据层扩展（plan 已就绪 · 9 task · TDD bite-sized · 每 task 独立 commit）
-blocked_by:     契约冻结期观测中（Day 1 = 2026-04-25 → Day 5 = 2026-04-30 解锁 T9 执行；plan 写作不被阻塞已完成）
+last_commit:    3b97896 chore: bump version 0.3.19 -> 0.3.21 (Phase 2 T9 完成 · trend_digest 数据层扩展)
+last_tag:       v0.3.21-phase2-t9
+next_action:    Phase 2 T10 implementation plan via superpowers:writing-plans (HTML 模板辅图槽位 + Excel 趋势数据 sheet 分块)
+next_stage:     Phase 2 T10 · HTML + Excel 阅读体验
+blocked_by:     T9 上线后跑 1 个 daily run 验证 trend_digest 扩展数据层产出无回归
 ```
 
 ---
@@ -108,6 +108,29 @@ blocked_by:     契约冻结期观测中（Day 1 = 2026-04-25 → Day 5 = 2026-0
 ---
 
 ## 📝 进度日志（追加型，最新 3 条 → 最上方）
+
+### 2026-04-25 第 4 session (Phase 2 T9 执行)
+- **Who**：Claude (Opus 4.7 1M · subagent-driven-development)
+- **Done**：
+  - Task 1 (T9-S1): 4931189→63211fb · trend_dimension_payload / _empty_trend_dimension 加 secondary_charts + comparison 占位 + 内层 shape 测试加固
+  - Task 2 (T9-S2): 439bf81→37ec728 · accumulating 状态 KPI 永远 4 占位（修 audit §4.1）+ sentiment label drift fix（ready/accumulating 4 标签对齐）
+  - Task 3 (T9-S3): 792301f→522d514 · sentiment dim secondary_charts (差评率 + 健康分) + comparison.start_vs_end + 全维度统一 change_pct 相对百分比语义
+  - Task 4 (T9-S4): 1dec3b7→820cc91 · issues dim secondary_charts (Top3 堆叠 + 影响 SKU 数) + comparison + S2 修 _ = labels 误导
+  - Task 5 (T9-S5): 27a9d1c · products dim secondary_charts (评论总数 + 价格) + comparison + 防御性 sorted 排序
+  - Task 6 (T9-S6): 3c4b156→e7c1017 · competition dim secondary_charts (评分差 + 差/好评率) + comparison（abs(start) 分母防负 gap 翻转）+ Q1 负 gap 回归测试 + Q2 sentiment/competition `< 2` threshold
+  - Task 7 (T9-S7): 4683851→fa3f099 · build_chartjs_configs 输出 trend_{view}_{dim}_secondary_{idx} 配置 + payload normalize
+  - Task 8 (T9-S8): 0ec151d→9bbf29d · 4 grep 门禁 + 时间口径 trap-field（双向）+ Phase 1 键不变断言（覆盖 ready 路径）+ _git_grep 自测试 + subprocess timeout
+  - Task 9 (T9-S9): <本 commit> · 版本号 bump 0.3.19 → 0.3.21 + Continuity 推进 + tag v0.3.21-phase2-t9
+  - 全量 report 套件全绿（410+ tests passed）；模板 0 改动（T10 territory）；Phase 1 顶层 / 子层契约 0 改动
+  - 每 task 经过 spec compliance review + code quality review 双阶段独立审查
+- **Carry-over（follow-up，不阻塞 T10）**：
+  - period_over_period / year_over_year 当前固定 null shape，待历史数据扩展（Phase 2 后续 task 或 Phase 3）
+  - secondary chart stacked_bar/bar 在 Chart.js 渲染端目前共享 line builder，T10 模板侧需细分
+  - test_phase2_t9_* 测试名应改为 test_phase2_contract_*（永久契约门禁，不应带 step 编号）
+  - sentiment _ = labels 标记可移除（labels 在 sentiment comparison 中实际未用）— 但保留对未来 PoP/YoY 是预留
+  - issues 标签集合 `["问题信号数", "活跃问题数", "头号问题", "涉及产品数"]` 在 ready/accumulating 共出现 3 次，可抽 `_ISSUE_KPI_LABELS` 模块常量；同理 sentiment / competition
+  - readiness 模型（每 dim 不同 readiness 信号）值得在模块级 docstring 总结
+- **Next**：T9 上线后跑 1 个 daily run 验证 trend_digest 扩展数据层产出无回归 → 写 Phase 2 T10 implementation plan
 
 ### 2026-04-25 第 3 session (Phase 2 T9 plan 写作)
 - **Who**：Claude (Opus 4.7 1M · executing-plans → writing-plans)
