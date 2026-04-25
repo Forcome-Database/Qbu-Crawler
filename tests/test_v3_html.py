@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -469,3 +470,56 @@ def test_email_fallback_incremental_cites_fresh_and_backfill(monkeypatch):
     html = report_snapshot._render_full_email_html(snapshot, analytics)
     assert "近30天业务新增" in html or "近 30 天业务新增" in html
     assert "历史补采" in html
+
+
+def test_year_trend_panel_shows_view_note_banner(tmp_path):
+    """修 9: 年视图必须渲染数据驱动的语义 banner（来自 trend_digest.view_notes.year）。
+    模板必须按 active view 控制显隐：默认 month 不显示，year 切换后显示。"""
+    from qbu_crawler.server.report_html import render_v3_html
+
+    snapshot = {
+        "logical_date": "2026-04-25",
+        "run_id": 99,
+        "products": [], "reviews": [], "snapshot_at": "2026-04-25T12:00:00+08:00",
+    }
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 0, "own_review_rows": 0, "own_negative_review_rows": 0,
+            "own_product_count": 0, "competitor_product_count": 0, "competitor_review_rows": 0,
+            "health_index": 50, "negative_review_rows": 0, "low_rating_review_rows": 0,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [],
+                 "top_positive_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                       "negative_opportunities": [], "gap_analysis": []},
+        "appendix": {"image_reviews": [], "coverage": {}},
+        "trend_digest": {
+            "views": ["week", "month", "year"],
+            "dimensions": ["sentiment"],
+            "default_view": "month",
+            "default_dimension": "sentiment",
+            "view_notes": {
+                "year": "年度视角基于评论发布时间聚合。历史数据源于站点用户的历史发布时间跨度，不代表本监控系统的实际运行年限。",
+                "week": None, "month": None,
+            },
+            "data": {
+                "week": {"sentiment": {"status": "accumulating", "status_message": "积累中",
+                                       "kpis": {"status": "accumulating"}, "table": {"status": "accumulating"},
+                                       "primary_chart": {"status": "accumulating"}}},
+                "month": {"sentiment": {"status": "accumulating", "status_message": "积累中",
+                                        "kpis": {"status": "accumulating"}, "table": {"status": "accumulating"},
+                                        "primary_chart": {"status": "accumulating"}}},
+                "year": {"sentiment": {"status": "accumulating", "status_message": "积累中",
+                                       "kpis": {"status": "accumulating"}, "table": {"status": "accumulating"},
+                                       "primary_chart": {"status": "accumulating"}}},
+            },
+        },
+        "report_semantics": "incremental",
+    }
+    out_path = render_v3_html(snapshot, analytics, output_path=str(tmp_path / "report.html"))
+    html_text = Path(out_path).read_text(encoding="utf-8")
+
+    # banner 内容必须存在于 HTML（不要求默认可见，但 DOM 中必有）
+    assert "年度视角基于评论发布时间聚合" in html_text
+    # banner 必须用 data-trend-view="year" 标记，让前端按 active view 显隐
+    assert 'data-trend-view-note="year"' in html_text

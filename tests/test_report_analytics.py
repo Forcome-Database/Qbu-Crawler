@@ -1319,3 +1319,25 @@ def test_competition_trend_mixed_state_keeps_ready_table_when_chart_accumulating
     assert len(result["table"]["rows"]) >= 1
     # primary_chart 可以 accumulating（缺竞品不能对比）
     assert result["primary_chart"]["status"] in {"accumulating", "ready"}
+
+
+def test_build_trend_digest_emits_year_view_note():
+    """修 9: trend_digest 必须在 year 视角下提供语义 banner，
+    告诉用户 year 维度基于评论发布时间聚合，不代表监控运行年限。"""
+    from qbu_crawler.server.report_analytics import _build_trend_digest
+
+    snapshot = {
+        "logical_date": "2026-04-25",
+        "products": [],
+        "reviews": [],
+    }
+    digest = _build_trend_digest(snapshot, labeled_reviews=[], trend_series={})
+
+    assert "view_notes" in digest, "trend_digest 必须暴露 view_notes 用于年视图 banner"
+    assert "year" in digest["view_notes"]
+    note = digest["view_notes"]["year"]
+    assert "评论发布时间" in note or "发布时间" in note
+    assert "监控" in note  # 必须强调"非监控运行年限"
+    # week / month 可以为 None 或 ""（不需要 banner）
+    assert digest["view_notes"].get("week") in (None, "")
+    assert digest["view_notes"].get("month") in (None, "")

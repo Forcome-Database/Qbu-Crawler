@@ -108,6 +108,10 @@
         var matchesDimension = panel.getAttribute('data-trend-dimension') === currentDimension;
         panel.classList.toggle('trend-panel-active', matchesView && matchesDimension);
       });
+      // 修 9: toggle data-driven view-note banners by active view
+      document.querySelectorAll('[data-trend-view-note]').forEach(function (el) {
+        el.hidden = el.getAttribute('data-trend-view-note') !== currentView;
+      });
     }
 
     viewBtns.forEach(function (btn) {

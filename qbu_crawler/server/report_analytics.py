@@ -1864,6 +1864,16 @@ def _build_trend_digest(snapshot, labeled_reviews, trend_series):
         "default_view": "month",
         "default_dimension": "sentiment",
         "data": data,
+        # 修 9: 年视图基于 date_published_parsed（评论发布时间），跨越历史数年；
+        # 用户容易误以为是"监控系统已运行 N 年"，所以给出语义提示。
+        "view_notes": {
+            "week": None,
+            "month": None,
+            "year": (
+                "年度视角基于评论发布时间聚合。历史数据源于站点用户的历史发布时间跨度，"
+                "不代表本监控系统的实际运行年限。"
+            ),
+        },
     }
 
 

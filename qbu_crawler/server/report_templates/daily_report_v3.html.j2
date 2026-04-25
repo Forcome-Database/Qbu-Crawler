@@ -276,6 +276,16 @@
         </div>
       </div>
 
+      {% set trend_view_notes = trend_digest.view_notes or {} %}
+      {% for view, note in trend_view_notes.items() %}
+        {% if note %}
+        <div class="trend-view-note" data-trend-view-note="{{ view }}"{% if view != default_view %} hidden{% endif %}>
+          <span class="trend-view-note-icon">ⓘ</span>
+          <span class="trend-view-note-text">{{ note }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+
       {% for view in trend_views %}
         {% for dimension in trend_dimensions %}
           {% set trend_block = trend_digest.data[view][dimension] if trend_digest.data and view in trend_digest.data and dimension in trend_digest.data[view] else {} %}

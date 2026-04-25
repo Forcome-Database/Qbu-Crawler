@@ -1517,3 +1517,20 @@ details summary:hover { color: var(--accent); }
 
   @page { size: A4; margin: 1.5cm; }
 }
+
+/* ==========================================================================
+   修 9 — TREND VIEW SEMANTIC BANNER (data-driven via trend_digest.view_notes)
+   ========================================================================== */
+
+.trend-view-note {
+  margin: 8px 0 16px;
+  padding: 10px 14px;
+  background: #f4ebd9;
+  border-left: 3px solid #c8a96b;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #4a3f30;
+  line-height: 1.5;
+}
+.trend-view-note[hidden] { display: none; }
+.trend-view-note-icon { margin-right: 6px; font-weight: 600; color: #c8a96b; }
