@@ -472,7 +472,6 @@ def _build_insights_prompt(analytics, snapshot=None):
     comp_count = kpis.get("competitor_product_count", 0)
     total = kpis.get("ingested_review_rows", 0)
     neg = kpis.get("negative_review_rows", 0)
-    rate = kpis.get("own_negative_review_rate", 0)
     health = kpis.get("health_index", "N/A")
     # Own-specific KPIs (aligned with KPI cards)
     own_reviews = kpis.get("own_review_rows", 0)
