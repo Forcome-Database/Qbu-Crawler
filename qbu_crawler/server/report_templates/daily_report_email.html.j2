@@ -94,9 +94,9 @@
           <!-- Card: 自有差评率 -->
           <td width="32%" style="padding:12px;background:#ffffff;border:1px solid #e8dfd4;border-radius:8px;text-align:center;vertical-align:top;">
             <div style="font-size:10px;color:#766d62;margin-bottom:6px;">自有差评率 <span title="{{ analytics.tooltips['差评率'] }}" style="display:inline-block;width:12px;height:12px;line-height:12px;border-radius:50%;background:#f1e6d7;color:#93543f;font-size:8px;font-weight:700;text-align:center;cursor:help;vertical-align:middle;">ⓘ</span></div>
-            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_negative_review_rate_display | default(analytics.kpis.negative_review_rate_display | default('—')) }}</div>
-            {% if analytics.kpis.negative_review_rate_delta_display is defined and analytics.kpis.negative_review_rate_delta_display %}
-            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.negative_review_rate_delta_display }}</div>
+            <div style="font-size:26px;font-weight:800;color:#201b16;line-height:1;">{{ analytics.kpis.own_negative_review_rate_display | default('—') }}</div>
+            {% if analytics.kpis.own_negative_review_rate_delta_display is defined and analytics.kpis.own_negative_review_rate_delta_display %}
+            <div style="font-size:11px;color:#766d62;margin-top:4px;">{{ analytics.kpis.own_negative_review_rate_delta_display }}</div>
             {% endif %}
           </td>
         </tr>

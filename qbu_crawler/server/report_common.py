@@ -768,11 +768,13 @@ def normalize_deep_report_analytics(analytics):
         negative_review_rows = normalized["kpis"].get("low_rating_review_rows") or 0
     translated_count = normalized["kpis"].get("translated_count") or 0
     normalized["kpis"]["negative_review_rows"] = negative_review_rows
-    normalized["kpis"]["negative_review_rate"] = (
+    # 修 8: 把混合口径（含竞品）从 negative_review_rate 重命名为 all_sample_negative_rate，
+    # 让模板 / LLM prompt 不再误消费。展示用一律走 own_negative_review_rate*。
+    normalized["kpis"]["all_sample_negative_rate"] = (
         negative_review_rows / ingested_review_rows if ingested_review_rows else 0
     )
-    normalized["kpis"]["negative_review_rate_display"] = (
-        f"{normalized['kpis']['negative_review_rate'] * 100:.1f}%"
+    normalized["kpis"]["all_sample_negative_rate_display"] = (
+        f"{normalized['kpis']['all_sample_negative_rate'] * 100:.1f}%"
     )
     normalized["kpis"]["translation_completion_rate"] = (
         translated_count / ingested_review_rows if ingested_review_rows else 0

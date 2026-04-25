@@ -198,8 +198,9 @@ class TestAnalyticsPipeline:
     def test_normalize_analytics_negative_rate_display(self, populated_db, sample_snapshot):
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
-        assert "negative_review_rate_display" in normalized["kpis"]
-        assert "%" in normalized["kpis"]["negative_review_rate_display"]
+        # 修 8: 顶层混合口径已重命名为 all_sample_negative_rate_display
+        assert "all_sample_negative_rate_display" in normalized["kpis"]
+        assert "%" in normalized["kpis"]["all_sample_negative_rate_display"]
 
     def test_normalize_analytics_hero_headline_nonempty(self, populated_db, sample_snapshot):
         analytics = report_analytics.build_report_analytics(sample_snapshot)

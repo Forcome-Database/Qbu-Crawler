@@ -3,7 +3,7 @@
 健康指数: {{ analytics.kpis.health_index | default('N/A') }}/100
 差评数: {{ analytics.kpis.negative_review_rows }}{% if analytics.kpis.negative_review_rows_delta_display is defined and analytics.kpis.negative_review_rows_delta_display %} ({{ analytics.kpis.negative_review_rows_delta_display }}){% endif %}
 
-差评率: {{ analytics.kpis.negative_review_rate_display }}
+差评率: {{ analytics.kpis.own_negative_review_rate_display }}
 
 需要关注:
 {% for item in analytics.report_copy.executive_bullets[:3] %}

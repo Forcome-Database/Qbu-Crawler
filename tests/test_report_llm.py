@@ -1053,3 +1053,33 @@ def test_generate_report_insights_falls_back_on_relation_hallucination(monkeypat
 
     assert result["hero_headline"] == fallback["hero_headline"]
     assert result["executive_bullets"] == fallback["executive_bullets"]
+
+
+def test_build_insights_prompt_uses_own_rate_not_mixed_rate():
+    """修 8: LLM prompt 必须叙述 own 自有差评率，不能引用 ambiguous 的混合 rate。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "kpis": {
+            "own_product_count": 5, "competitor_product_count": 3,
+            "ingested_review_rows": 100, "own_review_rows": 80,
+            "own_negative_review_rows": 3,
+            "own_negative_review_rate": 0.0375,        # 3.8%
+            "all_sample_negative_rate": 0.12,           # 12%（含竞品）
+            "negative_review_rows": 12,
+            "competitor_review_rows": 20, "health_index": 90,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+        "report_semantics": "incremental",
+        "perspective": "dual",
+        "change_digest": {"summary": {
+            "ingested_review_count": 100, "fresh_review_count": 50,
+            "historical_backfill_count": 50, "fresh_own_negative_count": 0,
+        }},
+    }
+    prompt = _build_insights_prompt(analytics)
+    # prompt 引用的应当是 own 口径（3.8%），不是混合口径（12%）
+    assert "3.8%" in prompt or "3.7%" in prompt, "应叙述 own_negative_review_rate"
+    # 不应直接出现 12% 的"自有差评率"误引用
+    assert "自有差评率 12" not in prompt

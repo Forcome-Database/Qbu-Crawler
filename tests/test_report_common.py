@@ -82,7 +82,8 @@ def test_normalize_preserves_trend_digest_contract():
 def test_normalize_computes_rates():
     analytics = {"kpis": {"ingested_review_rows": 100, "negative_review_rows": 10, "translated_count": 90}}
     result = normalize_deep_report_analytics(analytics)
-    assert result["kpis"]["negative_review_rate_display"] == "10.0%"
+    # 修 8: 顶层混合口径已重命名为 all_sample_negative_rate_display
+    assert result["kpis"]["all_sample_negative_rate_display"] == "10.0%"
     assert result["kpis"]["translation_completion_rate_display"] == "90.0%"
 
 
@@ -1681,3 +1682,45 @@ def test_fallback_hero_headline_bootstrap_falls_back_to_baseline_when_no_risk():
     headline = _fallback_hero_headline(normalized)
     assert "基线" in headline or "监控起点" in headline
     assert "今日新增" not in headline
+
+
+def test_normalize_kpis_renames_ambiguous_negative_review_rate():
+    """修 8: 顶层 kpis 不能同时暴露混合 rate（含竞品）和 own rate，
+    重命名为 all_sample_negative_rate 让模板/LLM 不会误消费。"""
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+
+    raw = {
+        "kpis": {
+            "ingested_review_rows": 100,
+            "negative_review_rows": 12,        # mixed (含竞品)
+            "own_review_rows": 80,
+            "own_negative_review_rows": 3,     # own only
+            "own_negative_review_rate": 0.0375,
+            "translated_count": 50,
+            "own_product_count": 5,
+            "competitor_product_count": 3,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [],
+                 "top_positive_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                       "negative_opportunities": [], "gap_analysis": []},
+        "appendix": {"image_reviews": [], "coverage": {}},
+        "report_semantics": "incremental",
+    }
+    out = normalize_deep_report_analytics(raw)
+    kpis = out["kpis"]
+
+    # ambiguous 旧键必须不再出现
+    assert "negative_review_rate" not in kpis, (
+        "顶层 kpis 的 ambiguous 'negative_review_rate' 必须重命名为 all_sample_negative_rate"
+    )
+    assert "negative_review_rate_display" not in kpis
+
+    # 新键替代
+    assert "all_sample_negative_rate" in kpis
+    assert kpis["all_sample_negative_rate"] == 0.12  # 12/100
+    assert kpis["all_sample_negative_rate_display"] == "12.0%"
+
+    # own rate 不变
+    assert kpis["own_negative_review_rate"] == 0.0375
+    assert kpis["own_negative_review_rate_display"] == "3.8%"
