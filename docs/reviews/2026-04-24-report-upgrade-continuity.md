@@ -11,13 +11,13 @@
 ## 🧭 当前 Stage 指针
 
 ```
-status:         Stage-A-COMPLETE · Stage-B-PLAN-NOT-WRITTEN
-last_updated:   2026-04-25 18:xx
-last_commit:    0696624 chore: bump version 0.3.17 -> 0.3.18（Stage A 完成）
-last_tag:       v0.3.18-stage-a
-next_action:    写 Stage B implementation plan via superpowers:writing-plans
-next_stage:     Stage B · 4 修 · 契约冻结期同步启动
-blocked_by:     无（契约冻结期生效）
+status:         Stage-B-COMPLETE · Phase2-T9-PLAN-NOT-WRITTEN
+last_updated:   2026-04-25 13:21
+last_commit:    072aafd chore: bump version 0.3.18 -> 0.3.19 (Stage B 完成 · 修 7-10)
+last_tag:       v0.3.19-stage-b
+next_action:    Phase 2 T9 implementation plan via superpowers:writing-plans (trend_digest.data.[view].[dim].secondary_charts 数据层扩展)
+next_stage:     Phase 2 T9 · trend_digest 数据层扩展（契约冻结期 Day 5+ 触发，视前 3 天 daily run 观测情况）
+blocked_by:     契约冻结期观测中（Day 1 起算 → Day 5 解锁 T9）
 ```
 
 ---
@@ -109,6 +109,23 @@ blocked_by:     无（契约冻结期生效）
 
 ## 📝 进度日志（追加型，最新 3 条 → 最上方）
 
+### 2026-04-25 第 2 session (Stage B 执行)
+- **Who**：Claude (Opus 4.7 1M · subagent-driven-development)
+- **Done**：
+  - Task 1 (T-B-1): 682574a + 8ee476d · artifact 路径相对化（report_snapshot 三 mode + workflows 单源单 wrap）
+  - Task 2 (T-B-2): d493027 + a0de39e · kpis 字段消歧（negative_review_rate → all_sample_negative_rate；模板/LLM 改读 own_*；dead variable + delta block 清理）
+  - Task 3 (T-B-3): b9ddeea · trend year 视图语义 banner（trend_digest.view_notes 数据驱动）
+  - Task 4 (T-B-4): 88b0bd3 + e54a1df · LLM low-sample 改读 change_digest.summary.fresh_review_count（bootstrap 跳过；fresh=0 平滑措辞；legacy-analytics 测试覆盖）
+  - Task 5 (T-B-5): 072aafd · 版本号 bump 0.3.18 → 0.3.19 + Continuity 推进 + tag v0.3.19-stage-b
+  - 5 + 2 条 grep 门禁全绿（Stage A 5 条 + Stage B 新增 2 条）
+  - report 相关 13 个测试文件全绿
+  - subagent-driven → spec compliance review → code quality review → 二阶段 review 全流程
+- **Carry-over（follow-up，不阻塞 Phase 2 T9）**：
+  - artifact 路径迁移在生产数据库的影子库回归（Continuity §5 遗留事项）
+  - LOW_SAMPLE_FRESH_THRESHOLD 常量提取（与 BACKFILL_DOMINANT_RATIO 风格统一）
+  - daily_report_v3.css 设计 token 化 banner 颜色（M-1 of T-B-3 review）
+- **Next**：契约冻结期 Day 5（连续 3 个 daily run 观测 OK 后）开 Phase 2 T9 implementation plan
+
 ### 2026-04-25 第 1 session (Stage A 执行)
 - **Who**：Claude（Opus 4.7 1M · subagent-driven-development）
 - **Done**：
@@ -152,7 +169,7 @@ blocked_by:     无（契约冻结期生效）
   - best-practice §3 给了 A/B 两个方案（A = 趋势页重算为贝叶斯、B = 改名"反差评率"）
   - 用户已选 A，但趋势桶位（可能 1-2 条评论）的贝叶斯小样本收缩在实操层面可能遇到边界问题（0 条评论如何显示？先验 50？null？）
   - 写 plan 时需在 Task 1 的 Step 1 解决
-- **artifact 路径迁移回归的预发数据库**：Stage B 修 7 需要预发一条失效 `analytics_path`，当前生产数据库是真实数据，回归前需要准备影子数据库或挑一个废弃 run_id
+- ✅ **artifact 路径迁移回归的预发数据库**（已在 T-B-1 测试覆盖：`tests/test_v3_modes.py::TestLoadPreviousContext::test_handles_missing_file` 已断言失效路径回退；生产影子库回归留作 carry-over）
 - **`competitive_gap_index` 口径问题**（best-practice P2-K）：顶层 `kpis.competitive_gap_index = 5` 与 `gap_analysis[0].gap_rate = 13` 并存，Phase 2 前需定义单一来源。**不是 Stage A 范畴**，但 Phase 2 T9 开工前必须明确
 
 ---
