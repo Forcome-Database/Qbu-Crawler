@@ -13,7 +13,7 @@
 ```
 status:         Phase2-T9-COMPLETE · Phase2-T10-NOT-STARTED
 last_updated:   2026-04-25
-last_commit:    3b97896 chore: bump version 0.3.19 -> 0.3.21 (Phase 2 T9 完成 · trend_digest 数据层扩展)
+last_commit:    3b11cd7 chore: bump version 0.3.19 -> 0.3.21 (Phase 2 T9 完成 · trend_digest 数据层扩展)
 last_tag:       v0.3.21-phase2-t9
 next_action:    Phase 2 T10 implementation plan via superpowers:writing-plans (HTML 模板辅图槽位 + Excel 趋势数据 sheet 分块)
 next_stage:     Phase 2 T10 · HTML + Excel 阅读体验
