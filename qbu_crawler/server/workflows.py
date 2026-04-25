@@ -21,6 +21,7 @@ from qbu_crawler import __version__, config, models
 from qbu_crawler.server.daily_inputs import load_daily_inputs
 from qbu_crawler.server.report_snapshot import (
     FullReportGenerationError,
+    _artifact_db_value,
     build_fast_report,
     freeze_report_snapshot,
     generate_report_from_snapshot,
@@ -719,11 +720,14 @@ class WorkflowWorker:
             html_path = full_report.get("html_path") or full_report.get("v3_html_path")
             email = full_report.get("email")
             email_ok = (email or {}).get("success")
+            # Stage B 修 7: 双层防御 — report_snapshot 已 wrap，但 incremental fix 期间
+            # 可能存在没 wrap 的旧调用路径，落库前再过一次 _artifact_db_value()。
+            # _artifact_db_value 对相对路径是 idempotent（resolve abs → relative_to root）。
             models.update_workflow_run(
                 run_id,
-                excel_path=excel_path,
-                analytics_path=analytics_path,
-                pdf_path=pdf_path,
+                excel_path=_artifact_db_value(excel_path),
+                analytics_path=_artifact_db_value(analytics_path),
+                pdf_path=_artifact_db_value(pdf_path),
             )
             # Email failure should not block run completion — report files
             # already exist on disk.  Log the problem and mark in notification.
@@ -756,9 +760,9 @@ class WorkflowWorker:
                 run_id,
                 status="completed",
                 report_phase="full_sent",
-                excel_path=excel_path,
-                analytics_path=analytics_path,
-                pdf_path=pdf_path,
+                excel_path=_artifact_db_value(excel_path),
+                analytics_path=_artifact_db_value(analytics_path),
+                pdf_path=_artifact_db_value(pdf_path),
                 finished_at=now,
                 error=None,
             )

@@ -381,10 +381,13 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_html_paths(tmp
 
     result = generate_full_report_from_snapshot(snapshot, send_email=False, output_path=str(excel_path))
 
+    # Stage B 修 7: artifact paths are now relative (to REPORT_DIR for analytics,
+    # to their own parent dir for stub html in tmp_path). Resolve via REPORT_DIR
+    # for analytics and via tmp_path for html since the stub returns tmp_path-rooted.
     assert result["analytics_path"].endswith(".json")
     assert result["pdf_path"] is None
-    assert result["html_path"] == str(html_report_path)
-    assert Path(result["analytics_path"]).is_file()
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
+    assert (Path(config.REPORT_DIR) / result["analytics_path"]).is_file()
 
 
 def test_generate_full_report_from_snapshot_passes_insights_to_html_and_email(tmp_path, monkeypatch):
@@ -465,11 +468,12 @@ def test_generate_full_report_from_snapshot_passes_insights_to_html_and_email(tm
 
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
-    assert result["html_path"] == str(html_report_path)
+    # Stage B 修 7: artifact paths are now relative; resolve via parent for assertion.
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
     # The analytics passed to HTML renderer should have report_copy from generate_report_insights
     assert captured["html_analytics"]["report_copy"]["hero_headline"] == "聚焦可靠性"
     # The analytics JSON should be persisted with the insights
-    saved = json.loads(Path(result["analytics_path"]).read_text(encoding="utf-8"))
+    saved = json.loads((Path(config.REPORT_DIR) / result["analytics_path"]).read_text(encoding="utf-8"))
     assert saved["report_copy"]["hero_headline"] == "聚焦可靠性"
 
 
@@ -531,7 +535,8 @@ def test_generate_full_report_from_snapshot_sends_excel_and_html(monkeypatch, tm
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["pdf_path"] is None
-    assert result["html_path"] == str(html_report_path)
+    # Stage B 修 7: artifact paths are now relative; resolve via parent for assertion.
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
     assert captured["attachment_path"] is None
     paths = captured["attachment_paths"]
     assert paths[0] == str(excel_path)
@@ -600,9 +605,10 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["email"] == {"success": False, "error": "smtp failed", "recipients": 0}
-    assert result["excel_path"] == str(excel_path)
+    # Stage B 修 7: artifact paths are now relative; resolve via parent for assertion.
+    assert (Path(excel_path).parent / result["excel_path"]).resolve() == Path(excel_path).resolve()
     assert result["pdf_path"] is None
-    assert result["html_path"] == str(html_report_path)
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
     assert result["analytics_path"].endswith(".json")
 
 
@@ -663,9 +669,10 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["email"] == {"success": False, "error": "smtp exploded", "recipients": 0}
-    assert result["excel_path"] == str(excel_path)
+    # Stage B 修 7: artifact paths are now relative; resolve via parent for assertion.
+    assert (Path(excel_path).parent / result["excel_path"]).resolve() == Path(excel_path).resolve()
     assert result["pdf_path"] is None
-    assert result["html_path"] == str(html_report_path)
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
 
 
 def test_freeze_snapshot_reviews_enriched_with_analysis_fields(snapshot_db):
@@ -760,9 +767,10 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     result = generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
 
     assert result["email"] is None
-    assert result["excel_path"] == str(excel_path)
+    # Stage B 修 7: artifact paths are now relative; resolve via parent for assertion.
+    assert (Path(excel_path).parent / result["excel_path"]).resolve() == Path(excel_path).resolve()
     assert result["pdf_path"] is None
-    assert result["html_path"] == str(html_report_path)
+    assert (Path(html_report_path).parent / result["html_path"]).resolve() == Path(html_report_path).resolve()
 
 
 def test_change_and_quiet_report_return_none_email_when_send_email_false(
@@ -1074,7 +1082,10 @@ def test_full_report_analytics_has_dual_perspective(dual_snapshot_db, monkeypatc
     )
 
     # Load saved analytics and verify dual perspective
-    analytics = json.loads(Path(gen_result["analytics_path"]).read_text(encoding="utf-8"))
+    # Stage B 修 7: analytics_path is now relative to REPORT_DIR.
+    analytics = json.loads(
+        (Path(config.REPORT_DIR) / gen_result["analytics_path"]).read_text(encoding="utf-8")
+    )
     assert analytics.get("perspective") == "dual"
     assert "cumulative_kpis" in analytics
     assert "window" in analytics
@@ -1123,7 +1134,8 @@ def test_change_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
     # When cumulative data exists, analytics_path should be written
     assert change_result["analytics_path"] is not None
     assert change_result.get("cumulative_computed") is True
-    assert Path(change_result["analytics_path"]).is_file()
+    # Stage B 修 7: analytics_path is now relative to REPORT_DIR.
+    assert (Path(config.REPORT_DIR) / change_result["analytics_path"]).is_file()
 
 
 def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
@@ -1169,7 +1181,8 @@ def test_quiet_mode_uses_cumulative_kpis(dual_snapshot_db, monkeypatch):
     # When cumulative data exists, analytics_path should be written
     assert quiet_result["analytics_path"] is not None
     assert quiet_result.get("cumulative_computed") is True
-    assert Path(quiet_result["analytics_path"]).is_file()
+    # Stage B 修 7: analytics_path is now relative to REPORT_DIR.
+    assert (Path(config.REPORT_DIR) / quiet_result["analytics_path"]).is_file()
 
 
 def test_build_change_digest_summarizes_incremental_fresh_and_backfill_mix():
@@ -1558,3 +1571,67 @@ def test_load_previous_report_context_resolves_stale_absolute_artifact_paths(sna
 
     assert analytics["kpis"]["ingested_review_rows"] == 3
     assert snapshot["snapshot_hash"] == "snapshot-1"
+
+
+def test_workflow_run_stores_relative_artifact_paths(snapshot_db, monkeypatch):
+    """修 7: report_snapshot.* 返回 dict 中的 analytics_path / excel_path /
+    html_path 必须是相对 REPORT_DIR 的相对路径，便于跨机器迁移后 resolver 仍能恢复。"""
+    from qbu_crawler.server import report_snapshot
+
+    # Stub all heavyweight collaborators — we only test the path-shaping behavior
+    monkeypatch.setattr(report_snapshot.report, "query_report_data", lambda *a, **kw: ([], []))
+    monkeypatch.setattr(report_snapshot.report, "query_cumulative_data", lambda *a, **kw: ([], []))
+    monkeypatch.setattr(report_snapshot, "_render_full_email_html", lambda *a, **kw: "<html></html>")
+    monkeypatch.setattr(report_snapshot.report, "send_email", lambda **kw: {"success": True, "recipients": []})
+
+    frozen = report_snapshot.freeze_report_snapshot(
+        snapshot_db["run"]["id"], now="2026-04-25T12:00:00+08:00"
+    )
+    # `freeze_report_snapshot` returns the workflow_runs row dict; the actual
+    # snapshot payload (run_id / products_count / reviews_count / ...) lives on
+    # disk at snapshot_path. Load it back so generate_report_from_snapshot has
+    # the keys it expects.
+    snapshot = report_snapshot.load_report_snapshot(frozen["snapshot_path"])
+    # Inject minimal cumulative + reviews so generate_report_from_snapshot picks "full" mode
+    snapshot["reviews"] = [{"id": 1, "rating": 5, "ownership": "own"}]
+    snapshot["cumulative"] = {
+        "products": [], "reviews": [{"id": 1, "rating": 5, "ownership": "own"}],
+        "products_count": 0, "reviews_count": 1, "translated_count": 0, "untranslated_count": 1,
+    }
+
+    result = report_snapshot.generate_report_from_snapshot(snapshot, send_email=False)
+
+    # The on-disk file MUST live under config.REPORT_DIR
+    from qbu_crawler import config
+    report_root = Path(config.REPORT_DIR).resolve()
+
+    for key in ("analytics_path", "excel_path", "html_path"):
+        stored = result.get(key)
+        if stored is None:
+            continue  # change/quiet modes legitimately omit some keys
+        # Stored value must be relative (no drive letter, no leading slash)
+        assert not Path(stored).is_absolute(), f"{key} must be relative, got {stored!r}"
+        # Joining with REPORT_DIR must point to an existing file
+        resolved = (report_root / stored).resolve()
+        assert resolved.is_file(), f"{key}={stored!r} did not resolve to an existing file"
+
+
+def test_artifact_resolver_recovers_when_original_path_moved(snapshot_db, monkeypatch, tmp_path):
+    """修 7 补强：旧 run 的 analytics_path 已经是绝对路径（Stage A 之前生成），
+    机器迁移后 REPORT_DIR 改了位置，resolver 应当通过 basename glob 找回 artifact。"""
+    from qbu_crawler import config, models
+    from qbu_crawler.server.report_snapshot import _resolve_artifact_path
+
+    # 1. 模拟旧机器的 absolute path（写到 DB）
+    legacy_abs = r"D:\OldServer\reports\workflow-run-42-analytics-2026-03-20.json"
+
+    # 2. 当前机器的实际 REPORT_DIR
+    Path(config.REPORT_DIR).mkdir(parents=True, exist_ok=True)
+    actual_path = Path(config.REPORT_DIR) / "workflow-run-42-analytics-2026-03-20.json"
+    actual_path.write_text('{"kpis": {}}', encoding="utf-8")
+
+    # 3. resolver 必须找到当前 REPORT_DIR 下的同名文件
+    resolved = _resolve_artifact_path(legacy_abs, run_id=42, kind="analytics")
+    assert resolved is not None, "resolver should fall back to basename in REPORT_DIR"
+    assert Path(resolved).is_file()
+    assert Path(resolved).name == actual_path.name

@@ -244,8 +244,10 @@ class TestFullReportAnalyticsPersistsNormalizedKpis:
         result = generate_full_report_from_snapshot(snapshot, send_email=False)
 
         analytics_path = result.get("analytics_path")
-        assert analytics_path and Path(analytics_path).exists()
-        data = json.loads(Path(analytics_path).read_text(encoding="utf-8"))
+        # Stage B 修 7: analytics_path is now relative to REPORT_DIR.
+        resolved_analytics = Path(config.REPORT_DIR) / analytics_path if analytics_path else None
+        assert analytics_path and resolved_analytics.exists()
+        data = json.loads(resolved_analytics.read_text(encoding="utf-8"))
         kpis = data.get("kpis") or {}
         # 这些字段都是 normalize_deep_report_analytics 的产物
         assert "health_index" in kpis, \
@@ -501,8 +503,10 @@ class TestGenerateReportFromSnapshot:
         }
         result = generate_report_from_snapshot(snapshot, send_email=False)
         assert result["html_path"] is not None
-        assert Path(result["html_path"]).exists()
-        html_content = Path(result["html_path"]).read_text(encoding="utf-8")
+        # Stage B 修 7: html_path is now relative to REPORT_DIR.
+        resolved_html = Path(config.REPORT_DIR) / result["html_path"]
+        assert resolved_html.exists()
+        html_content = resolved_html.read_text(encoding="utf-8")
         assert "2026-04-10" in html_content
 
     def test_change_mode_generates_html(self, db):

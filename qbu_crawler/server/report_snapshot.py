@@ -947,9 +947,9 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
         "snapshot_hash": snapshot.get("snapshot_hash", ""),
         "products_count": snapshot.get("products_count", 0),
         "reviews_count": 0,
-        "html_path": html_path,
+        "html_path": _artifact_db_value(html_path),
         "excel_path": None,
-        "analytics_path": analytics_path,
+        "analytics_path": _artifact_db_value(analytics_path),
         "cumulative_computed": cumulative_computed,
         "email": email_result,
     }
@@ -1024,9 +1024,9 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
         "snapshot_hash": snapshot.get("snapshot_hash", ""),
         "products_count": snapshot.get("products_count", 0),
         "reviews_count": 0,
-        "html_path": html_path,
+        "html_path": _artifact_db_value(html_path),
         "excel_path": None,
-        "analytics_path": analytics_path,
+        "analytics_path": _artifact_db_value(analytics_path),
         "cumulative_computed": cumulative_computed,
         "email": email_result,
         "email_skipped": not should_send,
@@ -1336,8 +1336,8 @@ def generate_full_report_from_snapshot(
             raise
         raise FullReportGenerationError(
             str(exc),
-            analytics_path=analytics_path if os.path.isfile(analytics_path) else None,
-            excel_path=excel_path if excel_path and os.path.isfile(excel_path) else None,
+            analytics_path=_artifact_db_value(analytics_path) if os.path.isfile(analytics_path) else None,
+            excel_path=_artifact_db_value(excel_path) if excel_path and os.path.isfile(excel_path) else None,
             pdf_path=None,
         ) from exc
 
@@ -1368,9 +1368,9 @@ def generate_full_report_from_snapshot(
         "reviews_count": snapshot["reviews_count"],
         "translated_count": snapshot["translated_count"],
         "untranslated_count": snapshot["untranslated_count"],
-        "excel_path": excel_path,
-        "analytics_path": analytics_path,
-        "pdf_path": pdf_path,
-        "html_path": html_path,
+        "excel_path": _artifact_db_value(excel_path),
+        "analytics_path": _artifact_db_value(analytics_path),
+        "pdf_path": pdf_path,  # always None in V3
+        "html_path": _artifact_db_value(html_path),
         "email": email_result,
     }

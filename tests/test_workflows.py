@@ -996,14 +996,19 @@ class TestWorkflowReconcile:
         assert refreshed["status"] == "completed"
         assert refreshed["report_phase"] == "full_sent"
         assert refreshed["snapshot_hash"] == "hash-1"
-        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
-        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
-        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
+        # Stage B 修 7: workflows.py wraps artifact paths through _artifact_db_value
+        # before persistence. With tmp_path as the path's own parent, the helper
+        # relativizes to the basename. Assert via parent-resolution to stay
+        # robust regardless of which search root claims the path.
+        assert (Path(tmp_path) / refreshed["excel_path"]).resolve() == (tmp_path / "full.xlsx").resolve()
+        assert (Path(tmp_path) / refreshed["analytics_path"]).resolve() == (tmp_path / "analytics.json").resolve()
+        assert (Path(tmp_path) / refreshed["pdf_path"]).resolve() == (tmp_path / "full.pdf").resolve()
         assert [item["kind"] for item in notifications if item["kind"].startswith("workflow_")] == [
             "workflow_fast_report",
             "workflow_full_report",
         ]
         full_report = next(item for item in notifications if item["kind"] == "workflow_full_report")
+        # Notification payload preserves the original (unwrapped) paths from the report dict.
         assert full_report["payload"]["analytics_path"] == str(tmp_path / "analytics.json")
         assert full_report["payload"]["pdf_path"] == str(tmp_path / "full.pdf")
 
@@ -1497,9 +1502,11 @@ class TestWorkflowReconcile:
         # Email failure no longer blocks run completion — report files exist.
         assert refreshed["status"] == "completed"
         assert refreshed["report_phase"] == "full_sent"
-        assert refreshed["analytics_path"] == str(tmp_path / "analytics.json")
-        assert refreshed["excel_path"] == str(tmp_path / "full.xlsx")
-        assert refreshed["pdf_path"] == str(tmp_path / "full.pdf")
+        # Stage B 修 7: workflows.py wraps artifact paths through _artifact_db_value
+        # before persistence; assert via parent-resolution to stay robust.
+        assert (Path(tmp_path) / refreshed["analytics_path"]).resolve() == (tmp_path / "analytics.json").resolve()
+        assert (Path(tmp_path) / refreshed["excel_path"]).resolve() == (tmp_path / "full.xlsx").resolve()
+        assert (Path(tmp_path) / refreshed["pdf_path"]).resolve() == (tmp_path / "full.pdf").resolve()
         assert refreshed["error"] is None
         full_notifs = [item for item in notifications if item["kind"] == "workflow_full_report"]
         assert len(full_notifs) == 1
