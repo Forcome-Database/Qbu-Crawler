@@ -1341,3 +1341,44 @@ def test_build_trend_digest_emits_year_view_note():
     # week / month 可以为 None 或 ""（不需要 banner）
     assert digest["view_notes"].get("week") in (None, "")
     assert digest["view_notes"].get("month") in (None, "")
+
+
+def test_trend_digest_blocks_all_have_phase2_schema():
+    """Phase 2 T9: 每块 (view × dim) 必须同时具备 Phase 1 5 键 + Phase 2 2 键，
+    无论 status 是 ready / accumulating / degraded。
+    schema 永远齐全，缺数据时 series 为空、comparison 三段为 null。"""
+    from qbu_crawler.server.report_analytics import _build_trend_digest
+
+    snapshot = {
+        "logical_date": "2026-04-25",
+        "products": [],
+        "reviews": [],
+    }
+    digest = _build_trend_digest(snapshot, labeled_reviews=[], trend_series={})
+
+    expected_keys = {
+        "status", "status_message", "kpis", "primary_chart",
+        "secondary_charts", "comparison", "table",
+    }
+    for view in digest["views"]:
+        for dim in digest["dimensions"]:
+            block = digest["data"][view][dim]
+            missing = expected_keys - set(block.keys())
+            assert not missing, f"{view}/{dim} missing keys: {missing}"
+            assert isinstance(block["secondary_charts"], list), \
+                f"{view}/{dim} secondary_charts must be list, got {type(block['secondary_charts'])}"
+            assert isinstance(block["comparison"], dict), \
+                f"{view}/{dim} comparison must be dict, got {type(block['comparison'])}"
+            # comparison 三段固定 key
+            assert set(block["comparison"].keys()) == {
+                "period_over_period", "year_over_year", "start_vs_end",
+            }, f"{view}/{dim} comparison keys mismatch: {block['comparison'].keys()}"
+            pop = block["comparison"]["period_over_period"]
+            assert set(pop.keys()) >= {"label", "current", "previous", "change_pct"}, \
+                f"{view}/{dim} period_over_period inner shape mismatch: {pop.keys()}"
+            yoy = block["comparison"]["year_over_year"]
+            assert set(yoy.keys()) >= {"label", "current", "previous", "change_pct"}, \
+                f"{view}/{dim} year_over_year inner shape mismatch: {yoy.keys()}"
+            sve = block["comparison"]["start_vs_end"]
+            assert set(sve.keys()) >= {"label", "start", "end", "change_pct"}, \
+                f"{view}/{dim} start_vs_end inner shape mismatch: {sve.keys()}"

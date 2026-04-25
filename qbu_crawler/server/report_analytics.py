@@ -1399,21 +1399,68 @@ def _scraped_date(value):
         return None
 
 
-def _trend_dimension_payload(*, status, message, kpis, primary_chart, table):
+def _empty_comparison():
+    """Phase 2 T9: comparison 永远是稳定 3 段 shape，
+    数据不足时 current/previous/start/end 为 None，change_pct 同步 None。"""
+    return {
+        "period_over_period": {
+            "label": "",
+            "current": None,
+            "previous": None,
+            "change_pct": None,
+        },
+        "year_over_year": {
+            "label": "",
+            "current": None,
+            "previous": None,
+            "change_pct": None,
+        },
+        "start_vs_end": {
+            "label": "",
+            "start": None,
+            "end": None,
+            "change_pct": None,
+        },
+    }
+
+
+def _trend_dimension_payload(
+    *,
+    status,
+    message,
+    kpis,
+    primary_chart,
+    table,
+    secondary_charts=None,
+    comparison=None,
+):
     return {
         "status": status,
         "status_message": message,
         "kpis": kpis,
         "primary_chart": primary_chart,
+        # Phase 2 T9: schema 永远齐全；ready 状态由各 _build_*_trend 主函数填充
+        "secondary_charts": list(secondary_charts) if secondary_charts else [],
+        "comparison": comparison if comparison is not None else _empty_comparison(),
         "table": table,
     }
 
 
-def _empty_trend_dimension(status, message, chart_title, table_columns):
+def _empty_trend_dimension(status, message, chart_title, table_columns,
+                            kpi_placeholder_labels=None):
+    """Phase 2 T9: accumulating / degraded 状态也必须给出 4 个 KPI 占位项（label 固定，
+    value 显示 "—"），不再返回空 items 列表。"""
+    placeholder_labels = list(kpi_placeholder_labels or ["—", "—", "—", "—"])
+    # 兜底：长度不足 4 时用 "—" 补齐
+    while len(placeholder_labels) < 4:
+        placeholder_labels.append("—")
+    placeholder_items = [
+        {"label": label, "value": "—"} for label in placeholder_labels[:4]
+    ]
     return _trend_dimension_payload(
         status=status,
         message=message,
-        kpis={"status": status, "items": []},
+        kpis={"status": status, "items": placeholder_items},
         primary_chart={
             "status": status,
             "chart_type": "line",
@@ -1426,6 +1473,8 @@ def _empty_trend_dimension(status, message, chart_title, table_columns):
             "columns": table_columns,
             "rows": [],
         },
+        secondary_charts=[],
+        comparison=_empty_comparison(),
     )
 
 
