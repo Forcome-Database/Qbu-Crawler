@@ -1527,6 +1527,7 @@ def _build_sentiment_trend(view, logical_day, labeled_reviews):
             "评论发布时间样本仍在积累，当前不足以形成稳定趋势。",
             "舆情趋势",
             ["日期", "评论量", "自有差评", "自有差评率", "健康分"],
+            kpi_placeholder_labels=["窗口评论量", "自有差评数", "自有差评率", "有效时间点"],
         )
 
     rows = []
@@ -1607,6 +1608,7 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
             "问题标签样本仍在积累，当前不足以形成稳定趋势。",
             "问题趋势",
             ["问题", "评论数", "影响产品数"],
+            kpi_placeholder_labels=["问题信号数", "活跃问题数", "头号问题", "涉及产品数"],
         )
 
     ranked_codes = sorted(
@@ -1625,6 +1627,7 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
             "问题标签时间分布仍在积累，当前不足以形成年度趋势。",
             "问题趋势",
             ["问题", "评论数", "影响产品数"],
+            kpi_placeholder_labels=["问题信号数", "活跃问题数", "头号问题", "涉及产品数"],
         )
 
     rows = []
@@ -1806,6 +1809,7 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
             "自有与竞品的可比样本仍在积累，当前不足以形成稳定趋势。",
             "竞品趋势",
             ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
+            kpi_placeholder_labels=["可比时间点", "最新评分差", "最新自有差评率", "最新竞品好评率"],
         )
 
     own_avg_rating = [

@@ -1382,3 +1382,27 @@ def test_trend_digest_blocks_all_have_phase2_schema():
             sve = block["comparison"]["start_vs_end"]
             assert set(sve.keys()) >= {"label", "start", "end", "change_pct"}, \
                 f"{view}/{dim} start_vs_end inner shape mismatch: {sve.keys()}"
+
+
+def test_trend_digest_blocks_always_have_four_kpi_items():
+    """Phase 2 T9 + audit §4.1: 任何 view × dim 组合的 kpis.items 必须恰好 4 条 KPI 项；
+    且 accumulating 状态下 label 必须给 dimension-specific 名字（非纯 "—"），
+    保留指标骨架便于前端展示"差评率：—"而不是"—：—"。"""
+    from qbu_crawler.server.report_analytics import _build_trend_digest
+
+    snapshot = {"logical_date": "2026-04-25", "products": [], "reviews": []}
+    digest = _build_trend_digest(snapshot, labeled_reviews=[], trend_series={})
+
+    for view in digest["views"]:
+        for dim in digest["dimensions"]:
+            block = digest["data"][view][dim]
+            items = (block.get("kpis") or {}).get("items") or []
+            assert len(items) == 4, \
+                f"{view}/{dim} kpis.items must have 4 entries, got {len(items)}"
+            # label 必须非空且至少有 1 个不是占位 "—"（accumulating 也要给业务标签）
+            labels = [it.get("label") for it in items]
+            assert all(label for label in labels), \
+                f"{view}/{dim} kpis.items[*].label must be non-empty, got {labels}"
+            assert all(label and label != "—" for label in labels), \
+                f"{view}/{dim} accumulating 状态每个 KPI 都必须给 dimension-specific 标签，" \
+                f"不能含 \"—\"，当前: {labels}"
