@@ -1614,7 +1614,7 @@ def _build_sentiment_secondary_charts(labels, own_negative_rates, health_scores)
 
 def _build_sentiment_comparison(labels, own_negative_rates):
     """Phase 2 T9: sentiment dim comparison — 度量统一为「自有差评率」。
-    start_vs_end: 第一个非 null bucket vs 最后一个非 null bucket
+    start_vs_end: 第一个 / 最后一个非 null bucket（≥2 个非 null bucket 才出，单点不强行返"持平"）
     period_over_period / year_over_year: 当前实现填 null（待 Phase 2 后续历史扩展）
 
     change_pct 语义：相对百分比变化 (end - start) / start * 100，
@@ -1622,9 +1622,12 @@ def _build_sentiment_comparison(labels, own_negative_rates):
     Phase 2 全维度 change_pct 统一用此口径，避免各维度不一致；
     未来若需要"百分点变化"语义，再加 change_pp 字段。"""
     _ = labels  # reserved for future PoP/YoY bucket alignment
+    comparison = _empty_comparison()
     non_null = [v for v in own_negative_rates if v is not None]
-    start_value = non_null[0] if non_null else None
-    end_value = non_null[-1] if non_null else None
+    if len(non_null) < 2:
+        return comparison
+    start_value = non_null[0]
+    end_value = non_null[-1]
     change_pct = None
     if (
         start_value is not None
@@ -1633,7 +1636,6 @@ def _build_sentiment_comparison(labels, own_negative_rates):
     ):
         change_pct = round((end_value - start_value) / start_value * 100, 1)
 
-    comparison = _empty_comparison()
     comparison["start_vs_end"]["label"] = "首尾差评率对比"
     comparison["start_vs_end"]["start"] = start_value
     comparison["start_vs_end"]["end"] = end_value
@@ -2090,12 +2092,93 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
                 {"name": "竞品均分", "data": competitor_avg_rating},
             ] if chart_ready else [],
         },
+        secondary_charts=_build_competition_secondary_charts(
+            labels, own_avg_rating, competitor_avg_rating,
+            own_negative_rate, competitor_positive_rate,
+        ),
+        comparison=_build_competition_comparison(
+            labels, own_avg_rating, competitor_avg_rating,
+        ),
         table={
             "status": "ready" if any_side_has_data else "accumulating",
             "columns": ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
             "rows": rows,
         },
     )
+
+
+def _build_competition_secondary_charts(labels, own_avg_rating, competitor_avg_rating,
+                                         own_negative_rate, competitor_positive_rate):
+    """Phase 2 T9: competition dim 辅图 —
+    1) 评分差趋势 (line, 单 series = competitor − own，None 透传给前端做 gap)
+    2) 差/好评率对比 (line, series=own_neg_rate + competitor_pos_rate)
+
+    各自带独立 status（mixed-state，兼容 spec §8.5）：gap 与 rate 的 ready/accumulating
+    决策完全解耦；top_status 由 primary chart 决定，secondary 不参与 top 决策。
+    当 series 全部为 None 时降级到 accumulating（labels/series 清空）；
+    全 0 视为有效信号，不降级。"""
+    gap_data = []
+    for own_v, comp_v in zip(own_avg_rating, competitor_avg_rating):
+        if own_v is None or comp_v is None:
+            gap_data.append(None)
+        else:
+            gap_data.append(round(comp_v - own_v, 2))
+    gap_status = "ready" if any(v is not None for v in gap_data) else "accumulating"
+
+    rate_status = "ready" if (
+        any(v is not None for v in own_negative_rate)
+        or any(v is not None for v in competitor_positive_rate)
+    ) else "accumulating"
+
+    return [
+        {
+            "status": gap_status,
+            "chart_type": "line",
+            "title": "评分差趋势 (竞品 − 自有)",
+            "labels": labels if gap_status == "ready" else [],
+            "series": [
+                {"name": "评分差", "data": gap_data},
+            ] if gap_status == "ready" else [],
+        },
+        {
+            "status": rate_status,
+            "chart_type": "line",
+            "title": "差/好评率对比",
+            "labels": labels if rate_status == "ready" else [],
+            "series": [
+                {"name": "自有差评率(%)", "data": own_negative_rate},
+                {"name": "竞品好评率(%)", "data": competitor_positive_rate},
+            ] if rate_status == "ready" else [],
+        },
+    ]
+
+
+def _build_competition_comparison(labels, own_avg_rating, competitor_avg_rating):
+    """Phase 2 T9: competition dim comparison — 度量「评分差 (competitor - own)」。
+    start_vs_end: 第一个 / 最后一个 own & comp 都非 None 的 bucket。
+    change_pct 语义：相对百分比变化（与 sentiment / issues / products dim 同口径）。
+    使用 abs(start) 作分母避免负 gap 时符号翻转 — 但 start=0 时仍返回 None。
+    period_over_period / year_over_year 当前留 null（待 Phase 2 后续历史扩展）。"""
+    _ = labels  # reserved for future PoP/YoY bucket alignment
+    comparison = _empty_comparison()
+    gaps = []
+    for own_v, comp_v in zip(own_avg_rating, competitor_avg_rating):
+        if own_v is not None and comp_v is not None:
+            gaps.append(round(comp_v - own_v, 2))
+    if len(gaps) < 2:
+        return comparison
+
+    start_value = gaps[0]
+    end_value = gaps[-1]
+    change_pct = None
+    if start_value not in (None, 0):
+        change_pct = round((end_value - start_value) / abs(start_value) * 100, 1)
+
+    comparison["start_vs_end"]["label"] = "评分差首尾对比"
+    comparison["start_vs_end"]["start"] = start_value
+    comparison["start_vs_end"]["end"] = end_value
+    comparison["start_vs_end"]["change_pct"] = change_pct
+    return comparison
 
 
 def _build_trend_dimension(builder, *args):

@@ -1635,3 +1635,87 @@ def test_product_trend_emits_comparison_with_focus_sku_rating():
     # PoP/YoY 仍 None
     assert result["comparison"]["period_over_period"]["current"] is None
     assert result["comparison"]["year_over_year"]["current"] is None
+
+
+def test_competition_trend_emits_two_secondary_charts_when_ready():
+    """Phase 2 T9: competition dim ready 时辅图 2 张：
+    1) 评分差趋势 (line, 单 series = competitor_avg - own_avg)
+    2) 差/好评率对比 (line, series = own_negative_rate, competitor_positive_rate)
+    标题精确锁。"""
+    from qbu_crawler.server.report_analytics import _build_competition_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    labeled_reviews = []
+    for d in ["2026-04-10", "2026-04-12", "2026-04-15"]:
+        labeled_reviews.append({"review": {"ownership": "own", "rating": 3,
+                                            "date_published_parsed": d}})
+        labeled_reviews.append({"review": {"ownership": "competitor", "rating": 4,
+                                            "date_published_parsed": d}})
+    result = _build_competition_trend("month", logical_day, labeled_reviews)
+    assert result["status"] == "ready"
+
+    secondary = result["secondary_charts"]
+    assert len(secondary) >= 2
+
+    titles = {c["title"] for c in secondary}
+    assert "评分差趋势 (竞品 − 自有)" in titles, f"missing exact title: {titles}"
+    assert "差/好评率对比" in titles, f"missing exact title: {titles}"
+
+    for chart in secondary:
+        assert set(chart.keys()) >= {"status", "chart_type", "title", "labels", "series"}
+
+
+def test_competition_trend_emits_comparison_with_rating_gap():
+    """Phase 2 T9: competition dim comparison.start_vs_end 度量为「评分差 (competitor - own)」。
+    change_pct 语义：相对百分比变化（与 sentiment / issues / products dim 同口径）。"""
+    from qbu_crawler.server.report_analytics import _build_competition_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    # 3 月 27（月初）：own=4, comp=4.5 → gap=0.5
+    # 4 月 22（月末）：own=3, comp=4 → gap=1.0
+    labeled_reviews = [
+        {"review": {"ownership": "own", "rating": 4, "date_published_parsed": "2026-03-27"}},
+        {"review": {"ownership": "competitor", "rating": 4.5, "date_published_parsed": "2026-03-27"}},
+        {"review": {"ownership": "own", "rating": 3, "date_published_parsed": "2026-04-22"}},
+        {"review": {"ownership": "competitor", "rating": 4, "date_published_parsed": "2026-04-22"}},
+    ]
+    result = _build_competition_trend("month", logical_day, labeled_reviews)
+    sve = result["comparison"]["start_vs_end"]
+    assert sve["start"] == 0.5, f"start gap=0.5 (4.5-4.0), got {sve['start']}"
+    assert sve["end"] == 1.0, f"end gap=1.0 (4.0-3.0), got {sve['end']}"
+    # change_pct: (1.0 - 0.5) / 0.5 * 100 = 100.0
+    assert sve["change_pct"] == 100.0, \
+        f"start=0.5 end=1.0, 相对变化应 100.0，得到 {sve['change_pct']}"
+
+    # PoP/YoY 仍 None
+    assert result["comparison"]["period_over_period"]["current"] is None
+    assert result["comparison"]["year_over_year"]["current"] is None
+
+
+def test_competition_trend_negative_gap_change_pct_keeps_sign():
+    """Phase 2 T9 (Q1 regression lock): competition dim 的 change_pct 用 abs(start) 作分母，
+    避免负 gap 时符号被静默翻转。
+    场景: own 一直比竞品评分高（gap 始终为负）→ end 比 start 更负 = own 优势进一步扩大。
+    用 abs(start)：(-1.0 − (-0.5)) / 0.5 * 100 = -100.0（gap 负向扩大 100%）。
+    用 start：(-1.0 − (-0.5)) / -0.5 * 100 = +100.0（错误！会被理解为"差距收窄"）。"""
+    from qbu_crawler.server.report_analytics import _build_competition_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    # 月初: own=4.5, comp=4.0 → gap = -0.5 (own 领先)
+    # 月末: own=5.0, comp=4.0 → gap = -1.0 (own 领先扩大)
+    labeled_reviews = [
+        {"review": {"ownership": "own", "rating": 4.5, "date_published_parsed": "2026-03-27"}},
+        {"review": {"ownership": "competitor", "rating": 4.0, "date_published_parsed": "2026-03-27"}},
+        {"review": {"ownership": "own", "rating": 5.0, "date_published_parsed": "2026-04-22"}},
+        {"review": {"ownership": "competitor", "rating": 4.0, "date_published_parsed": "2026-04-22"}},
+    ]
+    result = _build_competition_trend("month", logical_day, labeled_reviews)
+    sve = result["comparison"]["start_vs_end"]
+    assert sve["start"] == -0.5, f"start gap=-0.5, got {sve['start']}"
+    assert sve["end"] == -1.0, f"end gap=-1.0, got {sve['end']}"
+    # 关键：abs(start)=0.5 作分母，change_pct=-100.0 表示 gap 向 own 优势方向扩大 100%
+    assert sve["change_pct"] == -100.0, \
+        f"abs(start) 分母时 change_pct=-100.0；若误用 start 会变成 +100.0；得到 {sve['change_pct']}"
