@@ -712,32 +712,38 @@ def test_build_insights_prompt_includes_window_summary():
 
 
 def test_build_insights_prompt_small_window_warning_uses_window_count():
-    """Warning should fire based on window count (3), not cumulative total (800)."""
+    """修 10 之后：warning 基于 change_digest.summary.fresh_review_count，
+    不再读 window.reviews_count。保留测试名作为历史回归锁。"""
     from qbu_crawler.server.report_llm import _build_insights_prompt
 
     analytics = {
         "kpis": {
             "own_product_count": 5, "competitor_product_count": 3,
-            "ingested_review_rows": 800,  # large cumulative total
+            "ingested_review_rows": 800,
             "negative_review_rows": 10,
             "own_review_rows": 500, "own_negative_review_rows": 8,
             "own_negative_review_rate": 0.016, "competitor_review_rows": 300,
+            "all_sample_negative_rate": 0.0125,
         },
         "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
         "competitor": {"gap_analysis": [], "benchmark_examples": []},
         "window": {
-            "reviews_count": 3,  # small window count
+            "reviews_count": 3,
             "own_reviews_count": 2,
             "competitor_reviews_count": 1,
             "new_negative_count": 0,
         },
+        "change_digest": {"summary": {
+            "ingested_review_count": 3,
+            "fresh_review_count": 3,             # 修 10: 基于 fresh，3 < 5 仍触发
+            "historical_backfill_count": 0,
+            "fresh_own_negative_count": 0,
+        }},
         "perspective": "dual",
         "report_semantics": "incremental",
     }
-
     prompt = _build_insights_prompt(analytics)
-
-    assert "样本极少" in prompt, "Small sample warning should fire for window_count=3"
+    assert "样本极少" in prompt, "Small sample warning should fire when fresh < 5"
 def test_incremental_prompt_drops_window_today_new_segment():
     """spec §5.2 / §10.2：incremental 路径禁止把 window.reviews_count
     叙述为「今日新增评论」；只能用 change_digest.summary 的口径。"""
@@ -1083,3 +1089,95 @@ def test_build_insights_prompt_uses_own_rate_not_mixed_rate():
     assert "3.8%" in prompt or "3.7%" in prompt, "应叙述 own_negative_review_rate"
     # 不应直接出现 12% 的"自有差评率"误引用
     assert "自有差评率 12" not in prompt
+
+
+def test_build_insights_prompt_bootstrap_does_not_trigger_low_sample_warning():
+    """修 10: bootstrap 是首次基线，定义上不存在'样本不足'问题；
+    low-sample warning 应当跳过，避免与 bootstrap 文案冲突。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "bootstrap",
+        "kpis": {
+            "ingested_review_rows": 3,         # 极少，但是 bootstrap 不该触发 warning
+            "own_review_rows": 3, "own_negative_review_rows": 0,
+            "own_negative_review_rate": 0.0,
+            "own_product_count": 1, "competitor_product_count": 1,
+            "competitor_review_rows": 0, "health_index": 50,
+            "all_sample_negative_rate": 0, "negative_review_rows": 0,
+        },
+        "window": {"reviews_count": 3},
+        "change_digest": {"summary": {
+            "ingested_review_count": 3,
+            "fresh_review_count": 3,           # bootstrap 下 fresh = ingested
+            "historical_backfill_count": 0,
+        }},
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    prompt = _build_insights_prompt(analytics)
+    # bootstrap 文案在；low-sample warning 不该出现
+    assert "首次基线" in prompt
+    assert "样本极少" not in prompt, "bootstrap 不该触发 low-sample warning"
+
+
+def test_build_insights_prompt_low_sample_uses_change_digest_fresh_count():
+    """修 10: incremental 路径下，low-sample warning 必须基于
+    change_digest.summary.fresh_review_count，不再读 window.reviews_count。
+    backfill-dominant 场景：window=800 但 fresh=4 应当触发。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "incremental",
+        "perspective": "dual",
+        "kpis": {
+            "ingested_review_rows": 800,        # 大量入库（含 backfill）
+            "own_review_rows": 600, "own_negative_review_rows": 30,
+            "own_negative_review_rate": 0.05,
+            "own_product_count": 5, "competitor_product_count": 3,
+            "competitor_review_rows": 200, "health_index": 70,
+            "all_sample_negative_rate": 0.04, "negative_review_rows": 32,
+        },
+        "window": {"reviews_count": 800},        # 旧逻辑会用这个，不该触发 warning
+        "change_digest": {"summary": {
+            "ingested_review_count": 800,
+            "fresh_review_count": 4,             # 业务真实新增很少
+            "historical_backfill_count": 796,
+            "fresh_own_negative_count": 0,
+        }},
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    prompt = _build_insights_prompt(analytics)
+    assert "样本极少" in prompt, "fresh<5 时必须触发 low-sample warning"
+    # 提示文本应当叙述 fresh 的数字，不能再用 ingested 的 800
+    assert "近30天业务新增仅 4 条" in prompt or "近 30 天业务新增仅 4 条" in prompt
+
+
+def test_build_insights_prompt_low_sample_skips_when_fresh_above_threshold():
+    """修 10: fresh_review_count >= 5 不触发 warning。"""
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "report_semantics": "incremental",
+        "perspective": "dual",
+        "kpis": {
+            "ingested_review_rows": 100,
+            "own_review_rows": 80, "own_negative_review_rows": 5,
+            "own_negative_review_rate": 0.0625,
+            "own_product_count": 3, "competitor_product_count": 2,
+            "competitor_review_rows": 20, "health_index": 80,
+            "all_sample_negative_rate": 0.05, "negative_review_rows": 5,
+        },
+        "window": {"reviews_count": 100},
+        "change_digest": {"summary": {
+            "ingested_review_count": 100,
+            "fresh_review_count": 5,             # 刚到阈值
+            "historical_backfill_count": 95,
+            "fresh_own_negative_count": 1,
+        }},
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"gap_analysis": [], "benchmark_examples": []},
+    }
+    prompt = _build_insights_prompt(analytics)
+    assert "样本极少" not in prompt, "fresh>=5 不该触发 low-sample warning"

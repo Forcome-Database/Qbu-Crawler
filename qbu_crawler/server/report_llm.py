@@ -622,14 +622,18 @@ def _build_insights_prompt(analytics, snapshot=None):
                 "不要使用「今日新增」。"
             )
 
-    # Low-sample warning (Fix-5: use window review count, not cumulative ingested_review_rows)
-    _window_count = analytics.get("window", {}).get("reviews_count", kpis.get("ingested_review_rows", 0))
-    if _window_count < 5:
-        prompt += (
-            f"\n\n⚠️ 重要提示：本次入库评论仅 {_window_count} 条，样本极少。"
-            "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
-            "hero_headline 应体现「样本不足」或「数据有限」。"
-        )
+    # Low-sample warning (Stage B 修 10): 改读 change_digest.summary.fresh_review_count，
+    # 避免 backfill-dominant 场景被 ingested/window 的大数掩盖业务真实新增不足。
+    # bootstrap 不触发：首次基线本身就是基线，"样本不足"不是有意义的概念。
+    if report_semantics != "bootstrap":
+        _summary = (change_digest.get("summary") or {})
+        _fresh_count = _summary.get("fresh_review_count", 0)
+        if _fresh_count < 5:
+            prompt += (
+                f"\n\n⚠️ 本期近30天业务新增仅 {_fresh_count} 条，样本极少。"
+                "请仅基于上述数据做事实性记录，禁止做趋势推断或问题严重度判定。"
+                "hero_headline 应体现「样本不足」或「数据有限」。"
+            )
 
     # Fallback for dual-perspective incremental with zero fresh reviews —
     # the main "--- 今日变化 ---" section is already written above (change_digest branch).
