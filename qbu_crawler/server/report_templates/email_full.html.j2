@@ -16,6 +16,9 @@
 {% set _empty = _digest.get("empty_state", {}) %}
 {% set _view_state = _digest.get("view_state", "") %}
 {% set _semantics = _analytics.get("report_semantics", "incremental") %}
+{% set _baseline_day_index = _summary.get("baseline_day_index", 1) %}
+{% set _baseline_is_building = _summary.get("baseline_display_state") == "building" %}
+{% set _recent_review_count = _kpis.get("recently_published_count") if _kpis.get("recently_published_count") is not none else _summary.get("fresh_review_count", 0) %}
 {% set _report_copy = report_copy if report_copy is defined and report_copy else _analytics.get("report_copy", {}) %}
 {% set _bullets = _report_copy.get("executive_bullets", []) %}
 {% set _risk = risk_products if risk_products is defined and risk_products else (_analytics.get("self", {}) or {}).get("risk_products", []) %}
@@ -68,7 +71,7 @@
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td width="32%" style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;text-align:center;">
-                  <div style="font-size:11px;color:#64748b;">自有评论</div>
+                  <div style="font-size:11px;color:#64748b;">累计自有评论</div>
                   <div style="font-size:24px;font-weight:700;color:#0f172a;margin-top:6px;">{{ _kpis.get("own_review_rows", 0) }}</div>
                 </td>
                 <td width="2%"></td>
@@ -83,6 +86,17 @@
                 </td>
               </tr>
             </table>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+              <tr>
+                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">累计自有评论<br><strong style="font-size:16px;color:#0f172a;">{{ _kpis.get("own_review_rows", 0) }}</strong></td>
+                <td width="1%"></td>
+                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">累计竞品评论<br><strong style="font-size:16px;color:#0f172a;">{{ _kpis.get("competitor_review_rows", 0) }}</strong></td>
+                <td width="1%"></td>
+                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">本次入库评论<br><strong style="font-size:16px;color:#0f172a;">{{ _summary.get("ingested_review_count", _kpis.get("ingested_review_rows", 0)) }}</strong></td>
+                <td width="1%"></td>
+                <td width="25%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">近30天评论<br><strong style="font-size:16px;color:#0f172a;">{{ _recent_review_count or 0 }}</strong></td>
+              </tr>
+            </table>
           </td>
         </tr>
 
@@ -95,9 +109,9 @@
           <td style="padding:0 24px 18px;">
             {% if _semantics == "bootstrap" or _view_state == "bootstrap" %}
             <div style="padding:14px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a;font-size:13px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Monitoring Start</div>
-              <div style="font-weight:700;margin-top:4px;">监控起点</div>
-              <div style="margin-top:6px;">首次建档，当前结果用于建立监控基线。</div>
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">{{ "Baseline Building" if _baseline_is_building else "Monitoring Start" }}</div>
+              <div style="font-weight:700;margin-top:4px;">{{ "基线建立期第" ~ _baseline_day_index ~ "天" if _baseline_is_building else "监控起点" }}</div>
+              <div style="margin-top:6px;">{{ _summary.get("window_meaning", "首次建档，当前结果用于建立监控基线。") }}</div>
             </div>
             {% elif _empty.get("enabled") %}
             <div style="padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;color:#475569;font-size:13px;">
@@ -220,7 +234,7 @@
             {% else %}
             <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:12px;color:#64748b;">
               {% if _semantics == "bootstrap" or _view_state == "bootstrap" %}
-              首次基线已完成，本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条，用于建立监控基线。
+              {{ _summary.get("window_meaning", "首次建档，当前结果用于建立监控基线。") }}，本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条。
               {% else %}
               {% set _fresh = _summary.get("fresh_review_count", 0) %}
               {% set _backfill = _summary.get("historical_backfill_count", 0) %}

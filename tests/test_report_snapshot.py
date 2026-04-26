@@ -1091,6 +1091,68 @@ def test_full_report_analytics_has_dual_perspective(dual_snapshot_db, monkeypatc
     assert "window" in analytics
 
 
+def test_full_report_passes_window_review_ids_and_cumulative_reviews_to_excel(tmp_path, monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    snapshot = {
+        "run_id": 42,
+        "logical_date": "2026-04-24",
+        "snapshot_hash": "hash-window-ids",
+        "products_count": 1,
+        "reviews_count": 2,
+        "translated_count": 4,
+        "untranslated_count": 0,
+        "products": [{"sku": "S1", "name": "Window Product"}],
+        "reviews": [{"id": 2, "product_sku": "S1"}, {"id": 4, "product_sku": "S1"}],
+        "cumulative": {
+            "products": [{"sku": "S1", "name": "Window Product"}],
+            "reviews": [
+                {"id": 1, "product_sku": "S1"},
+                {"id": 2, "product_sku": "S1"},
+                {"id": 3, "product_sku": "S1"},
+                {"id": 4, "product_sku": "S1"},
+            ],
+        },
+    }
+    captured = {}
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "LLM_API_BASE", "")
+    monkeypatch.setattr(config, "LLM_API_KEY", "")
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_dual_report_analytics",
+        lambda snapshot, synced_labels=None: {
+            "mode": "baseline",
+            "report_semantics": "bootstrap",
+            "kpis": {},
+            "self": {},
+            "competitor": {},
+            "appendix": {},
+        },
+    )
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda run_id: (None, None))
+    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", lambda analytics, snapshot=None: {})
+    monkeypatch.setattr(
+        report_snapshot.report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: captured.update(
+            {"products": products, "reviews": reviews, "analytics": analytics}
+        ) or str(tmp_path / "report.xlsx"),
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_html,
+        "render_v3_html",
+        lambda snapshot, analytics, output_path=None: str(tmp_path / "report.html"),
+    )
+
+    report_snapshot.generate_full_report_from_snapshot(snapshot, send_email=False)
+
+    assert captured["analytics"]["window_review_ids"] == [2, 4]
+    assert [review["id"] for review in captured["reviews"]] == [1, 2, 3, 4]
+
+
 # ---------------------------------------------------------------------------
 # Tests for change/quiet modes using cumulative analytics (P007 Task 8)
 # ---------------------------------------------------------------------------
@@ -1267,6 +1329,8 @@ def test_build_change_digest_bootstrap_keeps_summary_and_warning_contract():
         },
         {
             "report_semantics": "bootstrap",
+            "baseline_day_index": 2,
+            "baseline_display_state": "building",
             "kpis": {"untranslated_count": 0},
             "self": {"top_negative_clusters": []},
         },
@@ -1277,6 +1341,9 @@ def test_build_change_digest_bootstrap_keeps_summary_and_warning_contract():
     assert digest["enabled"] is True
     assert digest["view_state"] == "bootstrap"
     assert digest["summary"]["ingested_review_count"] == 2
+    assert digest["summary"]["baseline_day_index"] == 2
+    assert digest["summary"]["baseline_display_state"] == "building"
+    assert digest["summary"]["window_meaning"] == "基线建立期第2天，本次入库用于补足基线，不按新增口径解释"
     assert set(digest["warnings"]) == {
         "translation_incomplete",
         "estimated_dates",

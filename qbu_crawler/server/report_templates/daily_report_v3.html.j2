@@ -30,13 +30,16 @@
   {% set trend_dimensions = trend_digest.dimensions or [] %}
   {% set default_view = trend_digest.default_view or "month" %}
   {% set default_dimension = trend_digest.default_dimension or "sentiment" %}
-  {% set trend_view_labels = {"week": "周", "month": "月", "year": "年"} %}
-  {% set trend_dimension_labels = {"sentiment": "舆情趋势", "issues": "问题趋势", "products": "产品趋势", "competition": "竞品趋势"} %}
+  {% set trend_view_labels = {"week": "近7天", "month": "近30天", "year": "近12个月"} %}
+  {% set trend_dimension_labels = {"sentiment": "评论声量与情绪", "issues": "问题结构", "products": "产品状态", "competition": "竞品对标"} %}
+  {% set trend_dimension_notes = trend_digest.dimension_notes or {} %}
   {% set risk_products = analytics.self.risk_products if analytics.self is defined else [] %}
   {% set gap_analysis = analytics.competitor.gap_analysis if analytics.competitor is defined else [] %}
   {% set benchmarks = analytics.competitor.benchmark_examples if analytics.competitor is defined else [] %}
   {% set own_review_rows = analytics.kpis.own_review_rows or 0 %}
   {% set competitor_review_rows = analytics.kpis.competitor_review_rows or 0 %}
+  {% set window_ingested_reviews = change_summary.get("ingested_review_count", analytics.kpis.get("ingested_review_rows", 0)) %}
+  {% set recent_review_rows = analytics.kpis.get("recently_published_count", change_summary.fresh_review_count or 0) %}
 
   <header class="kpi-bar">
     <div class="kpi-bar-inner">
@@ -90,6 +93,13 @@
         {% endfor %}
       </div>
 
+      <div class="review-scope-grid">
+        <div class="review-scope-item"><span>累计自有评论</span><strong>{{ own_review_rows }}</strong></div>
+        <div class="review-scope-item"><span>累计竞品评论</span><strong>{{ competitor_review_rows }}</strong></div>
+        <div class="review-scope-item"><span>本次入库评论</span><strong>{{ window_ingested_reviews or 0 }}</strong></div>
+        <div class="review-scope-item"><span>近30天评论</span><strong>{{ recent_review_rows or 0 }}</strong></div>
+      </div>
+
       {% if alert_level and alert_text %}
       <div class="alert-banner alert-{{ alert_level }}">{{ alert_text }}</div>
       {% endif %}
@@ -115,8 +125,8 @@
           </div>
           <div class="exec-block-body">
             <div class="exec-scope-row"><span class="exec-scope-label">报告模式</span><span class="exec-scope-value">{{ analytics.mode_display or mode }}</span></div>
-            <div class="exec-scope-row"><span class="exec-scope-label">自有产品</span><span class="exec-scope-value">{{ analytics.kpis.own_product_count or 0 }} · {{ own_review_rows }} 条评论</span></div>
-            <div class="exec-scope-row"><span class="exec-scope-label">竞品</span><span class="exec-scope-value">{{ analytics.kpis.competitor_product_count or 0 }} · {{ competitor_review_rows }} 条评论</span></div>
+            <div class="exec-scope-row"><span class="exec-scope-label">自有产品</span><span class="exec-scope-value">{{ analytics.kpis.own_product_count or 0 }} · 累计评论 {{ own_review_rows }} 条</span></div>
+            <div class="exec-scope-row"><span class="exec-scope-label">竞品</span><span class="exec-scope-value">{{ analytics.kpis.competitor_product_count or 0 }} · 累计评论 {{ competitor_review_rows }} 条</span></div>
             <div class="exec-scope-row"><span class="exec-scope-label">差评阈值</span><span class="exec-scope-value">≤ {{ threshold or 2 }} 星</span></div>
           </div>
         </article>
@@ -143,10 +153,12 @@
       <p class="section-sub">只看本期入库信号，不把全量现状和历史趋势混在一起。</p>
 
       {% if analytics.report_semantics == "bootstrap" or change_digest.view_state == "bootstrap" %}
+      {% set _baseline_day_index = change_summary.baseline_day_index or 1 %}
+      {% set _baseline_is_building = change_summary.baseline_display_state == "building" %}
       <div class="change-callout">
-        <span class="change-callout-kicker">Monitoring Start</span>
-        <h3>监控起点</h3>
-        <p>本次运行属于首次建档/基线切面，此处展示当前已入库样本和最值得优先关注的切面，不按增量口径解释。</p>
+        <span class="change-callout-kicker">{{ "Baseline Building" if _baseline_is_building else "Monitoring Start" }}</span>
+        <h3>{{ "基线建立期第" ~ _baseline_day_index ~ "天" if _baseline_is_building else "监控起点" }}</h3>
+        <p>{{ change_summary.window_meaning or "首次建档，当前结果用于建立监控基线" }}</p>
         <div class="change-bootstrap-meta">
           <span>本次入库 {{ change_summary.ingested_review_count or 0 }} 条评论</span>
           <span>新近 {{ change_summary.fresh_review_count or 0 }} / 补采 {{ change_summary.historical_backfill_count or 0 }}</span>
@@ -296,6 +308,7 @@
             <div class="trend-panel-header">
               <div>
                 <h3>{{ trend_view_labels.get(view, view) }} / {{ trend_dimension_labels.get(dimension, dimension) }}</h3>
+                {% if trend_dimension_notes.get(dimension) %}<p>{{ trend_dimension_notes.get(dimension) }}</p>{% endif %}
                 {% if trend_block.status_message %}<p>{{ trend_block.status_message }}</p>{% endif %}
               </div>
               <span class="badge badge-{{ 'low' if trend_block.status == 'ready' else 'medium' if trend_block.status == 'accumulating' else 'high' }}">{{ trend_block.status or "unknown" }}</span>
@@ -304,8 +317,15 @@
             {% set _kpi_ready = (trend_kpis.get("status") == "ready") and trend_kpis.get("items") %}
             {% set _chart_ready = trend_block.primary_chart and trend_block.primary_chart.get("status") == "ready" %}
             {% set _table_ready = (trend_table.get("status") == "ready") and trend_table.get("rows") %}
+            {% set _secondary = namespace(ready=false) %}
+            {% for sec_chart in trend_block.secondary_charts or [] %}
+              {% set sec_key = "trend_" ~ view ~ "_" ~ dimension ~ "_secondary_" ~ loop.index0 %}
+              {% if sec_chart.status == "ready" and sec_key in charts %}
+                {% set _secondary.ready = true %}
+              {% endif %}
+            {% endfor %}
 
-            {% if not (_kpi_ready or _chart_ready or _table_ready) %}
+            {% if not (_kpi_ready or _chart_ready or _table_ready or _secondary.ready) %}
             <div class="trend-status trend-status-{{ trend_block.status or 'degraded' }}">
               {{ trend_block.status_message or "样本暂未就绪，请继续积累日报样本。" }}
             </div>
@@ -334,6 +354,22 @@
               </div>
               {% elif trend_block.primary_chart and trend_block.primary_chart.get("status") != "ready" %}
               <div class="trend-chart-placeholder">主图数据积累中</div>
+              {% endif %}
+
+              {% if trend_block.secondary_charts %}
+              <div class="trend-secondary-grid">
+                {% for sec_chart in trend_block.secondary_charts %}
+                  {% set sec_key = "trend_" ~ view ~ "_" ~ dimension ~ "_secondary_" ~ loop.index0 %}
+                  {% if sec_chart.status == "ready" and sec_key in charts %}
+                  <div class="trend-secondary-chart">
+                    {% if sec_chart.title %}<h4>{{ sec_chart.title }}</h4>{% endif %}
+                    <canvas data-chart-config='{{ charts[sec_key] | tojson }}'></canvas>
+                  </div>
+                  {% elif sec_chart.status and sec_chart.status != "ready" %}
+                  <div class="trend-chart-placeholder">{{ sec_chart.title or "辅图" }}数据积累中</div>
+                  {% endif %}
+                {% endfor %}
+              </div>
               {% endif %}
 
               {% if _table_ready %}
@@ -508,6 +544,37 @@
         </div>
         {% endif %}
       </div>
+
+      {% if charts.heatmap and charts.heatmap.type == "table" %}
+      <div class="heatmap-container">
+        <h3>特征情感热力图</h3>
+        <table class="heatmap-table">
+          <thead>
+            <tr>
+              <th>产品 / 特征</th>
+              {% for x_label in charts.heatmap.x_labels or [] %}
+              <th>{{ x_label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for y_label in charts.heatmap.y_labels or [] %}
+            {% set row_index = loop.index0 %}
+            {% set row_values = charts.heatmap.z[row_index] if charts.heatmap.z and row_index < (charts.heatmap.z | length) else [] %}
+            <tr>
+              <th>{{ y_label }}</th>
+              {% for x_label in charts.heatmap.x_labels or [] %}
+              {% set value = row_values[loop.index0] if row_values and loop.index0 < (row_values | length) else 0 %}
+              <td class="heatmap-cell {% if value > 0.2 %}heatmap-cell-positive{% elif value < -0.2 %}heatmap-cell-negative{% else %}heatmap-cell-neutral{% endif %}">
+                {{ "%.2f"|format(value) }}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
 
       {% if snapshot.reviews %}
       <h3 class="mt-lg">评论明细</h3>

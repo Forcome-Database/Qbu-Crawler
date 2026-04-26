@@ -602,8 +602,6 @@ def build_chartjs_configs(analytics):
     for view, dimensions in (trend_digest.get("data") or {}).items():
         for dimension, payload in (dimensions or {}).items():
             payload = payload or {}
-            if payload.get("status") != "ready":
-                continue
             primary_chart = payload.get("primary_chart") or {}
             if (
                 primary_chart.get("status") == "ready"

@@ -565,8 +565,45 @@ def test_normalize_injects_kpi_cards():
     assert len(result["kpi_cards"]) == 7
     labels = [c["label"] for c in result["kpi_cards"]]
     assert "健康指数" in labels
-    assert "竞品差距指数" in labels
+    assert "总体竞品差距指数" in labels
     assert "样本覆盖率" in labels
+
+
+def test_normalize_labels_cumulative_and_window_review_metrics():
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 593,
+            "own_review_rows": 450,
+            "competitor_review_rows": 143,
+            "recently_published_count": 1,
+            "negative_review_rows": 12,
+            "translated_count": 593,
+        },
+        "change_digest": {
+            "summary": {
+                "ingested_review_count": 32,
+                "fresh_review_count": 1,
+            }
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+
+    result = normalize_deep_report_analytics(analytics)
+
+    labels = [card["label"] for card in result["kpi_cards"]]
+    assert "累计自有评论" in labels
+    assert "自有评论" not in labels
+
+    scope = {card["label"]: card["value"] for card in result["review_scope_cards"]}
+    assert scope["累计自有评论"] == 450
+    assert scope["累计竞品评论"] == 143
+    assert scope["本次入库评论"] == 32
+    assert scope["近30天评论"] == 1
+
+    own_card = next(card for card in result["kpi_cards"] if card["label"] == "累计自有评论")
+    assert "累计入库" in own_card["tooltip"]
+    assert "本期采集窗口" not in own_card["tooltip"]
 
 
 def test_normalize_injects_issue_cards():
@@ -1123,7 +1160,7 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result = normalize_deep_report_analytics(analytics)
-    gap_card = [c for c in result["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    gap_card = [c for c in result["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
     assert gap_card["value_class"] == "severity-high"
 
     # severity-medium: 30 < index <= 60
@@ -1151,7 +1188,7 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result2 = normalize_deep_report_analytics(analytics2)
-    gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
     assert gap_card2["value_class"] == "severity-medium"
 
     # no class: index <= 30
@@ -1179,8 +1216,38 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result3 = normalize_deep_report_analytics(analytics3)
-    gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "竞品差距指数"][0]
+    gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
     assert gap_card3["value_class"] == ""
+
+
+def test_competitive_gap_kpi_uses_overall_label_and_tooltip():
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 1,
+            "own_review_rows": 10,
+            "competitor_review_rows": 10,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "top_positive_themes": [],
+            "benchmark_examples": [],
+            "negative_opportunities": [],
+            "gap_analysis": [
+                {"competitor_positive_count": 40, "own_negative_count": 20,
+                 "competitor_total": 100, "own_total": 100},
+            ],
+        },
+    }
+
+    result = normalize_deep_report_analytics(analytics)
+    labels = [card["label"] for card in result["kpi_cards"]]
+    gap_card = next(card for card in result["kpi_cards"] if card["label"] == "总体竞品差距指数")
+
+    assert "竞品差距指数" not in labels
+    assert "跨维度平均" in gap_card["tooltip"]
 
 
 def test_baseline_mode_suppresses_deltas():

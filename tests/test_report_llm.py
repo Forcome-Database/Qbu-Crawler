@@ -956,6 +956,32 @@ def test_check_relation_claims_flags_non_top_sku_labeled_leading():
     assert any(".5 HP Dual Grind Grinder (#8)" in v for v in violations)
 
 
+def test_check_relation_claims_flags_priority_words_on_non_top_sku():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    result = {
+        "hero_headline": ".75 HP Grinder (#12) 是首要风险，应作为最值得优先处理的 SKU。",
+        "executive_bullets": [".75 HP Grinder (#12) 属于核心风险和重点风险。"],
+    }
+
+    violations = _check_relation_claims(result, analytics)
+
+    assert violations
+    assert any("首要风险" in v or "最值得优先" in v or "核心风险" in v or "重点风险" in v for v in violations)
+
+
+def test_check_relation_claims_allows_non_top_sku_without_relation_words():
+    from qbu_crawler.server.report_llm import _check_relation_claims
+
+    analytics = _relation_analytics()
+    result = {
+        "executive_bullets": [".75 HP Grinder (#12) 有 33.3 分风险，需要排查。"],
+    }
+
+    assert _check_relation_claims(result, analytics) == []
+
+
 def test_check_relation_claims_passes_when_top_sku_is_correct():
     from qbu_crawler.server.report_llm import _check_relation_claims
 
@@ -1094,6 +1120,47 @@ def test_build_insights_prompt_uses_own_rate_not_mixed_rate():
     assert "3.8%" in prompt or "3.7%" in prompt, "应叙述 own_negative_review_rate"
     # 不应直接出现 12% 的"自有差评率"误引用
     assert "自有差评率 12" not in prompt
+
+
+def test_build_insights_prompt_uses_disambiguated_gap_labels():
+    from qbu_crawler.server.report_llm import _build_insights_prompt
+
+    analytics = {
+        "kpis": {
+            "own_product_count": 2,
+            "competitor_product_count": 2,
+            "ingested_review_rows": 100,
+            "own_review_rows": 60,
+            "competitor_review_rows": 40,
+            "own_negative_review_rows": 6,
+            "own_negative_review_rate": 0.1,
+            "negative_review_rows": 8,
+            "health_index": 70,
+            "competitive_gap_index": 15,
+        },
+        "self": {"risk_products": [], "top_negative_clusters": [], "recommendations": []},
+        "competitor": {
+            "gap_analysis": [
+                {
+                    "label_display": "做工",
+                    "competitor_positive_rate": 20,
+                    "competitor_positive_count": 4,
+                    "competitor_total": 20,
+                    "own_negative_rate": 10,
+                    "own_negative_count": 6,
+                    "own_total": 60,
+                    "gap_rate": 15,
+                }
+            ],
+            "benchmark_examples": [],
+        },
+        "report_semantics": "incremental",
+    }
+
+    prompt = _build_insights_prompt(analytics)
+
+    assert "总体竞品差距指数" in prompt
+    assert "维度差距指数 15" in prompt
 
 
 def test_build_insights_prompt_bootstrap_does_not_trigger_low_sample_warning():

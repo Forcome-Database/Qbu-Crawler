@@ -205,6 +205,21 @@ def test_build_report_analytics_uses_baseline_mode_without_prior_runs(analytics_
     assert analytics["baseline_sample_days"] == 0
 
 
+def test_baseline_second_run_exposes_building_display_state(analytics_db):
+    from qbu_crawler.server.report_analytics import build_report_analytics
+
+    _create_daily_run("2026-03-28", status="completed", analytics_path="a.json")
+    run = _create_daily_run("2026-03-29", status="reporting")
+
+    analytics = build_report_analytics(_build_snapshot(run["id"], "2026-03-29"))
+
+    assert analytics["mode"] == "baseline"
+    assert analytics["report_semantics"] == "bootstrap"
+    assert analytics["baseline_sample_days"] == 1
+    assert analytics["baseline_day_index"] == 2
+    assert analytics["baseline_display_state"] == "building"
+
+
 def test_build_report_analytics_uses_incremental_mode_with_prior_runs(analytics_db):
     from qbu_crawler.server.report_analytics import build_report_analytics
 
@@ -1408,6 +1423,22 @@ def test_trend_digest_blocks_always_have_four_kpi_items():
                 f"不能含 \"—\"，当前: {labels}"
 
 
+def test_trend_digest_exposes_dimension_notes_and_contract():
+    from qbu_crawler.server.report_analytics import _build_trend_digest
+
+    snapshot = {"logical_date": "2026-04-25", "products": [], "reviews": []}
+    digest = _build_trend_digest(snapshot, labeled_reviews=[], trend_series={})
+
+    assert set(digest["dimension_notes"]) == {"sentiment", "issues", "products", "competition"}
+    assert "date_published" in digest["dimension_notes"]["sentiment"]
+    assert "date_published" in digest["dimension_notes"]["issues"]
+    assert "date_published" in digest["dimension_notes"]["competition"]
+    assert "scraped_at" in digest["dimension_notes"]["products"]
+    assert "价格" in digest["dimension_notes"]["products"]
+    assert "库存" in digest["dimension_notes"]["products"]
+    assert "可比样本不足" in digest["dimension_notes"]["competition"]
+
+
 def test_sentiment_trend_emits_two_secondary_charts_when_ready():
     """Phase 2 T9: sentiment dim 在 ready 时必须输出 2 张辅图：
     1) 自有差评率趋势 (line)
@@ -1602,6 +1633,55 @@ def test_product_trend_emits_two_secondary_charts_when_ready():
 
     for chart in secondary:
         assert set(chart.keys()) >= {"status", "chart_type", "title", "labels", "series"}
+
+
+def test_product_trend_table_includes_price_and_stock_state_changes():
+    from qbu_crawler.server.report_analytics import _build_product_trend
+    from datetime import date
+
+    logical_day = date(2026, 4, 24)
+    snapshot_products = [
+        {"sku": "SKU-A", "name": "Product A", "ownership": "own", "rating": 4.2,
+         "review_count": 20, "price": 12.0, "stock_status": "out_of_stock",
+         "scraped_at": "2026-04-24 10:00:00"},
+        {"sku": "SKU-B", "name": "Product B", "ownership": "own", "rating": 4.5,
+         "review_count": 10, "price": 20.0, "stock_status": "in_stock",
+         "scraped_at": "2026-04-24 10:00:00"},
+    ]
+    trend_series = [
+        {
+            "product_sku": "SKU-B",
+            "series": [
+                {"date": "2026-04-10", "price": 20.0, "rating": 4.5, "review_count": 10, "stock_status": "in_stock"},
+                {"date": "2026-04-20", "price": 20.0, "rating": 4.5, "review_count": 10, "stock_status": "in_stock"},
+            ],
+        },
+        {
+            "product_sku": "SKU-A",
+            "series": [
+                {"date": "2026-04-10", "price": 10.0, "rating": 4.0, "review_count": 18, "stock_status": "in_stock"},
+                {"date": "2026-04-15", "price": 11.0, "rating": 4.1, "review_count": 19, "stock_status": "in_stock"},
+                {"date": "2026-04-20", "price": 12.0, "rating": 4.2, "review_count": 20, "stock_status": "out_of_stock"},
+            ],
+        },
+    ]
+
+    result = _build_product_trend("month", logical_day, trend_series, snapshot_products)
+    columns = result["table"]["columns"]
+    rows = result["table"]["rows"]
+    product_a = next(row for row in rows if row["sku"] == "SKU-A")
+    secondary_titles = [chart.get("title", "") for chart in result["secondary_charts"]]
+
+    for column in ("当前价格", "当前库存", "价格变化次数", "库存变化次数", "最近库存变化"):
+        assert column in columns
+    assert product_a["current_price"] == 12.0
+    assert product_a["current_stock"] == "out_of_stock"
+    assert product_a["price_change_count"] == 2
+    assert product_a["stock_change_count"] == 1
+    assert "in_stock -> out_of_stock" in product_a["latest_stock_change"]
+    assert result["primary_chart"]["title"] == "产品状态 - Product A"
+    assert any("价格" in title and "Product A" in title for title in secondary_titles)
+    assert not any("库存" in title for title in secondary_titles)
 
 
 def test_product_trend_emits_comparison_with_focus_sku_rating():

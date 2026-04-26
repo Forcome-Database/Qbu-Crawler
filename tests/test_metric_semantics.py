@@ -419,17 +419,21 @@ def test_phase2_t9_no_kpis_v2_or_metric_new_keys():
             f"Phase 2 禁止引入第二套 KPI 命名 {pattern!r}，违规文件: {offending}"
 
 
-def test_phase2_t9_template_does_not_consume_secondary_charts_yet():
-    """Phase 2 T9 阶段：HTML 模板 / Excel / 邮件不得消费 secondary_charts 字段
-    （T9 仅扩数据层，T10 才落地展示层；提前消费会让 T9 单独验收时观测到模板异常）。"""
+def test_trend_template_consumes_secondary_charts_only_from_trend_digest():
+    """P1 起模板可以展示 secondary_charts，但只能通过 trend_block 读取。"""
     repo_root = _REPO_ROOT
-    targets_disallowed = [
-        "qbu_crawler/server/report_templates/",
-        "qbu_crawler/server/report.py",  # Excel 入口
-    ]
-    offending, _ = _git_grep(repo_root, "secondary_charts", targets_disallowed)
-    assert not offending, \
-        f"T9 阶段模板/Excel 不得消费 secondary_charts，违规: {offending}"
+    targets = ["qbu_crawler/server/report_templates/daily_report_v3.html.j2"]
+
+    consumers, _ = _git_grep(repo_root, "secondary_charts", targets)
+    assert consumers == ["qbu_crawler/server/report_templates/daily_report_v3.html.j2"]
+
+    offending, _ = _git_grep(
+        repo_root,
+        r"analytics\..*secondary_charts|_trend_series.*secondary_charts|window.*secondary_charts|cumulative_kpis.*secondary_charts",
+        targets,
+        use_extended_regex=True,
+    )
+    assert not offending, f"secondary_charts 必须经 trend_block 读取，违规: {offending}"
 
 
 def test_phase2_t9_template_does_not_bypass_trend_digest():
@@ -442,6 +446,15 @@ def test_phase2_t9_template_does_not_bypass_trend_digest():
         offending, _ = _git_grep(repo_root, pattern, targets, use_extended_regex=True)
         assert not offending, \
             f"模板禁止直接读 {pattern!r}（必须经 trend_digest），违规: {offending}"
+
+
+def test_report_outputs_do_not_expose_legacy_new_review_column():
+    repo_root = _REPO_ROOT
+    targets = ["qbu_crawler/server/report.py", "qbu_crawler/server/report_templates/"]
+
+    offending, _ = _git_grep(repo_root, "本次新增", targets)
+
+    assert not offending, f"生产报告代码不得再暴露旧列名“本次新增”，违规: {offending}"
 
 
 def test_phase2_t9_phase1_trend_digest_keys_unchanged():

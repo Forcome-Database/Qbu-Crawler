@@ -129,15 +129,19 @@ def _resolve_artifact_path(
         return str(raw)
 
     basename = raw.name
+    allow_pattern_fallback = bool(
+        run_id and kind and basename.startswith(f"workflow-run-{run_id}-")
+    )
     for root in _artifact_search_roots(stored_path):
         if basename:
             candidate = root / basename
             if candidate.is_file():
                 return str(candidate)
-        for pattern in _artifact_glob_patterns(run_id, kind):
-            matches = sorted(root.glob(pattern))
-            if matches:
-                return str(matches[-1])
+        if allow_pattern_fallback:
+            for pattern in _artifact_glob_patterns(run_id, kind):
+                matches = sorted(root.glob(pattern))
+                if matches:
+                    return str(matches[-1])
     return None
 
 
@@ -417,6 +421,16 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     report_semantics = analytics.get("report_semantics") or (
         "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
     )
+    baseline_day_index = analytics.get("baseline_day_index") or ((analytics.get("baseline_sample_days") or 0) + 1)
+    baseline_display_state = analytics.get("baseline_display_state") or (
+        "initial" if baseline_day_index == 1 else "building"
+    )
+    if report_semantics == "bootstrap" and baseline_display_state == "initial":
+        window_meaning = "首次建档，当前结果用于建立监控基线"
+    elif report_semantics == "bootstrap":
+        window_meaning = f"基线建立期第{baseline_day_index}天，本次入库用于补足基线，不按新增口径解释"
+    else:
+        window_meaning = "增量监控期，本区块聚焦本次运行变化"
 
     review_contexts = []
     for review in reviews:
@@ -581,6 +595,9 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
             "issue_escalated_count": len(issue_changes["escalated"]),
             "issue_improving_count": len(issue_changes["improving"]),
             "state_change_count": _state_change_count(),
+            "baseline_day_index": baseline_day_index,
+            "baseline_display_state": baseline_display_state,
+            "window_meaning": window_meaning,
         },
         "issue_changes": issue_changes,
         "product_changes": {

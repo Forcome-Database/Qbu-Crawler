@@ -310,7 +310,10 @@ def _has_bootstrap_language_violation(result, analytics):
 # LLM was observed claiming a non-top risk SKU is "领跑" or that unequal cluster
 # counts are "并列". _validate_insights only caps numbers; it does not verify
 # ordering/comparison claims, so we add a conservative post-check here.
-_RELATION_TOP_WORDS = ("领跑", "最高", "第一", "榜首", "首位", "登顶", "最严重")
+_RELATION_TOP_WORDS = (
+    "领跑", "最高", "第一", "榜首", "首位", "登顶", "最严重",
+    "核心风险", "首要风险", "重点风险", "最值得优先",
+)
 _RELATION_TIED_WORDS = ("并列", "打平", "持平")
 
 
@@ -525,7 +528,7 @@ def _build_insights_prompt(analytics, snapshot=None):
             f"（{g.get('competitor_positive_count', 0)}/{g.get('competitor_total', 0)}），"
             f"自有差评率 {g.get('own_negative_rate', 0)}%"
             f"（{g.get('own_negative_count', 0)}/{g.get('own_total', 0)}），"
-            f"差距指数 {g.get('gap_rate', 0)}"
+            f"维度差距指数 {g.get('gap_rate', 0)}"
         )
     gaps_text = "\n".join(gap_lines) if gap_lines else "  暂无明显差距"
 
@@ -557,6 +560,7 @@ def _build_insights_prompt(analytics, snapshot=None):
 - 自有评论 {own_reviews} 条，自有差评 {own_neg} 条（自有差评率 {own_rate * 100:.1f}%）
 - 全量评论 {total} 条（含竞品 {comp_reviews} 条），全量差评 {neg} 条
 - 健康指数：{health}/100
+- 总体竞品差距指数：{analytics.get("kpis", {}).get("competitive_gap_index", "暂无")}/100（跨维度平均）
 
 高风险产品：
 {risk_text}
@@ -567,7 +571,7 @@ def _build_insights_prompt(analytics, snapshot=None):
 当前改进建议（含具体症状）：
 {recs_text}
 
-竞品差距（基于比率对比，差距指数 0-100，越高差距越大）：
+竞品差距（基于比率对比，维度差距指数 0-100，越高差距越大）：
 {gaps_text}
 
 竞品高分样本（用于提炼竞品成功要素）：
@@ -581,7 +585,7 @@ def _build_insights_prompt(analytics, snapshot=None):
   "improvement_priorities": [
     {{"label_code": "上方问题列表中方括号内的标识（如 packaging_shipping）", "action": "引用该类别的具体高频表现和涉及产品，给出针对性改进建议（如：针对 XX 产品的 YY 问题(N条)，建议...）", "evidence_count": N}}
   ],
-  "competitive_insight": "一段竞品洞察，必须引用差距指数和比率数据",
+  "competitive_insight": "一段竞品洞察，必须引用维度差距指数和比率数据",
   "benchmark_takeaway": "一段话总结竞品做对了什么，可供自有产品借鉴的具体做法"
 }}
 

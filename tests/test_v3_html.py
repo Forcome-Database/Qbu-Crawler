@@ -321,6 +321,120 @@ class TestV3TemplateRender:
         assert 'id="tab-trends"' in html
         assert "Monitoring Start" in html
 
+    def test_baseline_second_day_uses_building_wording(self):
+        context = _render_context("baseline", "bootstrap", "bootstrap")
+        context["analytics"]["change_digest"]["summary"].update(
+            {
+                "baseline_day_index": 2,
+                "baseline_display_state": "building",
+                "window_meaning": "基线建立期第2天，本次入库用于补足基线，不按新增口径解释",
+            }
+        )
+
+        html = _template().render(**context)
+
+        assert "基线建立期第2天" in html
+        assert "首次建档" not in html
+        assert "今日新增" not in html
+
+    def test_overview_displays_review_scope_metrics(self):
+        context = _render_context("baseline", "bootstrap", "bootstrap")
+        context["analytics"]["kpis"].update({
+            "own_review_rows": 450,
+            "competitor_review_rows": 143,
+            "recently_published_count": 1,
+        })
+        context["analytics"]["change_digest"]["summary"]["ingested_review_count"] = 32
+        context["analytics"]["kpi_cards"] = [
+            {
+                "label": "累计自有评论",
+                "value": 450,
+                "tooltip": "累计入库的自有产品评论行数，包含历史补采",
+                "value_class": "",
+                "delta_display": "",
+                "delta_class": "",
+            }
+        ]
+
+        html = _template().render(**context)
+
+        assert "累计自有评论" in html
+        assert "累计竞品评论" in html
+        assert "本次入库评论" in html
+        assert "近30天评论" in html
+        assert "累计评论" in html
+        assert "本期采集窗口内入库的自有产品评论行数" not in html
+
+    def test_panorama_renders_heatmap_table(self):
+        context = _render_context("baseline", "bootstrap", "bootstrap")
+        context["charts"]["heatmap"] = {
+            "type": "table",
+            "x_labels": ["质量", "结构"],
+            "y_labels": ["SKU-A", "SKU-B", "SKU-C"],
+            "z": [[0.8, -0.2], [0.1, 0.5], [-0.7, 0.0]],
+        }
+
+        html = _template().render(**context)
+        heatmap_html = html[html.index("特征情感热力图"):]
+
+        assert "特征情感热力图" in html
+        assert "heatmap-table" in html
+        assert "SKU-A" in html
+        assert "<canvas" not in heatmap_html.split("</table>", 1)[0]
+
+    def test_trend_panel_renders_secondary_price_chart(self):
+        context = _render_context("incremental", "incremental", "active")
+        products_block = context["analytics"]["trend_digest"]["data"]["month"]["products"]
+        products_block.update({
+            "status": "accumulating",
+            "status_message": "产品趋势数据积累中",
+            "secondary_charts": [
+                {"status": "accumulating", "title": "重点 SKU 评论总数 - X"},
+                {
+                    "status": "ready",
+                    "chart_type": "line",
+                    "title": "重点 SKU 价格 - X",
+                    "labels": ["2026-04-01", "2026-04-02"],
+                    "series": [{"name": "价格", "data": [10, 12]}],
+                },
+            ],
+        })
+        context["charts"]["trend_month_products_secondary_1"] = {
+            "type": "line",
+            "data": {"labels": ["2026-04-01", "2026-04-02"], "datasets": []},
+        }
+
+        html = _template().render(**context)
+        panel = html[html.index('id="trend-panel-month-products"'):html.index('id="trend-panel-month-competition"')]
+
+        assert "重点 SKU 价格 - X" in panel
+        assert "trend-secondary-grid" in panel
+        assert "trend-status" not in panel
+
+    def test_trend_labels_use_business_names_and_explicit_windows(self):
+        context = _render_context("incremental", "incremental", "active")
+        context["analytics"]["trend_digest"]["dimension_notes"] = {
+            "sentiment": "基于评论发布时间 date_published 聚合，反映用户反馈发生时间。",
+            "issues": "基于评论发布时间和问题标签聚合，反映问题声量结构。",
+            "products": "基于产品快照 scraped_at 聚合，反映每日采集到的价格、库存、评分、评论总数状态。",
+            "competition": "基于可比样本聚合；样本不足时仅展示截面差异，不做强趋势判断。",
+        }
+
+        html = _template().render(**context)
+
+        assert "近7天" in html
+        assert "近30天" in html
+        assert "近12个月" in html
+        assert "评论声量与情绪" in html
+        assert "问题结构" in html
+        assert "产品状态" in html
+        assert "竞品对标" in html
+        assert "date_published" in html
+        assert "scraped_at" in html
+        assert ">周</button>" not in html
+        assert ">月</button>" not in html
+        assert ">年</button>" not in html
+
     def test_incremental_renders_grouped_change_content(self):
         html = _template().render(**_render_context("incremental", "incremental", "active"))
 
@@ -457,6 +571,26 @@ def test_email_fallback_bootstrap_uses_baseline_wording(monkeypatch):
     html = report_snapshot._render_full_email_html(snapshot, analytics)
     assert "新增评论" not in html, "bootstrap email fallback 仍写「新增评论」"
     assert "建立监控基线" in html or "监控起点" in html
+
+
+def test_email_bootstrap_second_day_uses_building_wording(monkeypatch):
+    from qbu_crawler.server import report_snapshot
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context",
+                        lambda run_id: (None, None))
+
+    analytics = _email_fallback_analytics("bootstrap", ingested=32, fresh=1, backfill=31)
+    analytics["change_digest"]["summary"].update({
+        "baseline_day_index": 2,
+        "baseline_display_state": "building",
+        "window_meaning": "基线建立期第2天，本次入库用于补足基线，不按新增口径解释",
+    })
+    snapshot = {"run_id": 0, "logical_date": "2026-04-24",
+                "reviews": [], "products": [], "untranslated_count": 0}
+    html = report_snapshot._render_full_email_html(snapshot, analytics)
+
+    assert "基线建立期第2天" in html
+    assert "首次建档" not in html
+    assert "今日新增" not in html
 
 
 def test_email_fallback_incremental_cites_fresh_and_backfill(monkeypatch):

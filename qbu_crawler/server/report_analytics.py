@@ -513,10 +513,13 @@ def detect_report_mode(run_id, logical_date):
 
     baseline_run_ids = [row["id"] for row in rows]
     baseline_sample_days = len(rows)
+    baseline_day_index = baseline_sample_days + 1
     return {
         "mode": "incremental" if baseline_sample_days >= 3 else "baseline",
         "baseline_run_ids": baseline_run_ids,
         "baseline_sample_days": baseline_sample_days,
+        "baseline_day_index": baseline_day_index,
+        "baseline_display_state": "initial" if baseline_day_index == 1 else "building",
     }
 
 
@@ -1525,7 +1528,7 @@ def _build_sentiment_trend(view, logical_day, labeled_reviews):
         return _empty_trend_dimension(
             "accumulating",
             "评论发布时间样本仍在积累，当前不足以形成稳定趋势。",
-            "舆情趋势",
+            "评论声量与情绪",
             ["日期", "评论量", "自有差评", "自有差评率", "健康分"],
             kpi_placeholder_labels=["窗口评论量", "自有差评数", "自有差评率", "有效时间点"],
         )
@@ -1563,7 +1566,7 @@ def _build_sentiment_trend(view, logical_day, labeled_reviews):
         primary_chart={
             "status": "ready",
             "chart_type": "line",
-            "title": "舆情趋势",
+            "title": "评论声量与情绪",
             "labels": labels,
             "series": [
                 {"name": "评论量", "data": review_counts},
@@ -1670,7 +1673,7 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
         return _empty_trend_dimension(
             "accumulating",
             "问题标签样本仍在积累，当前不足以形成稳定趋势。",
-            "问题趋势",
+            "问题结构",
             ["问题", "评论数", "影响产品数"],
             kpi_placeholder_labels=["问题信号数", "活跃问题数", "头号问题", "涉及产品数"],
         )
@@ -1689,7 +1692,7 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
         return _empty_trend_dimension(
             "accumulating",
             "问题标签时间分布仍在积累，当前不足以形成年度趋势。",
-            "问题趋势",
+            "问题结构",
             ["问题", "评论数", "影响产品数"],
             kpi_placeholder_labels=["问题信号数", "活跃问题数", "头号问题", "涉及产品数"],
         )
@@ -1721,7 +1724,7 @@ def _build_issue_trend(view, logical_day, labeled_reviews):
         primary_chart={
             "status": "ready",
             "chart_type": "line",
-            "title": "问题趋势",
+            "title": "问题结构",
             "labels": labels,
             "series": [
                 {
@@ -1813,6 +1816,46 @@ def _build_issue_comparison(labels, ranked_codes, counts_by_label):
     return comparison
 
 
+def _count_trend_value_changes(points, key):
+    values = [point.get(key) for point in points if point.get(key) not in (None, "")]
+    if len(values) < 2:
+        return 0
+    changes = 0
+    previous = values[0]
+    for value in values[1:]:
+        if value != previous:
+            changes += 1
+        previous = value
+    return changes
+
+
+def _latest_stock_change(points):
+    previous = None
+    latest = ""
+    for point in points:
+        current = point.get("stock_status")
+        if current in (None, ""):
+            continue
+        if previous is not None and current != previous:
+            latest = f"{point.get('date') or point.get('bucket') or ''}: {previous} -> {current}"
+        previous = current
+    return latest
+
+
+def _score_product_trend_series(points):
+    if not points:
+        return 0
+    stock_changes = _count_trend_value_changes(points, "stock_status")
+    price_changes = _count_trend_value_changes(points, "price")
+    rating_changes = _count_trend_value_changes(points, "rating")
+    return (
+        (5 if stock_changes else 0)
+        + (4 if price_changes else 0)
+        + (3 if rating_changes else 0)
+        + len(points)
+    )
+
+
 def _build_product_trend(view, logical_day, trend_series, snapshot_products):
     labels, bucket_for = _trend_bucket_labels(logical_day, view)
     own_products = [product for product in snapshot_products if product.get("ownership") == "own"]
@@ -1829,21 +1872,43 @@ def _build_product_trend(view, logical_day, trend_series, snapshot_products):
             if not bucket:
                 continue
             filtered.append({**point, "bucket": bucket})
+        filtered = sorted(filtered, key=lambda item: item.get("date") or item.get("bucket") or "")
+        price_change_count = _count_trend_value_changes(filtered, "price")
+        stock_change_count = _count_trend_value_changes(filtered, "stock_status")
+        rating_change_count = _count_trend_value_changes(filtered, "rating")
         rows.append(
             {
                 "sku": sku,
                 "name": product.get("name") or sku,
+                "current_price": product.get("price"),
+                "current_stock": product.get("stock_status") or "unknown",
                 "current_rating": product.get("rating"),
                 "current_review_count": product.get("review_count"),
                 "snapshot_points": len(filtered),
+                "price_change_count": price_change_count,
+                "stock_change_count": stock_change_count,
+                "latest_stock_change": _latest_stock_change(filtered),
                 "scraped_at": product.get("scraped_at"),
             }
         )
-        if ready_series is None and len(filtered) >= 2:
-            ready_series = {
+        if len(filtered) >= 2:
+            candidate = {
                 "product_name": product.get("name") or sku,
                 "points": filtered,
+                "score": _score_product_trend_series(filtered),
             }
+            if ready_series is None or candidate["score"] > ready_series["score"]:
+                ready_series = candidate
+
+    state_change_sku_count = sum(
+        1 for row in rows
+        if row["price_change_count"] or row["stock_change_count"]
+    )
+    total_snapshot_points = sum(row["snapshot_points"] for row in rows)
+    product_table_columns = [
+        "SKU", "产品", "当前价格", "当前库存", "当前评分", "当前评论总数",
+        "快照点数", "价格变化次数", "库存变化次数", "最近库存变化", "最新抓取时间",
+    ]
 
     if ready_series is None:
         return _trend_dimension_payload(
@@ -1854,20 +1919,20 @@ def _build_product_trend(view, logical_day, trend_series, snapshot_products):
                 "items": [
                     {"label": "跟踪产品数", "value": len(own_products)},
                     {"label": "有快照产品数", "value": sum(1 for row in rows if row["snapshot_points"] > 0)},
-                    {"label": "可成图产品数", "value": 0},
-                    {"label": "快照点数", "value": sum(row["snapshot_points"] for row in rows)},
+                    {"label": "状态变化SKU数", "value": state_change_sku_count},
+                    {"label": "快照点数", "value": total_snapshot_points},
                 ],
             },
             primary_chart={
                 "status": "accumulating",
                 "chart_type": "line",
-                "title": "产品评分趋势",
+                "title": "产品状态",
                 "labels": [],
                 "series": [],
             },
             table={
                 "status": "ready" if rows else "accumulating",
-                "columns": ["SKU", "产品", "当前评分", "当前评论总数", "快照点数", "最新抓取时间"],
+                "columns": product_table_columns,
                 "rows": rows,
             },
         )
@@ -1886,14 +1951,14 @@ def _build_product_trend(view, logical_day, trend_series, snapshot_products):
             "items": [
                 {"label": "跟踪产品数", "value": len(own_products)},
                 {"label": "有快照产品数", "value": sum(1 for row in rows if row["snapshot_points"] > 0)},
-                {"label": "可成图产品数", "value": 1},
+                {"label": "状态变化SKU数", "value": state_change_sku_count},
                 {"label": "快照点数", "value": len(ready_series["points"])},
             ],
         },
         primary_chart={
             "status": "ready",
             "chart_type": "line",
-            "title": f"产品趋势 - {ready_series['product_name']}",
+            "title": f"产品状态 - {ready_series['product_name']}",
             "labels": labels,
             "series": [
                 {"name": "评分", "data": [bucket_to_rating[label] for label in labels]},
@@ -1906,7 +1971,7 @@ def _build_product_trend(view, logical_day, trend_series, snapshot_products):
         comparison=_build_product_comparison(ready_series),
         table={
             "status": "ready",
-            "columns": ["SKU", "产品", "当前评分", "当前评论总数", "快照点数", "最新抓取时间"],
+            "columns": product_table_columns,
             "rows": rows,
         },
     )
@@ -2021,7 +2086,7 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
         return _empty_trend_dimension(
             "accumulating",
             "自有与竞品的可比样本仍在积累，当前不足以形成稳定趋势。",
-            "竞品趋势",
+            "竞品对标",
             ["日期", "自有均分", "竞品均分", "自有差评率", "竞品好评率"],
             kpi_placeholder_labels=["可比时间点", "最新评分差", "最新自有差评率", "最新竞品好评率"],
         )
@@ -2085,7 +2150,7 @@ def _build_competition_trend(view, logical_day, labeled_reviews):
         primary_chart={
             "status": "ready" if chart_ready else "accumulating",
             "chart_type": "line",
-            "title": "竞品趋势",
+            "title": "竞品对标",
             "labels": labels if chart_ready else [],
             "series": [
                 {"name": "自有均分", "data": own_avg_rating},
@@ -2212,6 +2277,12 @@ def _build_trend_digest(snapshot, labeled_reviews, trend_series):
         "default_view": "month",
         "default_dimension": "sentiment",
         "data": data,
+        "dimension_notes": {
+            "sentiment": "基于评论发布时间 date_published 聚合，反映用户反馈发生时间。",
+            "issues": "基于评论发布时间 date_published 和问题标签聚合，反映问题声量结构。",
+            "products": "基于产品快照 scraped_at 聚合，反映每日采集到的价格、库存、评分、评论总数状态。",
+            "competition": "基于评论发布时间 date_published 和可比样本聚合；可比样本不足时仅展示截面差异，不做强趋势判断。",
+        },
         # 修 9: 年视图基于 date_published_parsed（评论发布时间），跨越历史数年；
         # 用户容易误以为是"监控系统已运行 N 年"，所以给出语义提示。
         "view_notes": {
@@ -2338,6 +2409,8 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
         "is_bootstrap": mode_info["mode"] == "baseline",
         "baseline_run_ids": mode_info["baseline_run_ids"],
         "baseline_sample_days": mode_info["baseline_sample_days"],
+        "baseline_day_index": mode_info["baseline_day_index"],
+        "baseline_display_state": mode_info["baseline_display_state"],
         "taxonomy_version": TAXONOMY_VERSION,
         "label_mode": config.REPORT_LABEL_MODE,
         "generated_at": config.now_shanghai().isoformat(),

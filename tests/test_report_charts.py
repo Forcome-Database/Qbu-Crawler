@@ -401,9 +401,8 @@ def test_build_chartjs_configs_emits_secondary_chart_keys():
     assert configs["trend_month_sentiment_secondary_0"]["type"] == "line"
 
 
-def test_build_chartjs_configs_skips_secondary_when_primary_not_ready():
-    """primary 不 ready 时连同辅图整体跳过（与 Phase 1 老逻辑一致：
-    模板 chart_ready 判断会先看 trend_block.status，再看 chart 自身 status）"""
+def test_build_chartjs_configs_emits_ready_secondary_when_primary_not_ready():
+    """父块/主图仍在积累时，ready 的辅图也必须生成配置。"""
     from qbu_crawler.server.report_charts import build_chartjs_configs
 
     analytics = {
@@ -429,9 +428,9 @@ def test_build_chartjs_configs_skips_secondary_when_primary_not_ready():
         }
     }
     configs = build_chartjs_configs(analytics)
-    # 块 accumulating → 主图与辅图都不出
+
     assert "trend_week_sentiment" not in configs
-    assert "trend_week_sentiment_secondary_0" not in configs
+    assert "trend_week_sentiment_secondary_0" in configs
 
 
 def test_build_chartjs_configs_supports_stacked_bar_secondary():

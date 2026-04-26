@@ -751,17 +751,14 @@ def _generate_analytical_excel(
     ws1 = wb.active
     ws1.title = "评论明细"
 
-    # Determine whether to add the "本次新增" column (Correction H)
+    # Determine review window scope (Correction H)
     _window_review_ids = set(analytics.get("window_review_ids") or [])
 
     review_headers = [
-        "ID", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
+        "ID", "窗口归属", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
         "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
         "特征短语", "洞察", "评论时间", "照片",
     ]
-    if _window_review_ids:
-        # Insert "本次新增" as the second column (after "ID")
-        review_headers.insert(1, "本次新增")
 
     _write_headers(ws1, review_headers)
     images_col = len(review_headers)  # "照片" column (1-indexed)
@@ -827,6 +824,7 @@ def _generate_analytical_excel(
 
         _row = [
             r.get("id"),
+            "本次入库" if r.get("id") in _window_review_ids else "历史累计",
             r.get("product_name"),
             r.get("product_sku"),
             _xl_display(r.get("ownership"), _OWNERSHIP_DISPLAY),
@@ -844,10 +842,6 @@ def _generate_analytical_excel(
             r.get("date_published_parsed") or r.get("date_published") or "",
             "",  # placeholder for images column
         ]
-        if _window_review_ids:
-            # Insert "本次新增" flag after "ID" (index 0)
-            _is_new = "是" if r.get("id") in _window_review_ids else ""
-            _row.insert(1, _is_new)
         ws1.append(_row)
 
         # Embed images as thumbnails (same approach as legacy Excel)
@@ -1074,14 +1068,13 @@ def _generate_analytical_excel(
         return None
 
     def _review_new_flag(review):
+        in_window = review.get("id") in window_review_ids
         if report_semantics == "bootstrap":
             published = _parse_review_datetime(review)
-            if published and published >= fresh_cutoff:
-                return "新近"
-            return "补采"
-        if review.get("id") in window_review_ids:
-            return "新增"
-        return ""
+            window_label = "本次入库" if in_window else "历史累计"
+            freshness_label = "新近" if published and published >= fresh_cutoff else "补采"
+            return f"{window_label}·{freshness_label}"
+        return "本次入库" if in_window else "历史累计"
 
     def _labels_text(review):
         return ", ".join(
@@ -1133,7 +1126,7 @@ def _generate_analytical_excel(
     ws1 = wb.active
     ws1.title = "评论明细"
     review_headers = [
-        "ID", "本次新增", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
+        "ID", "窗口归属", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
         "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)", "特征短语", "洞察", "评论时间", "照片",
     ]
     _write_headers(ws1, review_headers)
@@ -1250,11 +1243,26 @@ def _generate_analytical_excel(
 
     ws_change = wb.create_sheet("今日变化")
     _write_headers(ws_change, ["模块", "项目", "值", "说明"])
+    baseline_day_index = digest_summary.get("baseline_day_index") or 1
+    baseline_display_state = digest_summary.get("baseline_display_state") or (
+        "initial" if baseline_day_index == 1 else "building"
+    )
+    if report_semantics == "bootstrap" and baseline_display_state == "building":
+        change_status_label = f"基线建立期第{baseline_day_index}天"
+    elif report_semantics == "bootstrap":
+        change_status_label = "监控起点"
+    else:
+        change_status_label = "今日变化"
+    change_status_description = digest_summary.get("window_meaning") or (
+        "首次建档，当前结果用于建立监控基线。"
+        if report_semantics == "bootstrap"
+        else "聚焦本次运行中需要优先关注的新增变化。"
+    )
     ws_change.append([
         "状态",
-        "监控起点" if report_semantics == "bootstrap" else "今日变化",
+        change_status_label,
         change_digest.get("view_state") or report_semantics,
-        "首次建档，当前结果用于建立监控基线。" if report_semantics == "bootstrap" else "聚焦本次运行中需要优先关注的新增变化。",
+        change_status_description,
     ])
     for label, value in (
         ("本次入库评论", digest_summary.get("ingested_review_count", 0)),
@@ -1338,6 +1346,7 @@ def _generate_analytical_excel(
     _auto_widths(ws3)
 
     ws4 = wb.create_sheet("趋势数据")
+    ws4.append(["产品快照明细"])
     _write_headers(ws4, ["日期", "SKU", "产品名称", "价格", "评分", "评论数", "库存状态"])
     for trend in analytics.get("_trend_series") or []:
         for point in trend.get("series") or []:
@@ -1350,6 +1359,84 @@ def _generate_analytical_excel(
                 point.get("review_count"),
                 _xl_display(point.get("stock_status"), _STOCK_DISPLAY),
             ])
+
+    trend_digest = analytics.get("trend_digest") or {}
+    trend_data = trend_digest.get("data") or {}
+    trend_view_labels = {"week": "近7天", "month": "近30天", "year": "近12个月"}
+    trend_dimension_labels = {
+        "sentiment": "评论声量与情绪",
+        "issues": "问题结构",
+        "products": "产品状态",
+        "competition": "竞品对标",
+    }
+    trend_table_column_keys = {
+        "日期": "bucket",
+        "评论量": "review_count",
+        "自有差评": "own_negative_count",
+        "自有差评率": "own_negative_rate",
+        "健康分": "health_index",
+        "问题": "label_display",
+        "评论数": "review_count",
+        "影响产品数": "affected_product_count",
+        "SKU": "sku",
+        "产品": "name",
+        "当前价格": "current_price",
+        "当前库存": "current_stock",
+        "当前评分": "current_rating",
+        "当前评论总数": "current_review_count",
+        "快照点数": "snapshot_points",
+        "价格变化次数": "price_change_count",
+        "库存变化次数": "stock_change_count",
+        "最近库存变化": "latest_stock_change",
+        "最新抓取时间": "scraped_at",
+        "自有均分": "own_avg_rating",
+        "竞品均分": "competitor_avg_rating",
+        "竞品好评率": "competitor_positive_rate",
+    }
+    dimension_notes = trend_digest.get("dimension_notes") or {}
+    for view in trend_digest.get("views") or []:
+        dimensions = trend_data.get(view) or {}
+        for dimension in trend_digest.get("dimensions") or []:
+            block = dimensions.get(dimension) or {}
+            title = f"{trend_view_labels.get(view, view)} / {trend_dimension_labels.get(dimension, dimension)}"
+            ws4.append([])
+            ws4.append([title, block.get("status") or "", block.get("status_message") or "", dimension_notes.get(dimension, "")])
+
+            kpis = (block.get("kpis") or {}).get("items") or []
+            if kpis:
+                ws4.append([f"{title} / KPI"])
+                ws4.append(["类型", "指标", "值", "说明"])
+                for item in kpis:
+                    ws4.append(["KPI", item.get("label") or "", item.get("value"), ""])
+
+            primary = block.get("primary_chart") or {}
+            if primary:
+                ws4.append([f"{title} / 主图", primary.get("title") or "", primary.get("status") or ""])
+                for series in primary.get("series") or []:
+                    for label, value in zip(primary.get("labels") or [], series.get("data") or []):
+                        ws4.append(["主图", label, series.get("name") or "", value])
+
+            for sec_chart in block.get("secondary_charts") or []:
+                ws4.append([f"{title} / 辅图：{sec_chart.get('title') or ''}", sec_chart.get("status") or ""])
+                for series in sec_chart.get("series") or []:
+                    for label, value in zip(sec_chart.get("labels") or [], series.get("data") or []):
+                        ws4.append(["辅图", label, series.get("name") or "", value])
+
+            table = block.get("table") or {}
+            if table.get("columns"):
+                ws4.append([f"{title} / 表格"])
+                ws4.append(list(table.get("columns") or []))
+                columns = list(table.get("columns") or [])
+                for row in table.get("rows") or []:
+                    if isinstance(row, dict):
+                        ws4.append([
+                            row.get(column)
+                            if column in row
+                            else row.get(trend_table_column_keys.get(column, column), "")
+                            for column in columns
+                        ])
+                    else:
+                        ws4.append(list(row))
 
     _auto_widths(ws4)
 

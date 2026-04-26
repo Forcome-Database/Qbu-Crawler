@@ -234,10 +234,81 @@ class TestExcelWorkbook:
         wb = openpyxl.load_workbook(result)
         ws = wb["趋势数据"]
 
-        assert ws.max_row == 3
-        assert ws.cell(row=2, column=1).value == "2026-04-08"
-        assert ws.cell(row=3, column=1).value == "2026-04-09"
-        assert ws.cell(row=2, column=2).value == "S1"
+        text = _sheet_text(ws)
+        assert "产品快照明细" in text
+        assert "2026-04-08" in text
+        assert "2026-04-09" in text
+        assert "S1" in text
+
+    def test_trend_sheet_exports_trend_digest_business_blocks(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        def block(label):
+            return {
+                "status": "ready",
+                "status_message": "",
+                "kpis": {"status": "ready", "items": [{"label": f"{label} KPI", "value": 1}]},
+                "primary_chart": {
+                    "status": "ready",
+                    "title": f"{label} 主图",
+                    "labels": ["2026-04-01"],
+                    "series": [{"name": "指标", "data": [1]}],
+                },
+                "secondary_charts": [],
+                "table": {"status": "ready", "columns": ["项目", "值"], "rows": [{"项目": label, "值": 1}]},
+            }
+
+        product_block = block("产品状态")
+        product_block["secondary_charts"] = [
+            {
+                "status": "ready",
+                "title": "重点 SKU 价格 - P1",
+                "labels": ["2026-04-01"],
+                "series": [{"name": "价格", "data": [10]}],
+            }
+        ]
+        product_block["table"] = {
+            "status": "ready",
+            "columns": ["SKU", "当前库存", "库存变化次数"],
+            "rows": [{"sku": "S1", "current_stock": "out_of_stock", "stock_change_count": 1}],
+        }
+        analytics = _analytics(
+            trend_digest={
+                "views": ["month"],
+                "dimensions": ["sentiment", "issues", "products", "competition"],
+                "dimension_notes": {
+                    "sentiment": "基于评论发布时间 date_published 聚合。",
+                    "issues": "基于评论发布时间 date_published 和问题标签聚合。",
+                    "products": "基于产品快照 scraped_at 聚合，反映价格和库存。",
+                    "competition": "基于评论发布时间 date_published 和可比样本聚合。",
+                },
+                "data": {
+                    "month": {
+                        "sentiment": block("评论声量与情绪"),
+                        "issues": block("问题结构"),
+                        "products": product_block,
+                        "competition": block("竞品对标"),
+                    }
+                },
+            },
+            _trend_series=[],
+        )
+
+        result = generate_excel([], [], analytics=analytics, output_path=str(tmp_path / "trend_digest_blocks.xlsx"))
+        wb = openpyxl.load_workbook(result)
+        text = _sheet_text(wb["趋势数据"])
+
+        assert "近30天 / 评论声量与情绪" in text
+        assert "近30天 / 问题结构" in text
+        assert "近30天 / 产品状态" in text
+        assert "近30天 / 竞品对标" in text
+        assert "重点 SKU 价格 - P1" in text
+        assert "库存变化次数" in text
+        assert "产品快照明细" in text
+        assert "date_published" in text
+        assert "scraped_at" in text
 
     def test_today_change_sheet_bootstrap_shows_monitoring_start(self, tmp_path, monkeypatch):
         from qbu_crawler import config
@@ -269,6 +340,33 @@ class TestExcelWorkbook:
         text = _sheet_text(wb["今日变化"])
 
         assert "监控起点" in text
+        assert "今日新增" not in text
+
+    def test_today_change_sheet_bootstrap_second_day_uses_building_wording(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        base_digest = _analytics("bootstrap")["change_digest"]
+        analytics = _analytics(
+            report_semantics="bootstrap",
+            change_digest={
+                **base_digest,
+                "summary": {
+                    **base_digest["summary"],
+                    "baseline_day_index": 2,
+                    "baseline_display_state": "building",
+                    "window_meaning": "基线建立期第2天，本次入库用于补足基线，不按新增口径解释",
+                },
+            },
+        )
+
+        result = generate_excel([], [], analytics=analytics, output_path=str(tmp_path / "bootstrap_day2.xlsx"))
+        wb = openpyxl.load_workbook(result)
+        text = _sheet_text(wb["今日变化"])
+
+        assert "基线建立期第2天" in text
+        assert "首次建档" not in text
         assert "今日新增" not in text
 
     def test_product_overview_collected_reviews_uses_real_review_aggregate(self, tmp_path, monkeypatch):
@@ -338,12 +436,13 @@ class TestExcelWorkbook:
         bootstrap_wb = openpyxl.load_workbook(bootstrap_result)
         bootstrap_ws = bootstrap_wb["评论明细"]
         bootstrap_headers = [bootstrap_ws.cell(row=1, column=c).value for c in range(1, bootstrap_ws.max_column + 1)]
-        new_col = bootstrap_headers.index("本次新增") + 1
+        scope_col = bootstrap_headers.index("窗口归属") + 1
         impact_col = bootstrap_headers.index("影响类别") + 1
         headline_cn_col = bootstrap_headers.index("标题(中文)") + 1
 
-        assert bootstrap_ws.cell(row=2, column=new_col).value == "新近"
-        assert bootstrap_ws.cell(row=3, column=new_col).value == "补采"
+        assert "本次新增" not in bootstrap_headers
+        assert bootstrap_ws.cell(row=2, column=scope_col).value == "历史累计·新近"
+        assert bootstrap_ws.cell(row=3, column=scope_col).value == "历史累计·补采"
         assert bootstrap_ws.cell(row=3, column=impact_col).value == "电机损坏"
         assert bootstrap_ws.cell(row=3, column=headline_cn_col).value == "Motor failed"
 
@@ -357,7 +456,43 @@ class TestExcelWorkbook:
         incremental_wb = openpyxl.load_workbook(incremental_result)
         incremental_ws = incremental_wb["评论明细"]
         incremental_headers = [incremental_ws.cell(row=1, column=c).value for c in range(1, incremental_ws.max_column + 1)]
-        incremental_new_col = incremental_headers.index("本次新增") + 1
+        incremental_scope_col = incremental_headers.index("窗口归属") + 1
 
-        assert incremental_ws.cell(row=2, column=incremental_new_col).value in ("", None)
-        assert incremental_ws.cell(row=3, column=incremental_new_col).value == "新增"
+        assert "本次新增" not in incremental_headers
+        assert incremental_ws.cell(row=2, column=incremental_scope_col).value == "历史累计"
+        assert incremental_ws.cell(row=3, column=incremental_scope_col).value == "本次入库"
+
+    def test_review_sheet_window_scope_distinguishes_bootstrap_window_ids(self, tmp_path, monkeypatch):
+        from qbu_crawler import config
+
+        monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+
+        reviews = [
+            {"id": 1, "product_name": "P1", "product_sku": "S1", "author": "u1",
+             "headline": "Recent historical", "body": "B1", "headline_cn": "", "body_cn": "",
+             "rating": 5.0, "date_published_parsed": "2026-04-20", "ownership": "own",
+             "sentiment": "positive", "images": None, "translate_status": "done",
+             "analysis_labels": "[]", "analysis_features": "[]"},
+            {"id": 2, "product_name": "P1", "product_sku": "S1", "author": "u2",
+             "headline": "Recent window", "body": "B2", "headline_cn": "", "body_cn": "",
+             "rating": 4.0, "date_published_parsed": "2026-04-21", "ownership": "own",
+             "sentiment": "positive", "images": None, "translate_status": "done",
+             "analysis_labels": "[]", "analysis_features": "[]"},
+        ]
+        analytics = _analytics(report_semantics="bootstrap", window_review_ids=[2])
+
+        result = generate_excel(
+            [],
+            reviews,
+            report_date=datetime(2026, 4, 23),
+            analytics=analytics,
+            output_path=str(tmp_path / "bootstrap-window-scope.xlsx"),
+        )
+        wb = openpyxl.load_workbook(result)
+        ws = wb["评论明细"]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        scope_col = headers.index("窗口归属") + 1
+
+        assert "本次新增" not in headers
+        assert ws.cell(row=2, column=scope_col).value == "历史累计·新近"
+        assert ws.cell(row=3, column=scope_col).value == "本次入库·新近"

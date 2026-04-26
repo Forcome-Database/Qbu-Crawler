@@ -367,12 +367,13 @@ def test_trend_data_sheet_with_data(tmp_path, monkeypatch):
 
     wb = openpyxl.load_workbook(path)
     ws = wb["趋势数据"]
-    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    headers = [ws.cell(row=2, column=c).value for c in range(1, ws.max_column + 1)]
+    assert ws.cell(row=1, column=1).value == "产品快照明细"
     assert "日期" in headers
     assert "SKU" in headers
-    assert ws.cell(row=2, column=1).value == "2026-04-01"
+    assert ws.cell(row=3, column=1).value == "2026-04-01"
     sku_col = headers.index("SKU") + 1
-    assert ws.cell(row=2, column=sku_col).value == "SKU-1"
+    assert ws.cell(row=3, column=sku_col).value == "SKU-1"
 
 
 def test_trend_data_sheet_empty_still_has_header(tmp_path, monkeypatch):
@@ -385,9 +386,8 @@ def test_trend_data_sheet_empty_still_has_header(tmp_path, monkeypatch):
 
     wb = openpyxl.load_workbook(path)
     ws = wb["趋势数据"]
-    assert ws.cell(row=1, column=1).value == "日期"
-    # Only the header row (no data rows, no "数据积累中" note in new format)
-    assert ws.max_row == 1
+    assert ws.cell(row=1, column=1).value == "产品快照明细"
+    assert ws.cell(row=2, column=1).value == "日期"
 
 
 def test_analytical_excel_none_analytics_falls_back_to_legacy(tmp_path, monkeypatch):
@@ -509,8 +509,8 @@ def test_generate_excel_calls_parallel_prefetch(monkeypatch, tmp_path):
     assert set(prefetch_calls[0]) == {"https://img.example.com/a.jpg", "https://img.example.com/b.jpg"}
 
 
-def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
-    """'本次新增' column is present when window_review_ids is set; review id=2 is marked '新增'."""
+def test_excel_has_window_scope_column_when_window_ids_present(tmp_path, monkeypatch):
+    """窗口归属 column is present when window_review_ids is set; review id=2 is marked 本次入库."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
     import openpyxl
 
@@ -567,25 +567,24 @@ def test_excel_has_new_column_when_window_ids_present(tmp_path, monkeypatch):
     ws = wb["评论明细"]
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
 
-    # Column header must be present
-    assert "本次新增" in headers, f"'本次新增' not found in headers: {headers}"
+    assert "窗口归属" in headers, f"'窗口归属' not found in headers: {headers}"
+    assert "本次新增" not in headers
 
-    new_col = headers.index("本次新增") + 1
+    scope_col = headers.index("窗口归属") + 1
     id_col = headers.index("ID") + 1
 
-    # Collect (id, new_flag) for all data rows
     rows_data = {}
     for row in range(2, ws.max_row + 1):
         rid = ws.cell(row=row, column=id_col).value
-        flag = ws.cell(row=row, column=new_col).value
+        flag = ws.cell(row=row, column=scope_col).value
         if rid is not None:
             rows_data[rid] = flag
-    assert rows_data.get(2) == "新增", f"Review id=2 should be marked '新增', got {rows_data.get(2)!r}"
-    assert rows_data.get(1) in ("", None), f"Review id=1 should be empty, got {rows_data.get(1)!r}"
+    assert rows_data.get(2) == "本次入库", f"Review id=2 should be marked '本次入库', got {rows_data.get(2)!r}"
+    assert rows_data.get(1) == "历史累计", f"Review id=1 should be marked '历史累计', got {rows_data.get(1)!r}"
 
 
 def test_excel_classifies_bootstrap_rows_when_window_ids_absent(tmp_path, monkeypatch):
-    """'本次新增' column stays present and uses bootstrap semantics when analytics has no window_review_ids."""
+    """窗口归属 column stays present and uses bootstrap semantics when analytics has no window_review_ids."""
     monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
 
     reviews = [
@@ -623,6 +622,7 @@ def test_excel_classifies_bootstrap_rows_when_window_ids_absent(tmp_path, monkey
     wb = load_workbook(path)
     ws = wb["评论明细"]
     headers = [cell.value for cell in ws[1]]
-    assert "本次新增" in headers, f"Column should be present, got headers: {headers}"
-    new_col = headers.index("本次新增") + 1
-    assert ws.cell(row=2, column=new_col).value == "新近"
+    assert "窗口归属" in headers, f"Column should be present, got headers: {headers}"
+    assert "本次新增" not in headers
+    scope_col = headers.index("窗口归属") + 1
+    assert ws.cell(row=2, column=scope_col).value == "历史累计·新近"
