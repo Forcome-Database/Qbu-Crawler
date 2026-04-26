@@ -579,10 +579,133 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     if report_semantics != "bootstrap":
         view_state = "empty" if empty_state_enabled else "active"
 
+    # ── F011 H22 / B4: 三层金字塔 ──────────────────────────────────────────
+    # Window threshold: prefer data_since (run window); fallback to logical_day - 30d.
+    # Filter uses scraped_at (ingestion time), NOT date_published.
+    recent_threshold_str = snapshot.get("data_since") or ""
+    if not recent_threshold_str:
+        fallback_dt = (logical_day - timedelta(days=30)).isoformat()
+        recent_threshold_str = fallback_dt + "T00:00:00"
+
+    def _scraped_at_in_window(rev) -> bool:
+        sa = rev.get("scraped_at") or ""
+        return bool(sa) and sa >= recent_threshold_str
+
+    # --- immediate_attention ---
+    from collections import Counter as _Counter
+    own_new_neg_by_product: dict = {}
+    for r in reviews:
+        if r.get("ownership") != "own":
+            continue
+        if (r.get("rating") or 5) > config.NEGATIVE_THRESHOLD:
+            continue
+        if not _scraped_at_in_window(r):
+            continue
+        pname = r.get("product_name") or "(unknown)"
+        own_new_neg_by_product.setdefault(pname, []).append(r)
+
+    own_new_negative_reviews = []
+    for pname, rev_list in own_new_neg_by_product.items():
+        label_codes = []
+        for r in rev_list:
+            for lab in (r.get("analysis_labels_parsed") or []):
+                if (lab.get("polarity") or "").lower() == "negative":
+                    if lab.get("code"):
+                        label_codes.append(lab["code"])
+        own_new_negative_reviews.append({
+            "product_name": pname,
+            "review_count": len(rev_list),
+            "primary_problems": [c for c, _ in _Counter(label_codes).most_common(2)],
+        })
+
+    # Build sku → ownership map for filtering rating/stock changes.
+    # product_changes rows use keys: sku, name, old, new (from detect_snapshot_changes).
+    sku_to_ownership = {
+        p.get("sku"): p.get("ownership")
+        for p in (snapshot.get("products") or [])
+        if p.get("sku")
+    }
+
+    def _is_own_change(change_row) -> bool:
+        sku = change_row.get("sku")
+        return sku_to_ownership.get(sku) == "own"
+
+    own_rating_drops = []
+    for row in product_changes.get("rating_changes", []):
+        if not _is_own_change(row):
+            continue
+        prev = row.get("old")
+        new_val = row.get("new")
+        try:
+            if prev is not None and new_val is not None and float(new_val) < float(prev):
+                own_rating_drops.append({
+                    "product_name": row.get("name"),
+                    "sku": row.get("sku"),
+                    "prev": prev,
+                    "new": new_val,
+                    "delta": round(float(new_val) - float(prev), 2),
+                })
+        except (TypeError, ValueError):
+            continue
+
+    own_stock_alerts = []
+    for row in product_changes.get("stock_changes", []):
+        if not _is_own_change(row):
+            continue
+        new_status = (row.get("new") or "").lower()
+        if any(token in new_status for token in ("out", "soldout", "sold_out", "limited")):
+            own_stock_alerts.append({
+                "product_name": row.get("name"),
+                "sku": row.get("sku"),
+                "prev_status": row.get("old"),
+                "new_status": row.get("new"),
+            })
+
+    immediate_attention = {
+        "own_new_negative_reviews": own_new_negative_reviews,
+        "own_rating_drops": own_rating_drops,
+        "own_stock_alerts": own_stock_alerts,
+    }
+
+    # --- trend_changes (mirror issue_changes; richer aggregation in follow-up tasks) ---
+    trend_changes = {
+        "new": list(issue_changes.get("new", [])),
+        "escalated": list(issue_changes.get("escalated", [])),
+        "improving": list(issue_changes.get("improving", [])),
+        "de_escalated": list(issue_changes.get("de_escalated", [])),
+    }
+
+    # --- competitive_opportunities ---
+    comp_new_neg_by_product: dict = {}
+    for r in reviews:
+        if r.get("ownership") != "competitor":
+            continue
+        if (r.get("rating") or 5) > config.NEGATIVE_THRESHOLD:
+            continue
+        if not _scraped_at_in_window(r):
+            continue
+        pname = r.get("product_name") or "(unknown)"
+        comp_new_neg_by_product.setdefault(pname, []).append(r)
+
+    competitor_new_negative_reviews = [
+        {"product_name": pname, "review_count": len(rev_list)}
+        for pname, rev_list in comp_new_neg_by_product.items()
+    ]
+
+    competitive_opportunities = {
+        "competitor_new_negative_reviews": competitor_new_negative_reviews,
+        "competitor_new_positive_reviews": review_signals.get("fresh_competitor_positive_reviews", [])[:3],
+    }
+    # ── end 三层金字塔 ────────────────────────────────────────────────────────
+
     return {
         "enabled": True,
         "view_state": view_state,
         "suppressed_reason": "",
+        # F011 H22 三层金字塔（新增，向后兼容）
+        "immediate_attention": immediate_attention,
+        "trend_changes": trend_changes,
+        "competitive_opportunities": competitive_opportunities,
         "summary": {
             "ingested_review_count": ingested_review_count,
             "ingested_own_review_count": len(own_reviews),
