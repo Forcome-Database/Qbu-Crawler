@@ -2583,13 +2583,13 @@ def determine_report_semantics(conn, current_run_id: int) -> str:
     """
     cur = conn.cursor()
     row = cur.execute(
-        "SELECT workflow_type, created_at FROM workflow_runs WHERE id=?",
+        "SELECT workflow_type FROM workflow_runs WHERE id=?",
         (current_run_id,),
     ).fetchone()
     if not row:
         return "bootstrap"  # 异常情况，保守返回 bootstrap
 
-    workflow_type, created_at = row
+    (workflow_type,) = row
     prior_completed = cur.execute(
         """SELECT COUNT(*) FROM workflow_runs
            WHERE workflow_type=? AND status='completed' AND id < ?""",
