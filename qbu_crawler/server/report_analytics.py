@@ -2296,7 +2296,7 @@ def _build_trend_digest(snapshot, labeled_reviews, trend_series):
     }
 
 
-def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
+def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=None):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
 
@@ -2400,13 +2400,19 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False):
         if pub_date and pub_date >= recent_cutoff:
             recently_published_count += 1
 
+    # ── F011 §3.3.1: determine report semantics via state machine ────────────
+    if conn and snapshot.get("run_id"):
+        _report_semantics = determine_report_semantics(conn, snapshot["run_id"])
+    else:
+        _report_semantics = "bootstrap" if mode_info["mode"] == "baseline" else "incremental"
+
     analytics = {
         "run_id": snapshot.get("run_id"),
         "logical_date": snapshot["logical_date"],
         "snapshot_hash": snapshot["snapshot_hash"],
         "mode": mode_info["mode"],
-        "report_semantics": "bootstrap" if mode_info["mode"] == "baseline" else "incremental",
-        "is_bootstrap": mode_info["mode"] == "baseline",
+        "report_semantics": _report_semantics,
+        "is_bootstrap": _report_semantics == "bootstrap",
         "baseline_run_ids": mode_info["baseline_run_ids"],
         "baseline_sample_days": mode_info["baseline_sample_days"],
         "baseline_day_index": mode_info["baseline_day_index"],
@@ -2566,3 +2572,28 @@ def build_dual_report_analytics(snapshot, synced_labels=None):
             merged["kpis"].update(deltas)
 
     return merged
+
+
+def determine_report_semantics(conn, current_run_id: int) -> str:
+    """报告状态机：返回 'bootstrap' / 'incremental'。
+
+    F011 §3.3.1：
+    - 当前 run 之前无同 workflow_type 的 status='completed' run → bootstrap
+    - 之前有 ≥1 个 status='completed' 的同 workflow_type run → incremental
+    """
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT workflow_type, created_at FROM workflow_runs WHERE id=?",
+        (current_run_id,),
+    ).fetchone()
+    if not row:
+        return "bootstrap"  # 异常情况，保守返回 bootstrap
+
+    workflow_type, created_at = row
+    prior_completed = cur.execute(
+        """SELECT COUNT(*) FROM workflow_runs
+           WHERE workflow_type=? AND status='completed' AND id < ?""",
+        (workflow_type, current_run_id),
+    ).fetchone()[0]
+
+    return "incremental" if prior_completed > 0 else "bootstrap"
