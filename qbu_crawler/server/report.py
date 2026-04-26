@@ -1487,9 +1487,24 @@ def query_report_data(
                    r.author, r.headline, r.body, r.rating,
                    r.date_published, r.date_published_parsed, r.images,
                    p.ownership,
-                   r.headline_cn, r.body_cn, r.translate_status
+                   r.headline_cn, r.body_cn, r.translate_status,
+                   ra.sentiment,
+                   ra.sentiment_score,
+                   ra.labels   AS analysis_labels,
+                   ra.features AS analysis_features,
+                   ra.insight_cn AS analysis_insight_cn,
+                   ra.insight_en AS analysis_insight_en,
+                   ra.impact_category,
+                   ra.failure_mode
             FROM reviews r
             JOIN products p ON r.product_id = p.id
+            LEFT JOIN review_analysis ra
+                ON ra.review_id = r.id
+                AND ra.analyzed_at = (
+                    SELECT MAX(ra2.analyzed_at)
+                    FROM review_analysis ra2
+                    WHERE ra2.review_id = r.id
+                )
             WHERE r.scraped_at >= ?
               AND r.scraped_at < ?
             ORDER BY r.scraped_at DESC
@@ -1550,7 +1565,9 @@ def query_cumulative_data() -> tuple[list[dict], list[dict]]:
                    ra.labels   AS analysis_labels,
                    ra.features AS analysis_features,
                    ra.insight_cn AS analysis_insight_cn,
-                   ra.insight_en AS analysis_insight_en
+                   ra.insight_en AS analysis_insight_en,
+                   ra.impact_category,
+                   ra.failure_mode
             FROM reviews r
             JOIN products p ON r.product_id = p.id
             LEFT JOIN review_analysis ra
