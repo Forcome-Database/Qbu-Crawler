@@ -676,7 +676,10 @@ def test_risk_products_has_rating_avg_and_negative_rate():
     assert len(result) == 1
     p = result[0]
     assert p["rating_avg"] == 3.5          # from snapshot_products
-    assert p["negative_rate"] == pytest.approx(1 / 20)  # 1 negative / 20 site total
+    # F011 H6: denominator is ingested (2 reviews), not site total (20)
+    assert p["negative_rate"] == pytest.approx(1 / 2)   # 1 negative / 2 ingested
+    assert p["negative_rate_ingested"] == pytest.approx(1 / 2)
+    assert p["negative_rate_site"] == pytest.approx(1 / 20)  # site denominator preserved for reference
     assert "top_features_display" in p
 
 

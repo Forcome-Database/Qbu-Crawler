@@ -723,6 +723,72 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
     return items
 
 
+# F011 H6/H10 — unified denominator threshold
+LOW_COVERAGE_THRESHOLD = 0.5  # ingested/site < 50% → surface warning
+
+
+def compute_risk_score(product: dict) -> dict:
+    """Compute the neg_rate factor + low_coverage_warning for a single product summary.
+
+    F011 H6/H10: denominator unified to *ingested_count*. The full 5-factor
+    weighted score lives in `_risk_products` (which calls this helper for
+    `neg_rate`); other factors require labeled-review context not present here.
+
+    Args:
+        product: dict with keys `ingested_count`, `review_count` (site total),
+                 `negative_review_count`. Missing keys → 0.
+
+    Returns:
+        dict with `neg_rate` (float | None), `coverage` (float | None),
+        `low_coverage_warning` (bool). When `ingested_count == 0`, `neg_rate`
+        is `None` and `low_coverage_warning` is True (caller should skip /
+        defer to scrape_quality alerting).
+    """
+    ingested = int(product.get("ingested_count", 0) or 0)
+    site = int(product.get("review_count", 0) or 0)
+    neg = int(product.get("negative_review_count", 0) or 0)
+
+    if ingested == 0:
+        return {"neg_rate": None, "coverage": None, "low_coverage_warning": True}
+
+    neg_rate = neg / ingested
+    coverage = (ingested / site) if site > 0 else 1.0
+    low_coverage_warning = (site > 0) and (coverage < LOW_COVERAGE_THRESHOLD)
+    return {
+        "neg_rate": neg_rate,
+        "coverage": coverage,
+        "low_coverage_warning": low_coverage_warning,
+    }
+
+
+def build_product_overview_rows(products: list) -> list:
+    """Build dual-column rows for the Excel '产品概览' sheet (F011 H10).
+
+    Each row exposes BOTH rates so the reader sees site vs ingested explicitly:
+    `negative_rate_ingested` (primary) + `negative_rate_site` (sanity-check) +
+    `coverage` (ingested / site).
+
+    Returns: list of dicts with keys
+      name, site_count, ingested_count, coverage,
+      negative_count, negative_rate_ingested, negative_rate_site
+    """
+    rows = []
+    for p in products:
+        ingested = int(p.get("ingested_count", 0) or 0)
+        site = int(p.get("review_count", 0) or 0)
+        neg = int(p.get("negative_review_count", 0) or 0)
+        rows.append({
+            "name": p.get("name"),
+            "site_count": site,
+            "ingested_count": ingested,
+            "coverage": (ingested / site) if site > 0 else None,
+            "negative_count": neg,
+            "negative_rate_ingested": (neg / ingested) if ingested > 0 else None,
+            "negative_rate_site": (neg / site) if site > 0 else None,
+        })
+    return rows
+
+
 def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
     """Compute per-product risk scores using a 5-factor weighted algorithm.
 
@@ -795,9 +861,13 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
         total_reviews = sku_to_review_count.get(sku, 0)
 
         # ── factor 1: neg_rate (35%) ──────────────────────────────
-        # Use site-reported total when available; fall back to ingested count
-        denom = total_reviews if total_reviews > 0 else all_count
-        neg_rate = (neg_count / denom) if denom > 0 else 0.0
+        # F011 H6: denominator unified to ingested-only.
+        # Zero-scrape SKUs are skipped here; scrape_quality alerting covers them.
+        if all_count == 0:
+            continue
+        neg_rate = neg_count / all_count
+        coverage = (all_count / total_reviews) if total_reviews > 0 else 1.0
+        low_coverage_warning = (total_reviews > 0) and (coverage < LOW_COVERAGE_THRESHOLD)
 
         if neg_count == 0:
             risk_score_raw = 0.0
@@ -863,8 +933,11 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
             "total_reviews": total_reviews,
             "ingested_reviews": ingested,
             "rating_avg": sku_to_rating.get(sku),
-            "negative_rate": neg_count / total_reviews if total_reviews else None,
-            "coverage_rate": ingested / total_reviews if total_reviews else None,
+            "negative_rate": neg_count / all_count,                              # backward-compat alias (now ingested-based, F011 H6)
+            "negative_rate_ingested": neg_count / all_count,                     # F011 H6 explicit
+            "negative_rate_site": (neg_count / total_reviews) if total_reviews > 0 else None,
+            "coverage_rate": ingested / total_reviews if total_reviews else None,  # ingested / site (preserved semantics)
+            "low_coverage_warning": low_coverage_warning,
             "top_labels": top_labels,
             "top_features_display": _join_label_counts(top_labels),
         })
