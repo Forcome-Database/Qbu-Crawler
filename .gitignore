@@ -38,6 +38,7 @@ node_modules/
 */openclaw/old/
 qbu_crawler/server/openclaw/old/
 .pytest_tmp/*
+.tmp_artifacts/
 .tmp-*
 /日报PDF与邮件功能评审报告.md
 .claude/agents/
