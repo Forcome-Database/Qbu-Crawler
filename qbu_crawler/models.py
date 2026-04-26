@@ -316,6 +316,10 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_review ON review_analysis(review_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ra_sentiment ON review_analysis(sentiment)")
 
+    # F011 schema migration (idempotent)
+    from qbu_crawler.server.migrations import migration_0010_report_redesign_schema as _mig0010
+    _mig0010.up(conn)
+
     # Backfill date_published_parsed for existing reviews
     _backfill_date_published_parsed(conn)
 
