@@ -56,7 +56,13 @@ NEGATION_FULL_PHRASES = re.compile(
 )
 
 
-# ── Keyword patterns (ordered by specificity) ───────────────────────────────
+# ── Keyword patterns (order-sensitive) ─────────────────────────────────────
+# Tested precedence (DO NOT REORDER without re-running test_failure_mode_enum):
+#   - gear_failure must come BEFORE motor_anomaly (过载/温升 overlap)
+#   - gear_failure must come BEFORE noise (some 齿轮 + 噪音 cases)
+#   - gear_failure must come BEFORE material_finish (齿轮 + 金属屑 in same input)
+#   - motor_anomaly's `停转(?!.*齿轮)` lookahead is defense-in-depth in case
+#     this ordering ever changes; today it is functionally redundant.
 FAILURE_KEYWORD_PATTERNS = [
     ("gear_failure",        re.compile(r"齿轮")),
     ("motor_anomaly",       re.compile(r"(电机|马达|过载|温升|停转(?!.*齿轮))")),
@@ -68,8 +74,8 @@ FAILURE_KEYWORD_PATTERNS = [
 ]
 
 
-def classify_failure_mode(raw: str) -> str:
-    """归类自由文本到 9 类 enum。
+def classify_failure_mode(raw: str | None) -> str:
+    """归类自由文本到 9 类 enum；接受 None / 空 / 空白 → 'none'。
 
     两阶段分类（v1.1）：
     1. 全文 negation 检测 → 'none'（优先，绕过 keyword 检测）
@@ -79,9 +85,7 @@ def classify_failure_mode(raw: str) -> str:
     if not raw:
         return "none"
     raw = raw.strip()
-
-    # Belt-and-suspenders: single character 无
-    if raw == "无":
+    if not raw:
         return "none"
 
     # Stage 1: full-phrase negation (resolves B1 bug)

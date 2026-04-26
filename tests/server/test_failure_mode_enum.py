@@ -157,3 +157,11 @@ def test_up_is_idempotent(fresh_db):
         ).fetchall()
     )
     assert snapshot == snapshot2
+
+
+def test_whitespace_and_none_inputs_classify_as_none():
+    """Fix B/C — None / "" / 全空白 must be 'none', not 'other'."""
+    assert classify_failure_mode(None) == "none"
+    assert classify_failure_mode("") == "none"
+    assert classify_failure_mode("   ") == "none"
+    assert classify_failure_mode("\t\n  ") == "none"
