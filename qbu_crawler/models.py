@@ -21,48 +21,88 @@ import calendar as _calendar
 import re as _re
 
 
-def _parse_date_published(value):
-    """Parse date_published to ISO string. Handles MM/DD/YYYY and relative formats.
+ABSOLUTE_FORMATS = ["%m/%d/%Y", "%Y-%m-%d", "%Y/%m/%d"]
+RELATIVE_RE = _re.compile(r"^(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago$", _re.IGNORECASE)
+CONFIDENCE_BY_UNIT = {"day": 0.95, "week": 0.85, "month": 0.7, "year": 0.5}
 
-    Lightweight inline version to avoid importing from server.report_common.
+
+def _parse_date_published(value, *, scraped_at=None, return_meta=False):
+    """统一以 scraped_at 为相对时间 anchor。
+
+    Args:
+        value: 原始字符串
+        scraped_at: 抓取时间，相对时间表达的 anchor ("a year ago" → scraped_at - 365 days).
+                    None → fall back to today.
+        return_meta: True returns (parsed, meta_dict); False returns parsed only.
+
+    Returns:
+        ISO date string "YYYY-MM-DD" or None.
+        When return_meta=True: (parsed_or_None, {"method","anchor","confidence"}).
     """
+    unknown_meta = {"method": "unknown", "anchor": None, "confidence": 0.0}
     if not value:
-        return None
+        return (None, unknown_meta) if return_meta else None
     s = value.strip()
-    # ISO: "2026-01-01"
+
+    # 1) ISO short-circuit (preserves legacy "2026-01-01T12:00:00" → "2026-01-01")
     try:
-        return date.fromisoformat(s[:10]).isoformat()
+        parsed_iso = date.fromisoformat(s[:10]).isoformat()
+        meta = {"method": "absolute", "anchor": None, "confidence": 1.0}
+        return (parsed_iso, meta) if return_meta else parsed_iso
     except (ValueError, IndexError):
         pass
-    # MM/DD/YYYY: "01/18/2024"
-    try:
-        return datetime.strptime(s, "%m/%d/%Y").date().isoformat()
-    except ValueError:
-        pass
-    # Relative: "3 months ago", "a year ago"
-    today = date.today()
-    m = _re.match(r"(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago", s, _re.IGNORECASE)
+
+    # 2) Other absolute formats (MM/DD/YYYY etc.)
+    for fmt in ABSOLUTE_FORMATS:
+        try:
+            d = datetime.strptime(s, fmt).date().isoformat()
+            meta = {"method": "absolute", "anchor": None, "confidence": 1.0}
+            return (d, meta) if return_meta else d
+        except ValueError:
+            continue
+
+    # 3) Relative phrases: "X (years|months|weeks|days) ago", "a year ago"
+    m = RELATIVE_RE.match(s)
     if m:
-        amount = int(m.group(1)) if m.group(1) else 1
+        n_grp = m.group(1)
         unit = m.group(2).lower()
+        n = int(n_grp) if n_grp else 1
+
+        anchor_dt = None
+        method = "relative_now"
+        if scraped_at:
+            try:
+                anchor_dt = datetime.fromisoformat(str(scraped_at).replace(" ", "T"))
+                method = "relative_scraped_at"
+            except (ValueError, TypeError):
+                anchor_dt = None
+        if anchor_dt is None:
+            anchor_dt = datetime.now()
+
+        # Use calendar-aware month/year subtraction to match existing behavior:
         if unit == "day":
-            return (today - timedelta(days=amount)).isoformat()
-        if unit == "week":
-            return (today - timedelta(weeks=amount)).isoformat()
-        if unit == "month":
-            month = today.month - amount
-            year = today.year
+            parsed_dt = anchor_dt - timedelta(days=n)
+        elif unit == "week":
+            parsed_dt = anchor_dt - timedelta(weeks=n)
+        elif unit == "month":
+            month = anchor_dt.month - n
+            year = anchor_dt.year
             while month <= 0:
                 month += 12
                 year -= 1
             max_day = _calendar.monthrange(year, month)[1]
-            return date(year, month, min(today.day, max_day)).isoformat()
-        if unit == "year":
+            parsed_dt = anchor_dt.replace(year=year, month=month, day=min(anchor_dt.day, max_day))
+        else:  # year
             try:
-                return today.replace(year=today.year - amount).isoformat()
+                parsed_dt = anchor_dt.replace(year=anchor_dt.year - n)
             except ValueError:
-                return today.replace(year=today.year - amount, day=28).isoformat()
-    return None
+                parsed_dt = anchor_dt.replace(year=anchor_dt.year - n, day=28)
+
+        parsed = parsed_dt.date().isoformat()
+        meta = {"method": method, "anchor": scraped_at, "confidence": CONFIDENCE_BY_UNIT[unit]}
+        return (parsed, meta) if return_meta else parsed
+
+    return (None, unknown_meta) if return_meta else None
 
 
 def get_conn():
@@ -327,30 +367,24 @@ def init_db():
 
 
 def _backfill_date_published_parsed(conn):
-    """One-time backfill of date_published_parsed from date_published + scraped_at anchor."""
-    from qbu_crawler.server.report_common import _parse_date_flexible
-
+    """One-time backfill of date_published_parsed + parse metadata using the unified parser."""
     rows = conn.execute(
         "SELECT id, date_published, scraped_at FROM reviews "
-        "WHERE date_published_parsed IS NULL AND date_published IS NOT NULL"
+        "WHERE date_published IS NOT NULL "
+        "AND (date_published_parsed IS NULL OR date_parse_method IS NULL)"
     ).fetchall()
     if not rows:
         return
     for row in rows:
-        anchor = None
-        if row["scraped_at"]:
-            try:
-                anchor = datetime.fromisoformat(
-                    str(row["scraped_at"]).replace(" ", "T")
-                ).date()
-            except (ValueError, TypeError):
-                pass
-        parsed = _parse_date_flexible(row["date_published"], anchor_date=anchor)
-        if parsed:
-            conn.execute(
-                "UPDATE reviews SET date_published_parsed = ? WHERE id = ?",
-                (parsed.isoformat(), row["id"]),
-            )
+        scraped_at = row["scraped_at"] if row["scraped_at"] else None
+        parsed, meta = _parse_date_published(row["date_published"], scraped_at=scraped_at, return_meta=True)
+        estimated = 1 if meta["method"].startswith("relative") else 0
+        conn.execute(
+            "UPDATE reviews SET date_published_parsed=?, date_parse_method=?, "
+            "date_parse_anchor=?, date_parse_confidence=?, date_published_estimated=? "
+            "WHERE id=?",
+            (parsed, meta["method"], meta["anchor"], meta["confidence"], estimated, row["id"]),
+        )
     conn.commit()
 
 
@@ -421,15 +455,22 @@ def save_reviews(product_id: int, reviews: list) -> int:
         bh = _body_hash(body)
         images = r.get("images")
         date_pub = r.get("date_published")
-        # Parse date_published at insert time — inline to avoid cross-layer import
-        date_parsed = _parse_date_published(date_pub)
+        # Parse date_published at insert time — anchor to scraped_at (Shanghai time)
+        anchor_str = str(now_shanghai())
+        date_parsed, meta = _parse_date_published(date_pub, scraped_at=anchor_str, return_meta=True)
+        estimated = 1 if meta["method"].startswith("relative") else 0
         try:
             conn.execute(f"""
                 INSERT INTO reviews (product_id, author, headline, body, body_hash, rating,
-                                     date_published, date_published_parsed, images, scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
+                                     date_published, date_published_parsed,
+                                     date_parse_method, date_parse_anchor, date_parse_confidence,
+                                     date_published_estimated,
+                                     images, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
             """, (product_id, r.get("author"), r.get("headline"), body, bh,
-                  r.get("rating"), date_pub, date_parsed, images))
+                  r.get("rating"), date_pub, date_parsed,
+                  meta["method"], meta["anchor"], meta["confidence"], estimated,
+                  images))
             new_count += 1
         except sqlite3.IntegrityError:
             # 已存在：如果新数据有图片而旧数据没有，更新图片
