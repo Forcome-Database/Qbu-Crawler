@@ -1,5 +1,7 @@
+import calendar as _calendar
 import hashlib
 import json as _json
+import re as _re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
@@ -17,11 +19,7 @@ _TIME_AXIS_FIELDS = {
 }
 
 
-import calendar as _calendar
-import re as _re
-
-
-ABSOLUTE_FORMATS = ["%m/%d/%Y", "%Y-%m-%d", "%Y/%m/%d"]
+ABSOLUTE_FORMATS = ["%m/%d/%Y", "%Y/%m/%d"]
 RELATIVE_RE = _re.compile(r"^(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago$", _re.IGNORECASE)
 CONFIDENCE_BY_UNIT = {"day": 0.95, "week": 0.85, "month": 0.7, "year": 0.5}
 
@@ -76,6 +74,7 @@ def _parse_date_published(value, *, scraped_at=None, return_meta=False):
                 method = "relative_scraped_at"
             except (ValueError, TypeError):
                 anchor_dt = None
+                scraped_at = None  # discard unparseable anchor; don't persist it
         if anchor_dt is None:
             anchor_dt = datetime.now()
 
@@ -450,13 +449,13 @@ def save_reviews(product_id: int, reviews: list) -> int:
     """
     conn = get_conn()
     new_count = 0
+    anchor_str = str(now_shanghai())  # single anchor for the entire batch
     for r in reviews:
         body = r.get("body") or ""
         bh = _body_hash(body)
         images = r.get("images")
         date_pub = r.get("date_published")
         # Parse date_published at insert time — anchor to scraped_at (Shanghai time)
-        anchor_str = str(now_shanghai())
         date_parsed, meta = _parse_date_published(date_pub, scraped_at=anchor_str, return_meta=True)
         estimated = 1 if meta["method"].startswith("relative") else 0
         try:

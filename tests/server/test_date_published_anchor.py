@@ -7,7 +7,7 @@ class TestUnifiedAnchor:
     def test_relative_time_uses_scraped_at_anchor(self):
         scraped_at = "2026-04-26 12:00:00"
         result = _parse_date_published("a year ago", scraped_at=scraped_at)
-        assert result.startswith("2025-04")  # 一年前 = scraped_at - 365 天
+        assert result.startswith("2025-04")  # 一年前 = scraped_at 替换年份 - 1
 
     def test_absolute_date_unchanged(self):
         result = _parse_date_published("01/15/2024", scraped_at="2026-04-26 12:00:00")
@@ -48,3 +48,12 @@ class TestUnifiedAnchor:
         result, meta = _parse_date_published("", return_meta=True)
         assert result is None
         assert meta["method"] == "unknown"
+
+    def test_unparseable_scraped_at_clears_anchor(self):
+        """When scraped_at is garbage, anchor must NOT be persisted (avoid misleading audit row)."""
+        result, meta = _parse_date_published(
+            "3 months ago", scraped_at="not-a-date", return_meta=True,
+        )
+        assert result is not None  # falls back to today
+        assert meta["method"] == "relative_now"
+        assert meta["anchor"] is None  # critical: not the garbage input
