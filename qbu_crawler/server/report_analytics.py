@@ -2921,6 +2921,87 @@ def build_dual_report_analytics(snapshot, synced_labels=None):
     return merged
 
 
+def build_fallback_priorities(
+    risk_products: list[dict],
+    issue_clusters: list[dict] | None = None,
+    *,
+    max_items: int = 5,
+) -> list[dict]:
+    """F011 H20 — produce rule-based improvement_priorities when LLM output is empty.
+
+    Strategy:
+    1. Walk top-3 risk products; for each, take its top label and build a row.
+    2. If still under `max_items`, append rows from `issue_clusters` (top labels).
+    3. All rows include short_title (≤20 chars), full_action (≥80 chars stub),
+       evidence_count, evidence_review_ids ([]), affected_products[], affected_products_count.
+
+    Each row is shaped to match LLM_INSIGHTS_SCHEMA_V3.improvement_priorities[].
+    """
+    issue_clusters = issue_clusters or []
+    priorities: list[dict] = []
+
+    fallback_full_action = (
+        "请查看附件 HTML 中的详细问题诊断卡（issue cluster cards）以了解症状、"
+        "受影响产品、典型反馈与改进建议。本条目由规则降级生成（LLM 输出失败或为空），"
+        "字段完整度低于 LLM 版本。"
+    )
+
+    seen_codes: set[str] = set()
+
+    for p in (risk_products or [])[:3]:
+        labels = p.get("top_labels") or []
+        if not labels:
+            continue
+        label = labels[0]
+        code = label.get("code") or label.get("label_code")
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        display = label.get("display") or label.get("label_display") or code
+        product_name = p.get("product_name") or p.get("name") or "(未知产品)"
+        short_title = f"{display}：{product_name}"
+        if len(short_title) > 20:
+            # Trim trailing chars to stay within 20 (UI guarantee)
+            short_title = short_title[:20]
+
+        priorities.append({
+            "label_code": code,
+            "label_display": display,
+            "short_title": short_title,
+            "full_action": fallback_full_action,
+            "evidence_count": int(label.get("count") or 0),
+            "evidence_review_ids": [],
+            "affected_products": [product_name],
+            "affected_products_count": 1,
+        })
+
+    for cluster in issue_clusters:
+        if len(priorities) >= max_items:
+            break
+        code = cluster.get("label_code")
+        if not code or code in seen_codes:
+            continue
+        seen_codes.add(code)
+
+        display = cluster.get("label_display") or code
+        sample_products = cluster.get("affected_products") or cluster.get("products") or []
+        short_title = display if len(display) <= 20 else display[:20]
+
+        priorities.append({
+            "label_code": code,
+            "label_display": display,
+            "short_title": short_title,
+            "full_action": fallback_full_action,
+            "evidence_count": int(cluster.get("review_count") or 0),
+            "evidence_review_ids": [],
+            "affected_products": list(sample_products[:3]),
+            "affected_products_count": len(sample_products),
+        })
+
+    return priorities[:max_items]
+
+
 def determine_report_semantics(conn, current_run_id: int) -> str:
     """报告状态机：返回 'bootstrap' / 'incremental'。
 
