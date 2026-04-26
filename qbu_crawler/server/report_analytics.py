@@ -865,9 +865,14 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
         # Zero-scrape SKUs are skipped here; scrape_quality alerting covers them.
         if all_count == 0:
             continue
-        neg_rate = neg_count / all_count
-        coverage = (all_count / total_reviews) if total_reviews > 0 else 1.0
-        low_coverage_warning = (total_reviews > 0) and (coverage < LOW_COVERAGE_THRESHOLD)
+        factors = compute_risk_score({
+            "ingested_count": all_count,
+            "review_count": total_reviews,
+            "negative_review_count": neg_count,
+        })
+        neg_rate = factors["neg_rate"]
+        coverage = factors["coverage"]
+        low_coverage_warning = factors["low_coverage_warning"]
 
         if neg_count == 0:
             risk_score_raw = 0.0
