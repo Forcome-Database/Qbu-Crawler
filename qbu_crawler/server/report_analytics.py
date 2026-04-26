@@ -726,38 +726,93 @@ def _cluster_summary_items(labeled_reviews, *, ownership, polarity):
 # F011 H6/H10 — unified denominator threshold
 LOW_COVERAGE_THRESHOLD = 0.5  # ingested/site < 50% → surface warning
 
+# F011 H11/H18 — 5-factor risk score constants
+HIGH_RISK_THRESHOLD = 35.0
+NEAR_HIGH_RISK_FACTOR = 0.85
+RISK_WEIGHTS = {
+    "neg_rate": 0.35,
+    "severity": 0.25,
+    "evidence": 0.15,
+    "recency": 0.15,
+    "volume": 0.10,
+}
 
-def compute_risk_score(product: dict) -> dict:
-    """Compute the neg_rate factor + low_coverage_warning for a single product summary.
 
-    F011 H6/H10: denominator unified to *ingested_count*. The full 5-factor
-    weighted score lives in `_risk_products` (which calls this helper for
-    `neg_rate`); other factors require labeled-review context not present here.
+def is_near_high_risk(score: float | None, *, threshold: float = HIGH_RISK_THRESHOLD) -> bool:
+    """F011 H18 — score in band [NEAR_HIGH_RISK_FACTOR * threshold, threshold) → True."""
+    if score is None:
+        return False
+    return NEAR_HIGH_RISK_FACTOR * threshold <= score < threshold
+
+
+def compute_risk_score(product: dict, *, threshold: float = HIGH_RISK_THRESHOLD) -> dict:
+    """Compute risk score with 5-factor breakdown (F011 H6/H10/H11/H18).
 
     Args:
-        product: dict with keys `ingested_count`, `review_count` (site total),
-                 `negative_review_count`. Missing keys → 0.
+        product: dict with ingested_count, review_count, negative_review_count,
+                 and optionally high_severity_count, image_evidence_count,
+                 recent_negative_count, total_volume (default 0).
 
-    Returns:
-        dict with `neg_rate` (float | None), `coverage` (float | None),
-        `low_coverage_warning` (bool). When `ingested_count == 0`, `neg_rate`
-        is `None` and `low_coverage_warning` is True (caller should skip /
-        defer to scrape_quality alerting).
+    Returns dict with:
+      Task 2.1 keys:
+        neg_rate, coverage, low_coverage_warning
+      Task 2.2 keys:
+        risk_score (pct, 1 dp), risk_factors (5-key breakdown or None),
+        near_high_risk (bool).
     """
     ingested = int(product.get("ingested_count", 0) or 0)
     site = int(product.get("review_count", 0) or 0)
     neg = int(product.get("negative_review_count", 0) or 0)
 
     if ingested == 0:
-        return {"neg_rate": None, "coverage": None, "low_coverage_warning": True}
+        return {
+            "neg_rate": None,
+            "coverage": None,
+            "low_coverage_warning": True,
+            "risk_score": None,
+            "risk_factors": None,
+            "near_high_risk": False,
+        }
 
     neg_rate = neg / ingested
     coverage = (ingested / site) if site > 0 else 1.0
     low_coverage_warning = (site > 0) and (coverage < LOW_COVERAGE_THRESHOLD)
+
+    high_sev = int(product.get("high_severity_count", 0) or 0)
+    image_ev = int(product.get("image_evidence_count", 0) or 0)
+    recent = int(product.get("recent_negative_count", 0) or 0)
+    total_vol = int(product.get("total_volume", 0) or 0)
+
+    neg_max = max(neg, 1)  # avoid /0 for denominators of factor 2/3/4
+    factors_raw = {
+        "neg_rate": neg_rate,
+        "severity": high_sev / neg_max,
+        "evidence": image_ev / neg_max,
+        "recency":  recent / neg_max,
+        "volume":   min(total_vol / 100.0, 1.0),
+    }
+
+    factors = {}
+    score_raw = 0.0
+    for key, weight in RISK_WEIGHTS.items():
+        raw = factors_raw[key]
+        weighted = raw * weight
+        factors[key] = {
+            "raw": round(raw, 4),
+            "weight": weight,
+            "weighted": round(weighted, 4),
+        }
+        score_raw += weighted
+
+    score_pct = round(score_raw * 100, 1)
+
     return {
         "neg_rate": neg_rate,
         "coverage": coverage,
         "low_coverage_warning": low_coverage_warning,
+        "risk_score": score_pct,
+        "risk_factors": factors,
+        "near_high_risk": is_near_high_risk(score_pct, threshold=threshold),
     }
 
 
