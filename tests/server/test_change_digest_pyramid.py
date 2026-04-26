@@ -144,3 +144,38 @@ def test_existing_keys_preserved():
     for key in ("summary", "issue_changes", "product_changes", "review_signals",
                 "warnings", "view_state", "empty_state", "suppressed_reason"):
         assert key in digest, f"{key} preserved"
+
+
+def test_immediate_attention_handles_mixed_tz_suffixes():
+    """Mixed +08:00 and UTC-Z suffixes must compare correctly across the threshold."""
+    snapshot = {
+        "logical_date": "2026-04-26",
+        "data_since": "2026-04-26T00:00:00+08:00",  # Shanghai midnight = 2026-04-25T16:00:00 UTC
+        "data_until": "2026-04-27T00:00:00+08:00",
+        "products": [],
+        "reviews": [
+            # In-window review (Z-suffix UTC → 2026-04-26T08:00:00Z = 16:00 Shanghai → AFTER threshold)
+            {
+                "id": 1, "ownership": "own", "rating": 1,
+                "scraped_at": "2026-04-26T08:00:00Z",
+                "date_published": "2026-04-26", "date_published_parsed": "2026-04-26",
+                "product_name": "X", "product_sku": "S1",
+                "headline": "h", "body": "b",
+                "analysis_labels_parsed": [],
+            },
+            # Out-of-window review (UTC-naive 2026-04-25T05:00:00 → before 16:00 Shanghai threshold)
+            {
+                "id": 2, "ownership": "own", "rating": 1,
+                "scraped_at": "2026-04-25T05:00:00+00:00",
+                "date_published": "2026-04-25", "date_published_parsed": "2026-04-25",
+                "product_name": "X", "product_sku": "S1",
+                "headline": "h", "body": "b",
+                "analysis_labels_parsed": [],
+            },
+        ],
+    }
+    digest = build_change_digest(snapshot, _empty_analytics())
+    own_neg = digest["immediate_attention"]["own_new_negative_reviews"]
+    # Only the in-window review counts
+    assert len(own_neg) == 1
+    assert own_neg[0]["review_count"] == 1

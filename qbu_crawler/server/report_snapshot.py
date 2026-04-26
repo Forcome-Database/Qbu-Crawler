@@ -6,7 +6,8 @@ import hashlib
 import json
 import logging
 import os
-from datetime import date, datetime, timedelta
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from qbu_crawler import config, models
@@ -582,17 +583,37 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     # ── F011 H22 / B4: 三层金字塔 ──────────────────────────────────────────
     # Window threshold: prefer data_since (run window); fallback to logical_day - 30d.
     # Filter uses scraped_at (ingestion time), NOT date_published.
-    recent_threshold_str = snapshot.get("data_since") or ""
-    if not recent_threshold_str:
-        fallback_dt = (logical_day - timedelta(days=30)).isoformat()
-        recent_threshold_str = fallback_dt + "T00:00:00"
+    # Parse both sides to UTC-normalized datetime for robust tz-aware comparison.
+    def _parse_iso_utc(value: str | None):
+        """Parse an ISO-8601 string to a UTC-normalized datetime; return None on failure."""
+        if not value:
+            return None
+        s = str(value).strip().replace(" ", "T")
+        # Map trailing Z to +00:00 for fromisoformat compatibility (Python <3.11 lacks Z support).
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        # Treat naive datetimes as UTC for comparison.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+
+    data_since_value = snapshot.get("data_since")
+    threshold_dt = _parse_iso_utc(data_since_value) if data_since_value else None
+    if threshold_dt is None:
+        # Fallback: 30 days before logical_day (UTC-normalized)
+        threshold_dt = datetime.combine(logical_day - timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
 
     def _scraped_at_in_window(rev) -> bool:
-        sa = rev.get("scraped_at") or ""
-        return bool(sa) and sa >= recent_threshold_str
+        sa_dt = _parse_iso_utc(rev.get("scraped_at"))
+        return bool(sa_dt) and sa_dt >= threshold_dt
 
     # --- immediate_attention ---
-    from collections import Counter as _Counter
     own_new_neg_by_product: dict = {}
     for r in reviews:
         if r.get("ownership") != "own":
@@ -615,7 +636,7 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
         own_new_negative_reviews.append({
             "product_name": pname,
             "review_count": len(rev_list),
-            "primary_problems": [c for c, _ in _Counter(label_codes).most_common(2)],
+            "primary_problems": [c for c, _ in Counter(label_codes).most_common(2)],
         })
 
     # Build sku → ownership map for filtering rating/stock changes.
