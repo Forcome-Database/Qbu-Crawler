@@ -9,7 +9,10 @@ Adds:
 - report_artifacts (new table)
 - indexes: idx_artifacts_run, idx_reviews_published_parsed, idx_labels_polarity_severity
 """
+import logging
 import sqlite3
+
+log = logging.getLogger(__name__)
 
 UP_SQL = [
     "ALTER TABLE reviews ADD COLUMN date_published_estimated INTEGER DEFAULT 0",
@@ -41,8 +44,20 @@ UP_SQL = [
 
     "CREATE INDEX IF NOT EXISTS idx_artifacts_run ON report_artifacts(run_id)",
     "CREATE INDEX IF NOT EXISTS idx_reviews_published_parsed ON reviews(date_published_parsed)",
-    "CREATE INDEX IF NOT EXISTS idx_labels_polarity_severity ON review_issue_labels(label_polarity, severity)",
+    # NOTE: idx_labels_polarity_severity targets review_issue_labels which lives
+    # outside this migration's scope; handled separately via DEPENDENT_INDEX_STMTS.
 ]
+
+# Statements that depend on tables outside this migration's scope.
+# Skip with a warning if the dependency is absent (callers using a partial
+# schema, e.g. integration test helpers).
+DEPENDENT_INDEX_STMTS = {
+    "idx_labels_polarity_severity": (
+        "CREATE INDEX IF NOT EXISTS idx_labels_polarity_severity "
+        "ON review_issue_labels(label_polarity, severity)",
+        "review_issue_labels",
+    ),
+}
 
 DOWN_SQL = [
     "DROP INDEX IF EXISTS idx_artifacts_run",
@@ -63,6 +78,13 @@ DOWN_SQL = [
 ]
 
 
+def _table_exists(cur: sqlite3.Cursor, name: str) -> bool:
+    return cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone() is not None
+
+
 def up(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     for sql in UP_SQL:
@@ -72,14 +94,31 @@ def up(conn: sqlite3.Connection) -> None:
             if "duplicate column" in str(e).lower():
                 continue
             raise
+
+    for idx_name, (idx_sql, dep_table) in DEPENDENT_INDEX_STMTS.items():
+        if not _table_exists(cur, dep_table):
+            log.warning(
+                "skip %s: table %s missing from this connection",
+                idx_name, dep_table,
+            )
+            continue
+        cur.execute(idx_sql)
+
     conn.commit()
 
 
 def down(conn: sqlite3.Connection) -> None:
+    # Swallow OperationalError broadly: older SQLite (< 3.35) lacks DROP COLUMN,
+    # and IF NOT EXISTS guards are not available for all DDL forms.  Each skipped
+    # statement is logged at WARNING so operators can diagnose partial rollbacks.
     cur = conn.cursor()
     for sql in DOWN_SQL:
         try:
             cur.execute(sql)
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            log.warning(
+                "migration 0010 down() skipped: %s — %s",
+                sql.split()[:3], e,
+            )
             continue
     conn.commit()
