@@ -358,6 +358,8 @@ def init_db():
     # F011 schema migration (idempotent)
     from qbu_crawler.server.migrations import migration_0010_report_redesign_schema as _mig0010
     _mig0010.up(conn)
+    from qbu_crawler.server.migrations import migration_0011_failure_mode_enum_backfill as _mig0011
+    _mig0011.up(conn)
 
     # Backfill date_published_parsed for existing reviews
     _backfill_date_published_parsed(conn)
