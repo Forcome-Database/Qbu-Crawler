@@ -2,7 +2,9 @@ import copy
 import json
 import logging
 import re
+import time as _time
 
+import jsonschema
 from json_repair import repair_json
 
 from qbu_crawler import config, models
@@ -10,6 +12,213 @@ from qbu_crawler.server import report_analytics
 from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO
 
 logger = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# F011 H9+H14 — LLM prompt v3: JSON schema + tone guards + retry
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class SchemaError(ValueError):
+    """LLM output failed JSON schema or string-length validation."""
+
+
+class ToneGuardError(ValueError):
+    """LLM hero copy violated tone guards (severe word with high health, etc.)."""
+
+
+LLM_INSIGHTS_SCHEMA_V3 = {
+    "type": "object",
+    "required": ["hero_headline", "executive_summary", "executive_bullets", "improvement_priorities"],
+    "properties": {
+        "hero_headline":     {"type": "string", "maxLength": 100},
+        "executive_summary": {"type": "string"},
+        "executive_bullets": {"type": "array", "maxItems": 5,
+                              "items": {"type": "string"}},
+        "improvement_priorities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["label_code", "short_title", "full_action",
+                             "evidence_count", "evidence_review_ids"],
+                "properties": {
+                    "label_code":     {"type": "string"},
+                    "short_title":    {"type": "string", "maxLength": 30},
+                    "full_action":    {"type": "string", "minLength": 80},
+                    "evidence_count": {"type": "integer", "minimum": 0},
+                    "evidence_review_ids": {"type": "array",
+                                            "items": {"type": "integer"}},
+                    "affected_products":   {"type": "array",
+                                            "items": {"type": "string"}},
+                },
+            },
+        },
+        "competitive_insight": {"type": "string"},
+    },
+}
+
+TONE_GUARDS_PROMPT = (
+    "措辞规则（必须遵守）：\n"
+    "1. 若 health_index ≥ 90，hero_headline 禁止使用 严重 / 侵蚀 / 重灾区 等强负面词；\n"
+    "   改用 仍存在结构性短板 / 局部需要关注 等温和措辞。\n"
+    "2. executive_bullets 中的所有数字必须能在 kpis / risk_products 中找到原始来源；\n"
+    "   不得自行计算或外推。\n"
+    "3. 若 high_risk_count = 0，禁止使用「高风险产品」作为主语。\n"
+    "4. improvement_priorities[].short_title 必须 ≤ 20 字（中文计字）；\n"
+    "   full_action 必须 ≥ 80 字。\n"
+    "5. evidence_review_ids 必须从 input 中的 reviews 列表挑选实际存在的 id。\n"
+)
+
+SEVERE_WORDS = ("严重", "侵蚀", "重灾区")
+HEALTH_HIGH_THRESHOLD = 90.0
+SHORT_TITLE_MAX_CHARS = 20
+
+
+def _count_chinese_or_general_chars(text: str) -> int:
+    """Return user-facing character count (treats CJK and ASCII as 1 unit each)."""
+    return len(text or "")
+
+
+def validate_llm_copy(copy: dict) -> dict:
+    """JSON-schema + character-length validation for v3 LLM output.
+
+    Raises SchemaError on any failure. Returns the validated dict on success.
+    """
+    try:
+        jsonschema.validate(copy, LLM_INSIGHTS_SCHEMA_V3)
+    except jsonschema.ValidationError as e:
+        raise SchemaError(str(e)) from e
+
+    for item in copy.get("improvement_priorities", []) or []:
+        title = item.get("short_title") or ""
+        if _count_chinese_or_general_chars(title) > SHORT_TITLE_MAX_CHARS:
+            raise SchemaError(
+                f"short_title 超过 {SHORT_TITLE_MAX_CHARS} 字: {title!r}"
+            )
+    return copy
+
+
+def validate_tone_guards(copy: dict, kpis: dict) -> None:
+    """Apply tone-guard rules. Raises ToneGuardError on violation."""
+    health = float(kpis.get("health_index") or 0)
+    high_risk = int(kpis.get("high_risk_count") or 0)
+    hero = copy.get("hero_headline") or ""
+
+    if health >= HEALTH_HIGH_THRESHOLD:
+        for word in SEVERE_WORDS:
+            if word in hero:
+                raise ToneGuardError(
+                    f"health_index={health} (>= {HEALTH_HIGH_THRESHOLD}) "
+                    f"不应在 hero 中使用 '{word}'"
+                )
+
+    if high_risk == 0 and "高风险产品" in hero:
+        raise ToneGuardError(
+            "high_risk_count=0 不应主语为'高风险产品'"
+        )
+
+
+_HEALTH_NUM_RE = re.compile(r"健康(?:指数|度)\s*([0-9]+(?:\.[0-9]+)?)")
+
+
+def assert_consistency(copy: dict, kpis: dict) -> None:
+    """Minimal numeric assertion: hero claims health = X must match kpis['health_index'] within 0.5.
+
+    Task 2.6.1 will expand this to bullets / priorities / evidence_ids.
+    """
+    hero = copy.get("hero_headline") or ""
+    m = _HEALTH_NUM_RE.search(hero)
+    if not m:
+        return
+    try:
+        claimed = float(m.group(1))
+    except (TypeError, ValueError):
+        return
+    actual = float(kpis.get("health_index") or 0)
+    if abs(claimed - actual) > 0.5:
+        raise AssertionError(
+            f"hero claims health={claimed} but kpis health_index={actual}"
+        )
+
+
+def _build_insights_prompt_v3(analytics: dict, snapshot: dict | None = None) -> str:
+    """v3 prompt: includes schema description + tone guards.
+
+    Wraps the existing v2 prompt body and adds:
+    - explicit JSON schema (v3 fields)
+    - TONE_GUARDS_PROMPT
+    - 'prompt_version: v3' tag
+    """
+    base = _build_insights_prompt(analytics, snapshot=snapshot)
+    schema_block = (
+        "\n\nJSON 输出格式要求 v3（严格遵守）：\n"
+        "{\n"
+        '  "hero_headline": "...",\n'
+        '  "executive_summary": "...",\n'
+        '  "executive_bullets": ["..."],\n'
+        '  "improvement_priorities": [\n'
+        '    {\n'
+        '      "label_code": "...",\n'
+        '      "short_title": "≤20字一句话标题",\n'
+        '      "full_action": "≥80字详细行动方案，含具体子步骤",\n'
+        '      "evidence_count": 13,\n'
+        '      "evidence_review_ids": [12, 34, 56],\n'
+        '      "affected_products": ["..."]\n'
+        '    }\n'
+        '  ],\n'
+        '  "competitive_insight": "..."\n'
+        "}\n"
+    )
+    return f"{base}\n{schema_block}\n{TONE_GUARDS_PROMPT}\n[prompt_version: v3]"
+
+
+def generate_report_insights_with_validation(
+    analytics: dict, snapshot: dict | None = None, *, max_retries: int = 3
+) -> dict:
+    """v3 orchestrator: prompt v3 → schema → tone → assertion → retry → fallback.
+
+    On persistent failure, returns `_fallback_insights(analytics)`. Each retry
+    uses exponential backoff (1s, 2s, 4s).
+    """
+    if not config.LLM_API_BASE or not config.LLM_API_KEY:
+        logger.info("LLM not configured, using fallback insights (v3)")
+        return _fallback_insights(analytics)
+
+    kpis = analytics.get("kpis") or {}
+    last_err: Exception | None = None
+
+    for attempt in range(max_retries):
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=config.LLM_API_KEY, base_url=config.LLM_API_BASE)
+            response = client.chat.completions.create(
+                model=config.LLM_MODEL,
+                messages=[{"role": "user", "content": _build_insights_prompt_v3(analytics, snapshot=snapshot)}],
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            copy = _parse_llm_response(raw)
+            validate_llm_copy(copy)
+            validate_tone_guards(copy, kpis)
+            assert_consistency(copy, kpis)
+            copy["_prompt_version"] = "v3"
+            return copy
+        except (SchemaError, ToneGuardError, AssertionError) as e:
+            last_err = e
+            logger.warning(
+                "LLM v3 attempt %d/%d failed: %s", attempt + 1, max_retries, e
+            )
+            _time.sleep(2 ** attempt)
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "LLM v3 attempt %d/%d non-validation error: %s",
+                attempt + 1, max_retries, e,
+            )
+            _time.sleep(2 ** attempt)
+
+    logger.error("LLM v3 generation failed after %d attempts: %s", max_retries, last_err)
+    return _fallback_insights(analytics)
 
 
 def _review_id(review):
