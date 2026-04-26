@@ -2391,6 +2391,220 @@ def _build_trend_dimension(builder, *args):
         )
 
 
+# ---------------------------------------------------------------------------
+# F011 H16 — public trend digest helpers
+# ---------------------------------------------------------------------------
+
+TREND_MIN_HIGH = (30, 7)
+TREND_MIN_MEDIUM = (15, 5)
+TREND_DEFAULT_WINDOWS = ("7d", "30d", "12m")
+TREND_DEFAULT_ANCHORS = ("scraped_at", "date_published")
+
+
+def _classify_trend_confidence(sample_size: int, time_points: int) -> str:
+    """F011 H16 — promote to 'high' when both thresholds cleared, otherwise medium/low/no_data."""
+    if sample_size <= 0:
+        return "no_data"
+    if sample_size >= TREND_MIN_HIGH[0] and time_points >= TREND_MIN_HIGH[1]:
+        return "high"
+    if sample_size >= TREND_MIN_MEDIUM[0] and time_points >= TREND_MIN_MEDIUM[1]:
+        return "medium"
+    return "low"
+
+
+def _aggregate_health_series(reviews: list, *, ownership: str, anchor: str = "scraped_at",
+                              window: str = "30d") -> list:
+    """Aggregate health-index series points by date using `anchor` field on each review.
+
+    Returns list of {"date": "YYYY-MM-DD", "value": float, "sample_count": int} sorted ascending.
+    A point's "value" is the average rating for that day among reviews matching `ownership`.
+    `window` clips to the last N days where N = 7 / 30 / 365 (12m). Reviews missing the anchor
+    field are skipped silently.
+    """
+    from datetime import date as _date, timedelta as _td
+
+    days = {"7d": 7, "30d": 30, "12m": 365}.get(window, 30)
+    by_date: dict = {}
+    for r in reviews:
+        if (r.get("ownership") or "") != ownership:
+            continue
+        raw = r.get(anchor) or r.get("date") or r.get("date_published_parsed")
+        if not raw:
+            continue
+        try:
+            iso_day = str(raw)[:10]
+            _date.fromisoformat(iso_day)
+        except (ValueError, TypeError):
+            continue
+        rating = r.get("rating")
+        if rating is None:
+            continue
+        try:
+            by_date.setdefault(iso_day, []).append(float(rating))
+        except (TypeError, ValueError):
+            continue
+
+    if not by_date:
+        return []
+
+    # Clip to window relative to most recent day
+    sorted_days = sorted(by_date.keys())
+    latest_day = _date.fromisoformat(sorted_days[-1])
+    cutoff = latest_day - _td(days=days)
+    points = []
+    for d in sorted_days:
+        if _date.fromisoformat(d) < cutoff:
+            continue
+        ratings = by_date[d]
+        avg = sum(ratings) / len(ratings)
+        # Linear-map 1..5 → 0..100 health index
+        health = round(((avg - 1) / 4) * 100, 1)
+        points.append({"date": d, "value": health, "sample_count": len(ratings)})
+    return points
+
+
+def _build_trend_comparison(series_own: list, prev_window_data) -> dict | None:
+    """Build current-vs-prior comparison block. Returns None if either side missing."""
+    if not series_own or not prev_window_data:
+        return None
+    current = series_own[-1]["value"]
+    prior = prev_window_data.get("own_avg_health")
+    if prior is None:
+        return None
+    delta = current - prior
+    delta_pct = (delta / prior * 100) if prior else 0
+    return {
+        "own_vs_prior_window": {
+            "current": round(current, 2),
+            "prior": round(prior, 2),
+            "delta": round(delta, 2),
+            "delta_pct": round(delta_pct, 2),
+        }
+    }
+
+
+def _build_top_issues_drilldown(reviews: list, window: str) -> dict:
+    """Lightweight Top Issues drill-down (placeholder shape; richer in Task 3.x)."""
+    from collections import Counter as _C
+    own_neg = [r for r in reviews if (r.get("ownership") or "") == "own"
+               and (r.get("rating") or 5) <= 2]
+    label_counter: _C = _C()
+    for r in own_neg:
+        for lab in (r.get("analysis_labels_parsed") or []):
+            if (lab.get("polarity") or "") == "negative" and lab.get("code"):
+                label_counter[lab["code"]] += 1
+    return {
+        "kind": "top_issues",
+        "window": window,
+        "items": [{"label_code": c, "review_count": n} for c, n in label_counter.most_common(5)],
+    }
+
+
+def _build_product_ratings_drilldown(reviews: list) -> dict:
+    """Product-ratings drill-down: per-SKU mean rating among own reviews."""
+    by_sku: dict = {}
+    name_lookup: dict = {}
+    for r in reviews:
+        if (r.get("ownership") or "") != "own":
+            continue
+        sku = r.get("product_sku") or ""
+        rating = r.get("rating")
+        if not sku or rating is None:
+            continue
+        try:
+            by_sku.setdefault(sku, []).append(float(rating))
+        except (TypeError, ValueError):
+            continue
+        if sku not in name_lookup and r.get("product_name"):
+            name_lookup[sku] = r["product_name"]
+    items = sorted(
+        ({"sku": sku, "product_name": name_lookup.get(sku, sku),
+          "rating_avg": round(sum(rs) / len(rs), 2),
+          "review_count": len(rs)}
+         for sku, rs in by_sku.items()),
+        key=lambda x: x["rating_avg"],
+    )
+    return {"kind": "product_ratings", "items": items[:8]}
+
+
+def _build_competitor_radar_drilldown(reviews: list) -> dict:
+    """Competitor radar drill-down: positive feature counts (top 6)."""
+    from collections import Counter as _C
+    counter: _C = _C()
+    for r in reviews:
+        if (r.get("ownership") or "") != "competitor":
+            continue
+        for lab in (r.get("analysis_labels_parsed") or []):
+            if (lab.get("polarity") or "") == "positive" and lab.get("code"):
+                counter[lab["code"]] += 1
+    return {
+        "kind": "competitor_radar",
+        "items": [{"label_code": c, "review_count": n} for c, n in counter.most_common(6)],
+    }
+
+
+def build_trend_digest(
+    reviews: list,
+    *,
+    prev_window_data=None,
+    default_window: str = "30d",
+    default_anchor: str = "scraped_at",
+) -> dict:
+    """F011 H16 — single-primary-chart trend digest with drill-downs.
+
+    Output shape:
+        {
+          "primary_chart": {
+            "kind": "health_trend",
+            "default_window": "30d", "default_anchor": "scraped_at",
+            "windows_available": [...], "anchors_available": [...],
+            "series_own": [...], "series_competitor": [...],
+            "comparison": {...} | None,
+            "confidence": "high" | "medium" | "low" | "no_data",
+            "min_sample_warning": str | None,
+          },
+          "drill_downs": [<top_issues>, <product_ratings>, <competitor_radar>]
+        }
+    """
+    series_own = _aggregate_health_series(reviews, ownership="own",
+                                          anchor=default_anchor, window=default_window)
+    series_competitor = _aggregate_health_series(reviews, ownership="competitor",
+                                                  anchor=default_anchor, window=default_window)
+
+    sample_size = sum(1 for r in reviews if (r.get("ownership") or "") == "own")
+    time_points = len(series_own)
+    confidence = _classify_trend_confidence(sample_size, time_points)
+    min_warning = (
+        f"样本 {sample_size} 条 / 时间点 {time_points}，需 ≥{TREND_MIN_HIGH[0]} + ≥{TREND_MIN_HIGH[1]} 才能判趋势"
+        if confidence in ("low", "medium") else None
+    )
+
+    primary_chart = {
+        "kind": "health_trend",
+        "default_window": default_window,
+        "default_anchor": default_anchor,
+        "windows_available": list(TREND_DEFAULT_WINDOWS),
+        "anchors_available": list(TREND_DEFAULT_ANCHORS),
+        "series_own": series_own,
+        "series_competitor": series_competitor,
+        "comparison": _build_trend_comparison(series_own, prev_window_data),
+        "confidence": confidence,
+        "min_sample_warning": min_warning,
+    }
+
+    drill_downs = [
+        _build_top_issues_drilldown(reviews, default_window),
+        _build_product_ratings_drilldown(reviews),
+        _build_competitor_radar_drilldown(reviews),
+    ]
+
+    return {"primary_chart": primary_chart, "drill_downs": drill_downs}
+
+
+# ---------------------------------------------------------------------------
+# (private) legacy multi-view trend digest — keep for backward compat
+# ---------------------------------------------------------------------------
+
 def _build_trend_digest(snapshot, labeled_reviews, trend_series):
     logical_day = date.fromisoformat(snapshot["logical_date"])
     data = {}
