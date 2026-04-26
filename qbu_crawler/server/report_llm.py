@@ -120,12 +120,14 @@ def validate_tone_guards(copy: dict, kpis: dict) -> None:
 
 _HEALTH_NUM_RE = re.compile(r"健康(?:指数|度)\s*([0-9]+(?:\.[0-9]+)?)")
 
+# Matches standalone decimal or integer numbers.
+# Uses negative lookbehind to avoid matching the integer part of ".75"-style
+# product names (e.g. ".75 HP") where the dot is a non-word char before the digits.
+NUMBER_RE = re.compile(r"(?<![.\d])([0-9]+(?:\.[0-9]+)?)\b")
 
-def assert_consistency(copy: dict, kpis: dict) -> None:
-    """Minimal numeric assertion: hero claims health = X must match kpis['health_index'] within 0.5.
 
-    Task 2.6.1 will expand this to bullets / priorities / evidence_ids.
-    """
+def _assert_hero_health_match(copy: dict, kpis: dict) -> None:
+    """Assert hero headline health number matches kpis['health_index'] within ±0.5."""
     hero = copy.get("hero_headline") or ""
     m = _HEALTH_NUM_RE.search(hero)
     if not m:
@@ -139,6 +141,156 @@ def assert_consistency(copy: dict, kpis: dict) -> None:
         raise AssertionError(
             f"hero claims health={claimed} but kpis health_index={actual}"
         )
+
+
+def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> set:
+    """Collect all numeric values from kpis and risk_products into a set of floats.
+
+    Includes:
+    - All numeric values from kpis dict (rounded to 2 dp)
+    - All numeric values from each risk_product dict (rounded to 2 dp)
+    - len(reviews) and len(risk_products) as total counts
+    """
+    known: set = set()
+
+    # All numeric kpi values
+    for val in kpis.values():
+        try:
+            known.add(round(float(val), 2))
+        except (TypeError, ValueError):
+            pass
+
+    # All numeric values from risk products
+    for product in risk_products:
+        for val in product.values():
+            try:
+                known.add(round(float(val), 2))
+            except (TypeError, ValueError):
+                pass
+
+    # Total counts
+    known.add(float(len(reviews)))
+    known.add(float(len(risk_products)))
+
+    return known
+
+
+def _assert_numbers_traceable(text: str, known_numbers: set, context_label: str) -> None:
+    """Assert every number >= 2 in text can be traced to known_numbers.
+
+    Tolerances:
+    - absolute: ±0.5
+    - relative: ≤1%
+
+    Numbers < 2 are skipped (treated as ordinals like "Top 1", "Top 2").
+    """
+    for m in NUMBER_RE.finditer(text):
+        try:
+            num = float(m.group(1))
+        except ValueError:
+            continue
+        if num < 2:
+            continue  # ordinal / small count — skip
+        # Check if num is within tolerance of any known number
+        traceable = False
+        for known in known_numbers:
+            abs_diff = abs(num - known)
+            if abs_diff <= 0.5:
+                traceable = True
+                break
+            # relative tolerance: ≤1%
+            if known != 0 and abs_diff / abs(known) <= 0.01:
+                traceable = True
+                break
+        if not traceable:
+            raise AssertionError(
+                f"bullet 中数字 {num} 无法在 kpis/risk_products 中找到来源 "
+                f"(context: {context_label!r})"
+            )
+
+
+_SENTINEL = object()  # sentinel to distinguish "not passed" from explicit empty list
+
+
+def assert_consistency(copy: dict, kpis: dict, *, risk_products=_SENTINEL, reviews=_SENTINEL) -> None:
+    """Full numeric + structural assertion for LLM copy.
+
+    Checks:
+    1. hero health number matches kpis['health_index'] within ±0.5
+    2. executive_bullets — every number must be traceable to kpis or risk_products
+       (within ±0.5 absolute or ≤1% relative tolerance); numbers < 2 are skipped.
+       **Only activated when risk_products or reviews are explicitly passed.**
+    3. improvement_priorities[].evidence_count >= 1
+    4. improvement_priorities[].evidence_review_ids must all be IDs present in reviews
+    5. improvement_priorities[].affected_products must all be product names in risk_products
+
+    Backward compatible: callers passing only (copy, kpis) skip bullet traceability
+    and priority structure checks (Task 2.6 behavior is preserved).
+    """
+    # Determine whether extended checks are enabled (caller explicitly passed args)
+    extended = risk_products is not _SENTINEL or reviews is not _SENTINEL
+    _risk_products = [] if risk_products is _SENTINEL else (risk_products or [])
+    _reviews = [] if reviews is _SENTINEL else (reviews or [])
+
+    # 1. Hero health assertion (always active)
+    _assert_hero_health_match(copy, kpis)
+
+    if not extended:
+        # Minimal Task 2.6 behavior: only hero health check
+        return
+
+    # Precompute known numbers for bullet traceability
+    known_numbers = _collect_known_numbers(kpis, _risk_products, _reviews)
+
+    # 2. executive_bullets numeric traceability
+    for i, bullet in enumerate(copy.get("executive_bullets") or []):
+        if not isinstance(bullet, str):
+            continue
+        _assert_numbers_traceable(bullet, known_numbers, f"bullet[{i}]: {bullet[:60]}")
+
+    # Precompute valid review IDs and product names for priorities checks
+    valid_review_ids: set = set()
+    for r in _reviews:
+        rid = r.get("id") or r.get("review_id")
+        if rid is not None:
+            valid_review_ids.add(rid)
+
+    valid_product_names: set = {
+        (p.get("product_name") or "").strip()
+        for p in _risk_products
+        if (p.get("product_name") or "").strip()
+    }
+
+    for i, priority in enumerate(copy.get("improvement_priorities") or []):
+        if not isinstance(priority, dict):
+            continue
+
+        # 3. evidence_count >= 1
+        evidence_count = int(priority.get("evidence_count") or 0)
+        if evidence_count < 1:
+            raise AssertionError(
+                f"improvement_priorities[{i}].evidence_count must be >= 1, "
+                f"got {evidence_count}"
+            )
+
+        # 4. evidence_review_ids must all be in valid review IDs
+        if _reviews:  # only check if reviews were provided
+            for rid in priority.get("evidence_review_ids") or []:
+                if rid not in valid_review_ids:
+                    raise AssertionError(
+                        f"improvement_priorities[{i}].evidence_review_ids 包含"
+                        f"未知 review id: {rid}"
+                    )
+
+        # 5. affected_products must all be in risk_products
+        if _risk_products:  # only check if risk_products were provided
+            for product_name in priority.get("affected_products") or []:
+                if (product_name or "").strip() not in valid_product_names:
+                    raise AssertionError(
+                        f"improvement_priorities[{i}].affected_products 包含"
+                        f"未知产品名: {product_name!r}，"
+                        f"应在 risk_products 中: {sorted(valid_product_names)}"
+                    )
 
 
 def _build_insights_prompt_v3(analytics: dict, snapshot: dict | None = None) -> str:
@@ -200,7 +352,13 @@ def generate_report_insights_with_validation(
             copy = _parse_llm_response(raw)
             validate_llm_copy(copy)
             validate_tone_guards(copy, kpis)
-            assert_consistency(copy, kpis)
+            risk_products = (analytics.get("self") or {}).get("risk_products") or []
+            reviews_for_check = (
+                (analytics.get("self") or {}).get("reviews_with_ids")
+                or analytics.get("reviews")
+                or []
+            )
+            assert_consistency(copy, kpis, risk_products=risk_products, reviews=reviews_for_check)
             copy["_prompt_version"] = "v3"
             return copy
         except (SchemaError, ToneGuardError, AssertionError) as e:
