@@ -32,7 +32,8 @@ Thumbs.db
 node_modules/
 /web/dist/
 /web/.next/
-
+output/
+.playwright-cli/
 # uv
 .python-version
 */openclaw/old/
