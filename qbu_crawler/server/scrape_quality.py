@@ -12,6 +12,11 @@ def _is_missing(v) -> bool:
     return v in MISSING_SENTINELS
 
 
+def _safe_int(p: dict, key: str) -> int:
+    """Convert p[key] to int; treat None / "" / missing as 0."""
+    return int(p.get(key, 0) or 0)
+
+
 def summarize_scrape_quality(
     products: Iterable[dict],
     *,
@@ -43,19 +48,19 @@ def summarize_scrape_quality(
         return n / total if total > 0 else 0.0
 
     # --- new F011 metrics ---
-    site_total = sum(int(p.get("review_count", 0) or 0) for p in products)
-    ingested_total = sum(int(p.get("ingested_count", 0) or 0) for p in products)
+    site_total = sum(_safe_int(p, "review_count") for p in products)
+    ingested_total = sum(_safe_int(p, "ingested_count") for p in products)
 
     zero_scrape_skus = [
         p["sku"] for p in products
-        if (int(p.get("review_count", 0) or 0) > 0)
-        and (int(p.get("ingested_count", 0) or 0) == 0)
+        if (_safe_int(p, "review_count") > 0)
+        and (_safe_int(p, "ingested_count") == 0)
     ]
 
     low_coverage_skus = []
     for p in products:
-        site = int(p.get("review_count", 0) or 0)
-        ingested = int(p.get("ingested_count", 0) or 0)
+        site = _safe_int(p, "review_count")
+        ingested = _safe_int(p, "ingested_count")
         if site > 0 and (ingested / site) < low_coverage_threshold:
             low_coverage_skus.append(p["sku"])
 

@@ -66,3 +66,14 @@ def test_missing_ingested_count_defaults_to_zero():
     # site_total=50 with ingested_total=0 → A is a zero_scrape SKU
     assert quality["zero_scrape_skus"] == ["A"]
     assert quality["scrape_completeness_ratio"] == 0.0
+
+
+def test_low_coverage_boundary_excludes_exact_threshold():
+    """ingested/site == threshold must NOT be flagged (predicate is `<`, strict)."""
+    products = [
+        {"sku": "A", "review_count": 100, "ingested_count": 60},  # 60/100 = 0.6 exact
+        {"sku": "B", "review_count": 100, "ingested_count": 59},  # 59/100 = 0.59 below
+    ]
+    quality = summarize_scrape_quality(products, low_coverage_threshold=0.6)
+    assert "A" not in quality["low_coverage_skus"]
+    assert "B" in quality["low_coverage_skus"]
