@@ -1344,6 +1344,50 @@ ul, ol { list-style: none; }
   color: #475569;
 }
 
+/* F011 §4.2.6.2 v1.2 — Top-N aggregated heatmap with green/yellow/red/gray */
+.heatmap-section { margin: var(--sp-lg) 0; }
+.heatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-sm);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  align-items: center;
+}
+.heatmap-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.heatmap-legend .legend-cell {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.heatmap-cell { cursor: pointer; transition: opacity var(--dur-fast); }
+.heatmap-cell:hover { opacity: 0.85; outline: 2px solid #333; outline-offset: -2px; }
+.heatmap-cell.green  { background: #86efac; color: #064e3b; }
+.heatmap-cell.yellow { background: #fde68a; color: #78350f; }
+.heatmap-cell.red    { background: #fca5a5; color: #7f1d1d; }
+.heatmap-cell.gray   { background: #e5e7eb; color: #6b7280; }
+.legend-cell.green   { background: #86efac; }
+.legend-cell.yellow  { background: #fde68a; }
+.legend-cell.red     { background: #fca5a5; }
+.legend-cell.gray    { background: #e5e7eb; }
+.heatmap-foot {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  margin-top: var(--sp-xs);
+}
+/* Highlight pulse for panorama row when drilled-down from heatmap */
+.panorama-table tr.highlighted {
+  background: #fef3c7;
+  transition: background var(--dur-base);
+}
+
 .chart-container {
   padding: var(--sp-xl);
   border: 1px solid var(--border);

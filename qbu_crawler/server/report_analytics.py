@@ -1607,65 +1607,193 @@ def _compute_chart_data(labeled_reviews, snapshot):
         "negative": "差评(≤2星)",
     }
 
-    # ── Heatmap: product × dimension sentiment score (-1 to 1) ─────────
-    # Only for own products with at least some labels
-    own_products = [p for p in products if p.get("ownership") == "own"]
-    heatmap_dims = sorted(set(
-        label["label_code"]
-        for item in labeled_reviews
-        if item["review"].get("ownership") == "own"
-        for label in item["labels"]
-    ))
-    # Build SKU → review_count lookup from snapshot products
-    sku_review_count = {}
-    for p in own_products:
-        sku_review_count[p.get("sku", "")] = p.get("review_count", 0) or 0
-    if len(own_products) >= 2 and len(heatmap_dims) >= 2:
-        y_labels = []
-        z = []
-        for p in own_products:
-            psku = p.get("sku") or ""
-            pname = p.get("name") or "?"
-            row = []
-            has_data = False
-            for dim in heatmap_dims:
-                pos = neg = 0
-                for item in labeled_reviews:
-                    r = item["review"]
-                    if (r.get("product_sku") or "") != psku:
-                        continue
-                    for label in item["labels"]:
-                        if label["label_code"] == dim:
-                            if label["label_polarity"] == "positive":
-                                pos += 1
-                            else:
-                                neg += 1
-                if pos + neg > 0:
-                    has_data = True
-                    total_reviews = max(sku_review_count.get(psku, pos + neg), pos + neg)
-                    row.append(round((pos - neg) / total_reviews, 2))
-                else:
-                    row.append(0.0)
-            if has_data:
-                # Smart truncation: remove brand prefix, truncate at word boundary
-                short_name = pname
-                for prefix in ("Cabela's ", "Cabela\u2019s "):
-                    if short_name.startswith(prefix):
-                        short_name = short_name[len(prefix):]
-                        break
-                if len(short_name) > 25:
-                    short_name = short_name[:25].rsplit(" ", 1)[0]
-                y_labels.append(short_name)
-                z.append(row)
-
-        if len(y_labels) >= 2:
-            result["_heatmap_data"] = {
-                "z": z,
-                "x_labels": [_LABEL_DISPLAY.get(d, d) for d in heatmap_dims],
-                "y_labels": y_labels,
-            }
+    # ── Heatmap (F011 §4.2.6.2 v1.2) ──────────────────
+    # New data contract: x-axis aggregated to Top HEATMAP_MAX_LABELS-1 + "其他";
+    # cells are dicts ({score, sample_size, color_class, top_review_id,
+    # top_review_excerpt}) instead of bare floats. Charts that consumed the
+    # old float `z` extract `cell["score"]` (None → treated as 0.0).
+    heatmap_data = _build_heatmap_data_v12(labeled_reviews, products)
+    if heatmap_data is not None:
+        result["_heatmap_data"] = heatmap_data
 
     return result
+
+
+# ── F011 §4.2.6.2 v1.2 — heatmap constants ──────────────────
+HEATMAP_MAX_LABELS = 8
+HEATMAP_MIN_SAMPLE = 3
+HEATMAP_TOP_REVIEW_EXCERPT_LEN = 80
+
+
+def _build_heatmap_data_v12(labeled_reviews, products):
+    """F011 §4.2.6.2 v1.2 — Top-N label aggregation + per-cell top review.
+
+    Returns dict with:
+      x_labels         — display names, length <= HEATMAP_MAX_LABELS
+      x_label_codes    — parallel list of canonical codes ("" for "其他")
+      y_labels         — own product display names (smart-truncated)
+      z                — list[list[dict]] (cell schema below)
+      aggregated_labels — codes folded into "其他" bucket (empty if no overflow)
+
+    Cell schema:
+      {"score": float|None, "sample_size": int, "color_class": str,
+       "top_review_id": int|None, "top_review_excerpt": str}
+
+    Returns None if guard conditions fail (>= 2 own products + >= 2 dimensions).
+    """
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    own_products = [p for p in products if p.get("ownership") == "own"]
+
+    # Count label mentions across own reviews (each label_code per review counted once)
+    label_mention_counts: dict[str, int] = {}
+    for item in labeled_reviews:
+        if item["review"].get("ownership") != "own":
+            continue
+        seen_codes_in_review: set[str] = set()
+        for label in item["labels"]:
+            code = label.get("label_code")
+            if not code or code in seen_codes_in_review:
+                continue
+            seen_codes_in_review.add(code)
+            label_mention_counts[code] = label_mention_counts.get(code, 0) + 1
+
+    if len(own_products) < 2 or len(label_mention_counts) < 2:
+        return None
+
+    # Sort by mention count desc; deterministic tie-break by code
+    sorted_codes = sorted(
+        label_mention_counts.items(),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    top_codes = [code for code, _ in sorted_codes[:HEATMAP_MAX_LABELS - 1]]
+    other_codes = [code for code, _ in sorted_codes[HEATMAP_MAX_LABELS - 1:]]
+
+    x_label_codes = list(top_codes)
+    x_labels = [_LABEL_DISPLAY.get(c, c) for c in top_codes]
+    if other_codes:
+        x_labels.append("其他")
+        x_label_codes.append("")  # "其他" bucket maps to no single code
+
+    # Group reviews by SKU for fast cell lookup
+    reviews_by_sku: dict[str, list[dict]] = {}
+    for item in labeled_reviews:
+        r = item["review"]
+        if r.get("ownership") != "own":
+            continue
+        psku = r.get("product_sku") or ""
+        reviews_by_sku.setdefault(psku, []).append(item)
+
+    bucket_codes: list[list[str]] = [[c] for c in top_codes]
+    if other_codes:
+        bucket_codes.append(other_codes)
+
+    y_labels: list[str] = []
+    z: list[list[dict]] = []
+
+    for p in own_products:
+        psku = p.get("sku") or ""
+        pname = p.get("name") or "?"
+        product_items = reviews_by_sku.get(psku, [])
+        if not product_items:
+            continue
+
+        row: list[dict] = []
+        for codes in bucket_codes:
+            code_set = set(codes)
+            cell_reviews = [
+                item["review"] for item in product_items
+                if any(lab.get("label_code") in code_set for lab in item["labels"])
+            ]
+            row.append(_build_heatmap_cell(cell_reviews))
+
+        # Skip products that yielded zero data across all buckets
+        if all(c.get("sample_size", 0) == 0 for c in row):
+            continue
+
+        # Smart truncation: remove known brand prefix, truncate at word boundary
+        short_name = pname
+        for prefix in ("Cabela's ", "Cabela’s "):
+            if short_name.startswith(prefix):
+                short_name = short_name[len(prefix):]
+                break
+        if len(short_name) > 25:
+            short_name = short_name[:25].rsplit(" ", 1)[0]
+
+        y_labels.append(short_name)
+        z.append(row)
+
+    if len(y_labels) < 2:
+        return None
+
+    return {
+        "x_labels": x_labels,
+        "x_label_codes": x_label_codes,
+        "y_labels": y_labels,
+        "z": z,
+        "aggregated_labels": other_codes,
+    }
+
+
+def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
+    """F011 §4.2.6.2 v1.2 — derive cell dict from reviews matched to a cell."""
+    sample_size = len(cell_reviews)
+
+    if sample_size < HEATMAP_MIN_SAMPLE:
+        return {
+            "score": None,
+            "sample_size": sample_size,
+            "color_class": "gray",
+            "top_review_id": None,
+            "top_review_excerpt": ("样本不足" if sample_size > 0 else "无样本"),
+        }
+
+    # Positive classification: prefer explicit `sentiment` if present, else
+    # rating-based fallback (rating >= 4 → positive).
+    positive_count = 0
+    for r in cell_reviews:
+        sentiment = (r.get("sentiment") or "").lower()
+        if sentiment in {"positive", "mixed"}:
+            positive_count += 1
+            continue
+        if sentiment:
+            # Explicit non-positive sentiment present — do not double-count via rating
+            continue
+        try:
+            rating = float(r.get("rating") or 0)
+        except (TypeError, ValueError):
+            rating = 0.0
+        if rating >= 4:
+            positive_count += 1
+
+    score = positive_count / sample_size
+
+    if score > 0.7:
+        color = "green"
+    elif score >= 0.4:
+        color = "yellow"
+    else:
+        color = "red"
+
+    # Top review: highest rating, tie-break by longest body
+    def _body_len(r: dict) -> int:
+        return len(r.get("body_translated") or r.get("body_cn") or r.get("body") or "")
+
+    top_r = max(
+        cell_reviews,
+        key=lambda r: (float(r.get("rating") or 0), _body_len(r)),
+    )
+    body = (top_r.get("body_translated") or top_r.get("body_cn")
+            or top_r.get("body") or "")
+    excerpt = body[:HEATMAP_TOP_REVIEW_EXCERPT_LEN]
+
+    return {
+        "score": round(score, 3),
+        "sample_size": sample_size,
+        "color_class": color,
+        "top_review_id": top_r.get("id"),
+        "top_review_excerpt": excerpt,
+    }
 
 
 def _build_trend_data(products, days=30):

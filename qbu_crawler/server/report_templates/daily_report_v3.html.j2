@@ -413,6 +413,57 @@
       <h2 class="section-title">全景数据</h2>
       <p class="section-sub">{{ (snapshot.reviews or []) | length }} 条评论 · 5 个客户端筛选器</p>
 
+      {% if analytics._heatmap_data and analytics._heatmap_data.y_labels and analytics._heatmap_data.x_labels %}
+      {# F011 §4.2.6.2 v1.2 — feature × product sentiment heatmap (Top 8 dim aggregation) #}
+      <section class="heatmap-section">
+        <h3 class="subsection-title">特征情感热力图</h3>
+        <div class="heatmap-legend" role="note" aria-label="热力图色阶图例">
+          <span class="legend-item"><span class="legend-cell green"></span>认可（&gt;70%）</span>
+          <span class="legend-item"><span class="legend-cell yellow"></span>中性（40%–70%）</span>
+          <span class="legend-item"><span class="legend-cell red"></span>负面（&lt;40%）</span>
+          <span class="legend-item"><span class="legend-cell gray"></span>样本不足（&lt;3）</span>
+        </div>
+        <div class="heatmap-container">
+          <table class="heatmap-table heatmap-table-v12">
+            <thead>
+              <tr>
+                <th></th>
+                {% for x in analytics._heatmap_data.x_labels %}
+                <th>{{ x }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for y in analytics._heatmap_data.y_labels %}
+              <tr>
+                <th>{{ y }}</th>
+                {% set row = analytics._heatmap_data.z[loop.index0] %}
+                {% set y_label = y %}
+                {% for cell in row %}
+                  {% set x_label = analytics._heatmap_data.x_labels[loop.index0] %}
+                  {% set x_code = (analytics._heatmap_data.x_label_codes[loop.index0] if analytics._heatmap_data.x_label_codes else '') %}
+                  <td class="heatmap-cell {{ cell.color_class }}"
+                      data-product="{{ y_label }}"
+                      data-label="{{ x_label }}"
+                      data-label-code="{{ x_code }}"
+                      data-review-id="{{ cell.top_review_id or '' }}"
+                      title="{{ y_label }} × {{ x_label }} ({{ cell.sample_size }} 条)&#10;{{ cell.top_review_excerpt }}">
+                    {% if cell.score is not none %}{{ '%.0f%%' | format(cell.score * 100) }}{% else %}—{% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if analytics._heatmap_data.aggregated_labels %}
+        <p class="heatmap-foot">
+          “其他”聚合了 {{ analytics._heatmap_data.aggregated_labels | length }} 个低频维度
+        </p>
+        {% endif %}
+      </section>
+      {% endif %}
+
       <div class="panorama-filters">
         <select name="ownership" aria-label="归属">
           <option value="">全部归属</option>

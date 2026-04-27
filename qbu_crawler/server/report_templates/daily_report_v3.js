@@ -673,6 +673,49 @@
   }
 
   /* =========================================================================
+     F011 §4.2.6.2 v1.2 — Heatmap click drill-down
+     Click a heatmap cell -> scroll to panorama table, apply label filter
+     (when label_code present), highlight the top review row.
+     ========================================================================= */
+  function initHeatmapDrillDown() {
+    var cells = document.querySelectorAll('.heatmap-cell');
+    if (!cells.length) return;
+    cells.forEach(function (cell) {
+      cell.addEventListener('click', function () {
+        var product = cell.dataset.product || '';
+        var label = cell.dataset.label || '';
+        if (!product || !label) return;
+
+        // Scroll to panorama table
+        var panoramaTable = document.querySelector('.panorama-table');
+        if (panoramaTable) {
+          panoramaTable.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // Apply label filter via the panorama label select (uses code, not display name)
+        var labelCode = cell.dataset.labelCode || '';
+        var labelSelect = document.querySelector('.panorama-filters select[name=label]');
+        if (labelSelect && labelCode) {
+          labelSelect.value = labelCode;
+          labelSelect.dispatchEvent(new Event('change'));
+        }
+
+        // Highlight the top review row briefly
+        var reviewId = cell.dataset.reviewId;
+        if (reviewId) {
+          var reviewRow = document.querySelector(
+            '.panorama-table tr[data-review-id="' + reviewId + '"]'
+          );
+          if (reviewRow) {
+            reviewRow.classList.add('highlighted');
+            setTimeout(function () { reviewRow.classList.remove('highlighted'); }, 3000);
+          }
+        }
+      });
+    });
+  }
+
+  /* =========================================================================
      BOOT
      ========================================================================= */
 
@@ -692,6 +735,7 @@
     initReveal();
     initStarRatings();
     initPanoramaFilters();
+    initHeatmapDrillDown();
   }
 
   if (document.readyState === 'loading') {

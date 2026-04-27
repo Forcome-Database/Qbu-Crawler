@@ -138,13 +138,35 @@ def _build_bar_chart(
     return _to_html(fig)
 
 
+def _heatmap_cell_score(cell):
+    """F011 4.2.6.2 v1.2 - extract numeric score from a heatmap cell.
+
+    Cells can be either bare floats (legacy) or dicts with a ``score`` key
+    (v1.2, where ``None`` means low-sample / no data). Charts that consumed
+    the legacy float-only `z` keep working: ``None`` is treated as 0.0.
+    """
+    if isinstance(cell, dict):
+        score = cell.get("score")
+        return float(score) if score is not None else 0.0
+    try:
+        return float(cell)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _build_heatmap(
-    z: list[list[float]],
+    z: list[list],
     x_labels: list[str],
     y_labels: list[str],
     title: str,
 ) -> str:
-    """Feature x Product sentiment heatmap with diverging colors."""
+    """Feature x Product sentiment heatmap with diverging colors.
+
+    Accepts both legacy float cells and v1.2 dict cells (auto-extracts score).
+    """
+    # Coerce to numeric matrix (handles v1.2 dict cells)
+    numeric_z = [[_heatmap_cell_score(cell) for cell in row] for row in z]
+
     # Truncate long y-axis labels for readability
     max_label_len = 30
     display_labels = [
@@ -158,7 +180,7 @@ def _build_heatmap(
 
     # Build annotation text (1 decimal)
     annotations = []
-    for i, row in enumerate(z):
+    for i, row in enumerate(numeric_z):
         for j, val in enumerate(row):
             annotations.append(
                 dict(
@@ -172,7 +194,7 @@ def _build_heatmap(
 
     fig = go.Figure(
         go.Heatmap(
-            z=z,
+            z=numeric_z,
             x=x_labels,
             y=display_labels,
             zmid=0,

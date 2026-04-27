@@ -147,24 +147,41 @@ def test_build_chart_html_fragments_with_data():
     assert "competitor_positive_themes" in fragments
 
 
-def test_heatmap_produces_continuous_values():
-    """Heatmap z values should not all collapse to -1/0/1."""
+def test_heatmap_v12_shape_and_smart_truncation():
+    """F011 §4.2.6.2 v1.2 — heatmap z cells are dicts; y_labels still smart-truncated.
+
+    Replaces the legacy ``test_heatmap_produces_continuous_values`` test: the
+    old contract emitted bare floats in [-1, 1]; the new contract emits dicts
+    with ``score`` (float|None), ``sample_size``, ``color_class``,
+    ``top_review_id``, ``top_review_excerpt``. Cell-level color/sample
+    coverage lives in ``tests/server/test_heatmap_optimization.py``.
+    """
     from qbu_crawler.server.report_analytics import _compute_chart_data
 
     labeled = []
-    # Product 1: 3 positive solid_build + 2 negative quality_stability
+    # Product 1: 4 positive solid_build (high rating) + 3 negative quality_stability
+    for _ in range(4):
+        labeled.append({"review": {"ownership": "own", "product_sku": "S1",
+                                   "product_name": "Cabela's Commercial-Grade Sausage Stuffer",
+                                   "rating": 5},
+                        "labels": [{"label_code": "solid_build", "label_polarity": "positive",
+                                    "severity": "low", "confidence": 0.9}],
+                        "images": [], "product": {}})
     for _ in range(3):
-        labeled.append({"review": {"ownership": "own", "product_sku": "S1", "product_name": "Cabela's Commercial-Grade Sausage Stuffer"},
-                        "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
+        labeled.append({"review": {"ownership": "own", "product_sku": "S1",
+                                   "product_name": "Cabela's Commercial-Grade Sausage Stuffer",
+                                   "rating": 1},
+                        "labels": [{"label_code": "quality_stability", "label_polarity": "negative",
+                                    "severity": "high", "confidence": 0.9}],
                         "images": [], "product": {}})
-    for _ in range(2):
-        labeled.append({"review": {"ownership": "own", "product_sku": "S1", "product_name": "Cabela's Commercial-Grade Sausage Stuffer"},
-                        "labels": [{"label_code": "quality_stability", "label_polarity": "negative", "severity": "high", "confidence": 0.9}],
+    # Product 2: 3 positive solid_build (need ≥3 per cell to escape gray)
+    for _ in range(3):
+        labeled.append({"review": {"ownership": "own", "product_sku": "S2",
+                                   "product_name": "Cabela's Heavy-Duty Sausage Stuffer",
+                                   "rating": 5},
+                        "labels": [{"label_code": "solid_build", "label_polarity": "positive",
+                                    "severity": "low", "confidence": 0.9}],
                         "images": [], "product": {}})
-    # Product 2: 1 positive
-    labeled.append({"review": {"ownership": "own", "product_sku": "S2", "product_name": "Cabela's Heavy-Duty Sausage Stuffer"},
-                    "labels": [{"label_code": "solid_build", "label_polarity": "positive", "severity": "low", "confidence": 0.9}],
-                    "images": [], "product": {}})
 
     snapshot = {"products": [
         {"name": "Cabela's Commercial-Grade Sausage Stuffer", "sku": "S1", "ownership": "own", "price": 349.99, "rating": 3.6, "review_count": 88},
@@ -174,14 +191,17 @@ def test_heatmap_produces_continuous_values():
     heatmap = charts.get("_heatmap_data")
     assert heatmap is not None
 
-    # y_labels should use smart truncation (not mid-word cut)
+    # Smart truncation preserved
     for label in heatmap["y_labels"]:
         assert not label.endswith("Sausa"), f"Label truncated mid-word: {label}"
 
-    # At least one z value should be between -1 and 1 (continuous, not ternary)
-    all_z = [v for row in heatmap["z"] for v in row if v != 0.0]
-    has_continuous = any(-1 < v < 1 for v in all_z)
-    assert has_continuous, f"All z values are ternary: {all_z}"
+    # Cells are dicts with the v1.2 contract
+    for row in heatmap["z"]:
+        for cell in row:
+            assert isinstance(cell, dict), f"v1.2 contract: cells must be dicts, got {type(cell)}"
+            assert "color_class" in cell
+            assert "sample_size" in cell
+            assert "score" in cell  # may be None for low-sample cells
 
 
 def test_radar_uses_unified_dimensions():
