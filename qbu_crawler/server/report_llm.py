@@ -1181,8 +1181,11 @@ def analyze_cluster_deep(cluster, cluster_reviews):
         cluster: dict with label_code, label_display, review_count
         cluster_reviews: list of review dicts (from query_cluster_reviews)
 
-    Returns dict with: failure_modes, root_causes, temporal_pattern,
-    user_workarounds, actionable_summary. Returns None if LLM unavailable.
+    Returns dict with: failure_modes, root_causes, user_workarounds,
+    actionable_summary. Returns None if LLM unavailable.
+
+    F011 §4.2.3.1 v1.2 — ``temporal_pattern`` retired (template-y filler text,
+    low signal value).
     """
     if not config.LLM_API_BASE or not config.LLM_API_KEY:
         return None
@@ -1216,7 +1219,6 @@ def analyze_cluster_deep(cluster, cluster_reviews):
         '    {"cause": "推测根因", "evidence": "从评论推断的依据", '
         '"confidence": "high/medium/low"}\n'
         "  ],\n"
-        '  "temporal_pattern": "问题随时间的变化趋势描述",\n'
         '  "user_workarounds": ["用户自行采取的应对方法"],\n'
         '  "actionable_summary": "不超过2句话：这个问题的本质是什么，最高优先的改进动作是什么"\n'
         "}\n\n"
@@ -1245,10 +1247,11 @@ def _validate_cluster_analysis(parsed):
     """Validate and sanitize cluster analysis output."""
     if not isinstance(parsed, dict):
         return None
+    # F011 §4.2.3.1 v1.2 — ``temporal_pattern`` retired; ignore it even if
+    # an upstream LLM still returns it.
     result = {
         "failure_modes": parsed.get("failure_modes", []),
         "root_causes": parsed.get("root_causes", []),
-        "temporal_pattern": parsed.get("temporal_pattern", ""),
         "user_workarounds": parsed.get("user_workarounds", []),
         "actionable_summary": parsed.get("actionable_summary", ""),
     }
@@ -1260,8 +1263,6 @@ def _validate_cluster_analysis(parsed):
     if not isinstance(result["user_workarounds"], list):
         result["user_workarounds"] = []
     # Type guards for strings
-    if not isinstance(result["temporal_pattern"], str):
-        result["temporal_pattern"] = ""
     if not isinstance(result["actionable_summary"], str):
         result["actionable_summary"] = ""
     # Filter non-dict elements from lists and cap lengths

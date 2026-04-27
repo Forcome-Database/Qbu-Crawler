@@ -1119,6 +1119,9 @@ def normalize_deep_report_analytics(analytics):
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
             "label_display": cluster.get("label_display", ""),
             "review_count": cluster.get("review_count", 0),
+            # F011 §4.2.3.1 v1.2 — spec-aligned alias of review_count used as
+            # the primary sort key for issue cards (AC-35).
+            "evidence_count": cluster.get("review_count", 0),
             "severity": cluster.get("severity", "low"),
             "severity_display": cluster.get("severity_display", ""),
             "affected_product_count": cluster.get("affected_product_count", 0),
@@ -1142,6 +1145,23 @@ def normalize_deep_report_analytics(analytics):
         total = cluster.get("review_count", 0) or 1
         recency_pct = round(recent / total * 100)
         issue_cards[-1]["recency_display"] = f"近90天 {recent} 条（{recency_pct}%）"
+
+    # ── F011 §4.2.3.1 v1.2 — sort + mark Top 3 as default-expanded ────────
+    # Primary key:   evidence_count DESC
+    # Secondary key: severity rank DESC (high=3, medium=2, low=1)
+    # Tertiary key:  affected_product_count DESC
+    _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
+    issue_cards.sort(
+        key=lambda c: (
+            c.get("evidence_count", 0) or 0,
+            _SEVERITY_RANK.get(c.get("severity") or "low", 0),
+            c.get("affected_product_count", 0) or 0,
+        ),
+        reverse=True,
+    )
+    for _i, _card in enumerate(issue_cards):
+        _card["default_expanded"] = _i < 3
+
     normalized["self"]["issue_cards"] = issue_cards
 
     # ── Top-level alias for V3 template convenience ─────────────────────

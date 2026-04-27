@@ -1918,3 +1918,19 @@ details summary:hover { color: var(--accent); }
 
 /* F011 H5 — frequent_period chip on issue cards */
 .issue-card .frequent-period { color: #475569; }
+
+/* F011 §4.2.3.1 v1.2 — issue cards Top 3 expanded + folded rest */
+.issue-cards-folded { margin-top: 16px; }
+.issue-cards-folded > summary {
+  cursor: pointer;
+  padding: 12px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  font-weight: 600;
+  list-style: none;
+}
+.issue-cards-folded > summary::before { content: "▶ "; display: inline-block; transition: transform 0.2s; }
+.issue-cards-folded[open] > summary::before { transform: rotate(90deg); }
+.issue-cards-folded > summary:hover { background: #e2e8f0; }
+.issue-cards-folded[open] > summary { background: #cbd5e1; }
+.issue-cards-folded > .issue-card { margin-top: 12px; }

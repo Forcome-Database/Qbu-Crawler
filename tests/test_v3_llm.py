@@ -136,6 +136,7 @@ class TestClusterDeepAnalysis:
         raw = {
             "failure_modes": [{"mode": "test", "frequency": 5}] * 15,  # over limit
             "root_causes": "not a list",  # wrong type
+            # F011 §4.2.3.1 v1.2 — temporal_pattern retired; sanitizer must drop it.
             "temporal_pattern": "stable",
             "user_workarounds": ["fix1"],
             "actionable_summary": "Do something",
@@ -144,6 +145,7 @@ class TestClusterDeepAnalysis:
         assert len(result["failure_modes"]) == 10  # capped
         assert result["root_causes"] == []  # sanitized to list
         assert result["actionable_summary"] == "Do something"
+        assert "temporal_pattern" not in result
 
     def test_validate_returns_none_for_non_dict(self):
         from qbu_crawler.server.report_llm import _validate_cluster_analysis
@@ -155,14 +157,15 @@ class TestClusterDeepAnalysis:
         raw = {
             "failure_modes": [{"mode": "ok"}, "not a dict", 42, {"mode": "also ok"}],
             "root_causes": [{"cause": "valid"}, None, "bad"],
-            "temporal_pattern": 123,  # wrong type — should become ""
+            # F011 §4.2.3.1 v1.2 — temporal_pattern retired; ignored regardless of type.
+            "temporal_pattern": 123,
             "user_workarounds": ["str ok", {"bad": "dict"}, "another str"],
             "actionable_summary": ["wrong type"],  # list — should become ""
         }
         result = _validate_cluster_analysis(raw)
         assert result["failure_modes"] == [{"mode": "ok"}, {"mode": "also ok"}]
         assert result["root_causes"] == [{"cause": "valid"}]
-        assert result["temporal_pattern"] == ""
+        assert "temporal_pattern" not in result
         assert result["user_workarounds"] == ["str ok", "another str"]
         assert result["actionable_summary"] == ""
 

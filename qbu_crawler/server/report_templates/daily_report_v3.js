@@ -254,14 +254,12 @@
      ========================================================================= */
 
   function initCollapsible() {
+    // F011 §4.2.3.1 v1.2 — Top 3 default-expanded; 4-N now wrapped in a
+    // browser-native <details> fold (see template + CSS).
+    // Remaining behavior: header click toggles individual card collapse.
     document.querySelectorAll('.issue-card').forEach(function (card) {
       var header = card.querySelector('.card-header');
       if (!header) return;
-
-      if (card.getAttribute('data-default-collapsed') === 'true') {
-        card.classList.add('card-collapsed');
-      }
-
       header.addEventListener('click', function () {
         card.classList.toggle('card-collapsed');
       });

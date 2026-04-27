@@ -282,14 +282,20 @@
 
     <section id="tab-issues" class="tab-panel" role="tabpanel">
       <h2 class="section-title">自有产品问题诊断</h2>
-      <p class="section-sub">按影响规模排序，每个问题簇都附带证据与建议。</p>
+      {# F011 §4.2.3.1 v1.2 — Top 3 default-expanded; remaining wrapped in <details> #}
+      <p class="section-sub">Top 3 默认展开 · 共 {{ (analytics.issue_cards or []) | length }} 张诊断卡</p>
       {% if not analytics.issue_cards %}
       <div class="empty-state">未发现明确问题簇。</div>
       {% endif %}
-      {% for card in analytics.issue_cards or [] %}
-      <div class="issue-card severity-{{ card.severity }} reveal" {% if loop.index > 4 %}data-default-collapsed="true"{% endif %}>
+
+      {% set _expanded_cards = (analytics.issue_cards or []) | selectattr("default_expanded", "equalto", true) | list %}
+      {% set _folded_cards = (analytics.issue_cards or []) | selectattr("default_expanded", "equalto", false) | list %}
+
+      {% for card in _expanded_cards %}
+      {% set idx = loop.index %}
+      <div class="issue-card severity-{{ card.severity }} reveal">
         <div class="card-header">
-          <span class="card-number">#{{ loop.index }}</span>
+          <span class="card-number">#{{ idx }}</span>
           <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
           <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
           <span class="card-toggle">▾</span>
@@ -319,6 +325,46 @@
         </div>
       </div>
       {% endfor %}
+
+      {% if _folded_cards %}
+      <details class="issue-cards-folded">
+        <summary>展开剩余 {{ _folded_cards | length }} 张诊断卡</summary>
+        {% for card in _folded_cards %}
+        {% set idx = (_expanded_cards | length) + loop.index %}
+        <div class="issue-card severity-{{ card.severity }} reveal">
+          <div class="card-header">
+            <span class="card-number">#{{ idx }}</span>
+            <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
+            <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
+            <span class="card-toggle">▾</span>
+          </div>
+          <div class="card-body">
+            <div class="card-stats">
+              <span>{{ card.review_count }} 条评论</span>
+              <span>{{ card.affected_product_count }} 个产品</span>
+              {% if card.recency_display %}<span>{{ card.recency_display }}</span>{% endif %}
+              {% if card.frequent_period %}
+                <span class="frequent-period">高频期 {{ card.frequent_period.start }} ~ {{ card.frequent_period.end }}</span>
+              {% endif %}
+            </div>
+            {% for review in (card.example_reviews or [])[:2] %}
+            <blockquote class="quote-block">
+              <div class="quote-meta">
+                <span class="quote-stars" data-rating="{{ review.rating }}"></span>
+                <span>{{ review.author or "" }}</span>
+                <span>{{ review.date_published or "" }}</span>
+              </div>
+              <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
+            </blockquote>
+            {% endfor %}
+            {% if card.recommendation %}
+            <div class="ai-box ai-box-suggest"><p>{{ card.recommendation }}</p></div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </details>
+      {% endif %}
     </section>
 
     <section id="tab-products" class="tab-panel" role="tabpanel">
