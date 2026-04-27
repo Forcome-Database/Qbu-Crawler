@@ -780,6 +780,72 @@ ul, ol { list-style: none; }
   font-weight: 700;
 }
 
+/* --------------------------------------------------------------------------
+   F011 §4.2.4 — 今日变化三层金字塔 (bootstrap notice + 3 layers)
+   -------------------------------------------------------------------------- */
+
+.info-card {
+  padding: var(--sp-lg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.bootstrap-notice {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(255, 255, 255, 0.92));
+  border-left: 4px solid #2563eb;
+  color: var(--text);
+}
+
+.layer {
+  padding: var(--sp-lg);
+  margin-bottom: var(--sp-md);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.layer + .layer { margin-top: var(--sp-md); }
+
+.layer h3 {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  margin: 0 0 var(--sp-md);
+}
+
+.layer.immediate-attention { border-left: 4px solid #dc2626; }
+.layer.trend-changes       { border-left: 4px solid #d97706; }
+.layer.competitive-opportunities { border-left: 4px solid #2563eb; }
+
+.alert-item,
+.trend-item,
+.comp-item {
+  padding: var(--sp-sm) var(--sp-md);
+  margin-bottom: var(--sp-xs);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.alert-item:last-child,
+.trend-item:last-child,
+.comp-item:last-child { margin-bottom: 0; }
+
+.alert-item { background: rgba(220, 38, 38, 0.06); }
+
+.trend-item.new       { background: rgba(217, 119, 6, 0.08); }
+.trend-item.escalated { background: rgba(220, 38, 38, 0.08); }
+.trend-item.improving { background: rgba(22, 163, 74, 0.08); }
+
+.comp-item.negative { background: rgba(220, 38, 38, 0.05); }
+.comp-item.positive { background: rgba(37, 99, 235, 0.06); }
+
 .trend-toolbar {
   display: flex;
   flex-direction: column;

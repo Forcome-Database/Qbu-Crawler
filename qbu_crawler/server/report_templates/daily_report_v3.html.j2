@@ -152,122 +152,62 @@
       <h2 class="section-title">今日变化</h2>
       <p class="section-sub">只看本期入库信号，不把全量现状和历史趋势混在一起。</p>
 
+      {# F011 §4.2.4 — bootstrap 单卡 / mature 三层金字塔 #}
       {% if analytics.report_semantics == "bootstrap" or change_digest.view_state == "bootstrap" %}
-      {% set _baseline_day_index = change_summary.baseline_day_index or 1 %}
-      {% set _baseline_is_building = change_summary.baseline_display_state == "building" %}
-      <div class="change-callout">
-        <span class="change-callout-kicker">{{ "Baseline Building" if _baseline_is_building else "Monitoring Start" }}</span>
-        <h3>{{ "基线建立期第" ~ _baseline_day_index ~ "天" if _baseline_is_building else "监控起点" }}</h3>
-        <p>{{ change_summary.window_meaning or "首次建档，当前结果用于建立监控基线" }}</p>
-        <div class="change-bootstrap-meta">
-          <span>本次入库 {{ change_summary.ingested_review_count or 0 }} 条评论</span>
-          <span>新近 {{ change_summary.fresh_review_count or 0 }} / 补采 {{ change_summary.historical_backfill_count or 0 }}</span>
-        </div>
+      <div class="info-card bootstrap-notice">
+        ℹ 首日基线已建档，对比信号将从下一日起出现
+      </div>
+      {% else %}
+      {% set ia = change_digest.immediate_attention or {} %}
+      {% set tc = change_digest.trend_changes or {} %}
+      {% set co = change_digest.competitive_opportunities or {} %}
+
+      {# Layer 1: 🔥 立即关注 (red) #}
+      {% if ia.own_new_negative_reviews or ia.own_rating_drops or ia.own_stock_alerts %}
+      <div class="layer immediate-attention">
+        <h3>🔥 立即关注</h3>
+        {% for item in ia.own_new_negative_reviews or [] %}
+        <div class="alert-item">• 我方新差评 {{ item.review_count or 0 }} 条（{{ item.product_name or "未命名产品" }}）— 主要问题：{{ (item.primary_problems or []) | join('、') or "(暂无标签)" }}</div>
+        {% endfor %}
+        {% for item in ia.own_rating_drops or [] %}
+        {% set _from = item.rating_from if item.rating_from is not none else item.prev %}
+        {% set _to = item.rating_to if item.rating_to is not none else item.new %}
+        <div class="alert-item">• {{ item.product_name or item.sku or "未命名产品" }} 评分 {{ _from if _from is not none else "-" }} → {{ _to if _to is not none else "-" }}{% if item.delta is not none %} ({{ "{:+.2f}".format(item.delta) }}){% endif %}</div>
+        {% endfor %}
+        {% for item in ia.own_stock_alerts or [] %}
+        <div class="alert-item">• {{ item.product_name or item.sku or "未命名产品" }} 缺货警告{% if item.new_status %}（{{ item.new_status }}）{% endif %}</div>
+        {% endfor %}
       </div>
       {% endif %}
 
-      {% for warning_key in ["backfill_dominant", "translation_incomplete", "estimated_dates"] %}
-        {% set warning = change_warnings[warning_key] if warning_key in change_warnings else {} %}
-        {% if warning.enabled and warning.message %}
-        <div class="alert-banner alert-yellow">{{ warning.message }}</div>
-        {% endif %}
-      {% endfor %}
-
-      {% if change_empty.enabled %}
-      <div class="empty-state">
-        <strong>{{ change_empty.title or "本期无显著变化" }}</strong>
-        {% if change_empty.description %}<p class="empty-state-copy">{{ change_empty.description }}</p>{% endif %}
+      {# Layer 2: 📈 趋势变化 (yellow) #}
+      {% if tc.new_issues or tc.escalated_issues or tc.improving_issues %}
+      <div class="layer trend-changes">
+        <h3>📈 趋势变化</h3>
+        {% for item in tc.new_issues or [] %}
+        <div class="trend-item new">• 新增问题：{{ item.label_display or item.label_code or "未命名问题" }}（{{ item.current_review_count or 0 }} 条 / {{ item.affected_product_count or 0 }} 款）</div>
+        {% endfor %}
+        {% for item in tc.escalated_issues or [] %}
+        <div class="trend-item escalated">• 升级问题：{{ item.label_display or item.label_code or "未命名问题" }}（{{ item.current_review_count or 0 }} 条 / {{ item.affected_product_count or 0 }} 款）</div>
+        {% endfor %}
+        {% for item in tc.improving_issues or [] %}
+        <div class="trend-item improving">• 改善问题：{{ item.label_display or item.label_code or "未命名问题" }}（{{ item.current_review_count or 0 }} 条 / {{ item.affected_product_count or 0 }} 款）</div>
+        {% endfor %}
       </div>
-      {% else %}
-      <div class="change-summary-grid">
-        <article class="change-stat-card">
-          <span class="change-stat-label">本次入库</span>
-          <strong class="change-stat-value">{{ change_summary.ingested_review_count or 0 }}</strong>
-          <span class="change-stat-meta">新近 {{ change_summary.fresh_review_count or 0 }} / 补采 {{ change_summary.historical_backfill_count or 0 }}</span>
-        </article>
-        <article class="change-stat-card">
-          <span class="change-stat-label">自有新近差评</span>
-          <strong class="change-stat-value">{{ change_summary.fresh_own_negative_count or 0 }}</strong>
-          <span class="change-stat-meta">本期需动作信号</span>
-        </article>
-        <article class="change-stat-card">
-          <span class="change-stat-label">问题变化</span>
-          <strong class="change-stat-value">{{ change_summary.issue_new_count or 0 }} / {{ change_summary.issue_escalated_count or 0 }}</strong>
-          <span class="change-stat-meta">新增 / 升级</span>
-        </article>
-        <article class="change-stat-card">
-          <span class="change-stat-label">状态变化</span>
-          <strong class="change-stat-value">{{ change_summary.state_change_count or 0 }}</strong>
-          <span class="change-stat-meta">价格、库存、评分等</span>
-        </article>
+      {% endif %}
+
+      {# Layer 3: 💡 反向利用 (blue) #}
+      {% if co.competitor_new_negative_reviews or co.competitor_new_positive_reviews %}
+      <div class="layer competitive-opportunities">
+        <h3>💡 反向利用</h3>
+        {% for item in co.competitor_new_negative_reviews or [] %}
+        <div class="comp-item negative">• 竞品差评机会：{{ item.product_name or item.competitor_name or "未命名竞品" }}{% if item.review_count %}（{{ item.review_count }} 条）{% endif %} — {{ (item.primary_problems or []) | join('、') if item.primary_problems else (item.headline or "差评信号") }}</div>
+        {% endfor %}
+        {% for item in co.competitor_new_positive_reviews or [] %}
+        <div class="comp-item positive">• 竞品好评借鉴：{{ item.product_name or item.competitor_name or "未命名竞品" }} — {{ item.highlight or item.headline or "好评亮点" }}</div>
+        {% endfor %}
       </div>
-
-      <div class="change-grid">
-        <article class="change-block">
-          <div class="change-block-header"><h3>问题变化</h3></div>
-          {% if issue_change_items %}
-          <ul class="change-list">
-            {% for item in issue_change_items %}
-            <li class="change-list-item">
-              <strong>{{ item.label_display or item.label_code or "未命名问题" }}</strong>
-              <span class="change-pill">{{ item.change_type or "active" }}</span>
-              <p>{{ item.current_review_count or 0 }} 条评论 · {{ item.affected_product_count or 0 }} 个产品 · {{ item.severity or "unknown" }}</p>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <div class="empty-state empty-state-compact">本期暂无新增或升级问题。</div>
-          {% endif %}
-        </article>
-
-        <article class="change-block">
-          <div class="change-block-header"><h3>产品状态变化</h3></div>
-          {% set price_changes = product_changes.price_changes or [] %}
-          {% set stock_changes = product_changes.stock_changes or [] %}
-          {% set rating_changes = product_changes.rating_changes or [] %}
-          {% if price_changes or stock_changes or rating_changes %}
-          <ul class="change-list">
-            {% for item in price_changes %}
-            <li class="change-list-item">
-              <strong>{{ item.name or item.sku or "未命名产品" }}</strong>
-              <p>价格 {{ item.old or "-" }} → {{ item.new or "-" }}</p>
-            </li>
-            {% endfor %}
-            {% for item in stock_changes %}
-            <li class="change-list-item">
-              <strong>{{ item.name or item.sku or "未命名产品" }}</strong>
-              <p>库存 {{ item.old or "-" }} → {{ item.new or "-" }}</p>
-            </li>
-            {% endfor %}
-            {% for item in rating_changes %}
-            <li class="change-list-item">
-              <strong>{{ item.name or item.sku or "未命名产品" }}</strong>
-              <p>评分 {{ item.old or "-" }} → {{ item.new or "-" }}</p>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <div class="empty-state empty-state-compact">本期暂无价格、库存或评分快照变化。</div>
-          {% endif %}
-        </article>
-
-        <article class="change-block">
-          <div class="change-block-header"><h3>新近评论信号</h3></div>
-          {% if review_signal_items %}
-          <ul class="change-list">
-            {% for review in review_signal_items %}
-            <li class="change-list-item">
-              <strong>{{ review.product_name or "未命名产品" }}</strong>
-              <p>{{ review.headline_display or review.headline or "无标题" }}</p>
-              {% if review.body_display or review.body %}<p class="change-list-copy">{{ review.body_display or review.body }}</p>{% endif %}
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <div class="empty-state empty-state-compact">本期暂无新近自有差评信号。</div>
-          {% endif %}
-        </article>
-      </div>
+      {% endif %}
       {% endif %}
     </section>
 

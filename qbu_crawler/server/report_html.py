@@ -18,10 +18,13 @@ from qbu_crawler.server.report_charts import build_chartjs_configs
 logger = logging.getLogger(__name__)
 
 
-def render_v3_html(snapshot, analytics, output_path=None):
-    """Render the V3 interactive HTML report.
+def _render_v3_html_string(snapshot, analytics):
+    """Render the V3 interactive HTML report to a string.
 
-    Returns the file path of the generated HTML file.
+    Shared core used by:
+      - ``render_v3_html`` — writes to disk and returns the file path.
+      - ``render_attachment_html`` — returns the HTML string directly
+        (F011 §4.2.4 contract; preferred entry for tests).
     """
     normalized = normalize_deep_report_analytics(analytics)
 
@@ -56,7 +59,7 @@ def render_v3_html(snapshot, analytics, output_path=None):
     else:
         alert_level, alert_text = "green", ""
 
-    html = template.render(
+    return template.render(
         logical_date=snapshot.get("logical_date", ""),
         mode=normalized.get("mode", "baseline"),
         snapshot=snapshot,
@@ -72,6 +75,14 @@ def render_v3_html(snapshot, analytics, output_path=None):
         window=normalized.get("window", {}),
     )
 
+
+def render_v3_html(snapshot, analytics, output_path=None):
+    """Render the V3 interactive HTML report and write it to disk.
+
+    Returns the file path of the generated HTML file.
+    """
+    html = _render_v3_html_string(snapshot, analytics)
+
     if output_path is None:
         run_id = snapshot.get("run_id", 0)
         output_path = os.path.join(config.REPORT_DIR, f"workflow-run-{run_id}-report-v3.html")
@@ -80,3 +91,11 @@ def render_v3_html(snapshot, analytics, output_path=None):
     Path(output_path).write_text(html, encoding="utf-8")
     logger.info("V3 HTML report rendered: %s (%d bytes)", output_path, len(html))
     return output_path
+
+
+def render_attachment_html(snapshot, analytics):
+    """Render the V3 attachment HTML and return it as a string.
+
+    Public alias used by F011 tests / spec (§4.2.4). Does NOT write to disk.
+    """
+    return _render_v3_html_string(snapshot, analytics)

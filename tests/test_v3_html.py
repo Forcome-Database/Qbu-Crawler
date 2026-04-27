@@ -319,23 +319,15 @@ class TestV3TemplateRender:
         assert 'id="tab-changes"' in html
         assert 'data-tab="trends"' in html
         assert 'id="tab-trends"' in html
-        assert "Monitoring Start" in html
+        # F011 §4.2.4 — bootstrap 模式今日变化区改为单卡 "首日基线已建档"，
+        # 旧 change-callout kicker ("Monitoring Start" / "Baseline Building") 已删除。
+        assert "首日基线已建档" in html
 
-    def test_baseline_second_day_uses_building_wording(self):
-        context = _render_context("baseline", "bootstrap", "bootstrap")
-        context["analytics"]["change_digest"]["summary"].update(
-            {
-                "baseline_day_index": 2,
-                "baseline_display_state": "building",
-                "window_meaning": "基线建立期第2天，本次入库用于补足基线，不按新增口径解释",
-            }
-        )
-
-        html = _template().render(**context)
-
-        assert "基线建立期第2天" in html
-        assert "首次建档" not in html
-        assert "今日新增" not in html
+    # ── F011 §4.2.4 — retired: legacy bootstrap "基线建立期第N天" wording ──
+    # The change-callout block (kicker + h3 + bootstrap-meta) has been replaced
+    # by a single info-card "首日基线已建档" notice. Coverage for the new
+    # bootstrap branch lives in
+    # tests/server/test_attachment_html_today_changes.py::test_today_changes_hidden_in_bootstrap.
 
     def test_overview_displays_review_scope_metrics(self):
         context = _render_context("baseline", "bootstrap", "bootstrap")
@@ -435,17 +427,19 @@ class TestV3TemplateRender:
         assert ">月</button>" not in html
         assert ">年</button>" not in html
 
+    # ── F011 §4.2.4 — retired: legacy "today changes" 4-region content ──
+    # The legacy template rendered: change-summary-grid (4 stat cards), change-grid
+    # (3 blocks: 问题变化 / 产品状态变化 / 新近评论信号), change_warnings banner
+    # ("Backfill dominates this run."), and aggregated issue_change_items
+    # (Issue New / Escalated / Improving English placeholders from the test fixture).
+    # F011 §4.2.4 replaces all of it with the 三层金字塔 (立即关注 / 趋势变化 /
+    # 反向利用), driven by change_digest.{immediate_attention,trend_changes,
+    # competitive_opportunities}. New attachment coverage lives in
+    # tests/server/test_attachment_html_today_changes.py.
     def test_incremental_renders_grouped_change_content(self):
         html = _template().render(**_render_context("incremental", "incremental", "active"))
 
-        assert "Issue New" in html
-        assert "Issue Escalated" in html
-        assert "Issue Improving" in html
-        assert "Own Grinder" in html
-        assert "Motor failed" in html
-        assert "Competitor Pro" in html
-        assert "Worth every penny" in html
-        assert "Backfill dominates this run." in html
+        # Trend tab structural assertions remain valid (untouched by §4.2.4).
         assert "trend-subtab-btn" in html
         assert "trend-panel-month-sentiment" in html
 
