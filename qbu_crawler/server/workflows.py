@@ -568,6 +568,28 @@ class WorkflowWorker:
         if run is None:
             return False
 
+        # F011 H13 — when a run already reached `full_sent`, opportunistically
+        # check the outbox for deadletter rows and downgrade the phase to
+        # `full_sent_local`.  Best-effort: failures here must not block any
+        # further pipeline work, but the downgrade is required so ops alerts
+        # later see the correct delivery state. Only runs once the run is in
+        # the terminal-ish phase; earlier phases are skipped by the helper.
+        if run.get("report_phase") == "full_sent":
+            try:
+                from qbu_crawler.server.notifier import downgrade_report_phase_on_deadletter
+                conn = models.get_conn()
+                try:
+                    downgrade_report_phase_on_deadletter(conn, run_id)
+                finally:
+                    conn.close()
+                # Re-fetch the run so any downgrade is reflected downstream.
+                run = models.get_workflow_run(run_id) or run
+            except Exception:
+                logger.exception(
+                    "WorkflowWorker: deadletter downgrade check failed "
+                    "(non-fatal, run %s continues)", run_id,
+                )
+
         task_rows = models.list_workflow_run_tasks(run_id)
         if not task_rows:
             return False
@@ -629,22 +651,37 @@ class WorkflowWorker:
             run = freeze_report_snapshot(run_id, now=now)
             changed = True
 
-        # ── 数据质量统计与独立告警（P008 Task 6） ────────────────────
+        # ── 数据质量统计与独立告警（P008 Task 6 + F011 §4.4.1） ──────
         # Gate by persisted scrape_quality rather than snapshot_path, so that
         # a transient failure on first attempt is re-tried on subsequent ticks.
         if models.get_scrape_quality(run_id) is None:
             try:
-                from qbu_crawler.server.scrape_quality import (
-                    summarize_scrape_quality, should_raise_alert,
+                from qbu_crawler.server.scrape_quality import summarize_scrape_quality
+                from qbu_crawler.server.notifier import (
+                    _evaluate_ops_alert_triggers, count_outbox_deadletter,
                 )
                 snapshot = load_report_snapshot(run["snapshot_path"])
                 quality = summarize_scrape_quality(snapshot.get("products", []))
+                # F011 §4.4.1 — augment quality with the inputs that the
+                # P0/P1/P2 evaluator consults beyond legacy ratios. Share the
+                # notifier-side json_extract counter to keep the deadletter
+                # match semantics identical (Group B Critical B-2).
+                _conn = models.get_conn()
+                try:
+                    quality["outbox_deadletter_count"] = count_outbox_deadletter(_conn, run_id)
+                finally:
+                    _conn.close()
+                quality["estimated_date_ratio"] = _estimated_date_ratio(
+                    snapshot.get("reviews") or [], run.get("logical_date") or "",
+                )
                 models.update_scrape_quality(run_id, quality)
-                if should_raise_alert(quality, config.SCRAPE_QUALITY_ALERT_RATIO):
+                triggered, severity = _evaluate_ops_alert_triggers(quality)
+                if triggered:
                     _send_data_quality_alert(
                         run_id=run_id,
                         logical_date=run["logical_date"],
                         quality=quality,
+                        severity=severity,
                     )
             except Exception:
                 logger.exception(
@@ -804,8 +841,14 @@ class WorkflowWorker:
         )
 
 
-def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -> None:
-    """独立于业务报告的数据质量告警。"""
+def _send_data_quality_alert(
+    *,
+    run_id: int,
+    logical_date: str,
+    quality: dict,
+    severity: str = "",
+) -> None:
+    """独立于业务报告的数据质量告警 (F011 §4.4.1 — severity 接入)."""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
     from pathlib import Path
     from qbu_crawler.server import report as _report
@@ -821,6 +864,7 @@ def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -
         run_id=run_id,
         quality=quality,
         threshold=config.SCRAPE_QUALITY_ALERT_RATIO,
+        severity=severity,
     )
 
     recipients = (
@@ -831,7 +875,11 @@ def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -
         logger.warning("Data-quality alert skipped: no recipients configured")
         return
 
-    subject = f"[数据质量告警] 采集缺失率超阈值 {logical_date} (run #{run_id})"
+    severity_prefix = f"[{severity}] " if severity else ""
+    subject = (
+        f"{severity_prefix}[数据质量告警] 采集缺失率超阈值 "
+        f"{logical_date} (run #{run_id})"
+    )
     try:
         _report.send_email(
             recipients=recipients, subject=subject,
@@ -839,6 +887,24 @@ def _send_data_quality_alert(*, run_id: int, logical_date: str, quality: dict) -
         )
     except Exception:
         logger.exception("Data-quality alert email send failed")
+
+
+def _estimated_date_ratio(reviews: list[dict], logical_date_str: str) -> float:
+    """F011 §4.4.1 — fraction of reviews whose parsed date falls on the same
+    MM-DD as ``logical_date_str``, indicating the parser collapsed relative
+    dates ("3 years ago") onto today. Returns 0.0 on bad input.
+    """
+    if not reviews or not logical_date_str or len(logical_date_str) < 10:
+        return 0.0
+    logical_mmdd = logical_date_str[5:10]
+    if not logical_mmdd:
+        return 0.0
+    matching = 0
+    for r in reviews:
+        parsed = (r.get("date_published_parsed") or "")
+        if parsed.endswith(logical_mmdd):
+            matching += 1
+    return matching / len(reviews)
 
 
 def _enqueue_workflow_notification(kind: str, target: str, payload: dict, dedupe_key: str):
