@@ -419,21 +419,18 @@ def test_phase2_t9_no_kpis_v2_or_metric_new_keys():
             f"Phase 2 禁止引入第二套 KPI 命名 {pattern!r}，违规文件: {offending}"
 
 
+# F011 §4.2.5 — retired: secondary_charts disappeared from
+# daily_report_v3.html.j2 after the 12-panel layout was replaced by primary_chart
+# + drill_downs. The "secondary_charts must come from trend_block" invariant only
+# made sense while the template iterated over trend_block.secondary_charts; the
+# new template has a single primary chart and three structured drill-downs, none
+# of which use the secondary_charts shape. Source-read isolation now enforced
+# by tests/server/test_attachment_html_trends.py::
+#   test_trend_section_uses_primary_chart_data_source.
 def test_trend_template_consumes_secondary_charts_only_from_trend_digest():
-    """P1 起模板可以展示 secondary_charts，但只能通过 trend_block 读取。"""
-    repo_root = _REPO_ROOT
-    targets = ["qbu_crawler/server/report_templates/daily_report_v3.html.j2"]
-
-    consumers, _ = _git_grep(repo_root, "secondary_charts", targets)
-    assert consumers == ["qbu_crawler/server/report_templates/daily_report_v3.html.j2"]
-
-    offending, _ = _git_grep(
-        repo_root,
-        r"analytics\..*secondary_charts|_trend_series.*secondary_charts|window.*secondary_charts|cumulative_kpis.*secondary_charts",
-        targets,
-        use_extended_regex=True,
-    )
-    assert not offending, f"secondary_charts 必须经 trend_block 读取，违规: {offending}"
+    """Retired — kept as a stub so historical references to this name still find
+    the retirement explanation."""
+    pass
 
 
 def test_phase2_t9_template_does_not_bypass_trend_digest():

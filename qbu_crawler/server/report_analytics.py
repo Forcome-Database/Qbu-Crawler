@@ -2768,7 +2768,12 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
         "label_mode": config.REPORT_LABEL_MODE,
         "generated_at": config.now_shanghai().isoformat(),
         "change_digest": {},
-        "trend_digest": _build_trend_digest(snapshot, labeled_reviews, _trend_series),
+        # F011 §4.2.5 — wire public build_trend_digest (primary_chart + drill_downs).
+        # Legacy _build_trend_digest still exists for daily_report_v3_legacy.html.j2;
+        # Task 4.6 will retire it.
+        "trend_digest": build_trend_digest(
+            reviews=[item["review"] for item in labeled_reviews],
+        ),
         "_products_for_charts": products_for_charts,
         "metric_semantics": {
             "ingested_review_rows": "reviews 实际入库行数（按 scraped_at 窗口，含历史补采）",

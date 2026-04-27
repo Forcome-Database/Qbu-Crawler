@@ -247,19 +247,16 @@ def test_build_report_analytics_exposes_report_semantics_fields(analytics_db):
     assert analytics["report_semantics"] == "incremental"
     assert analytics["is_bootstrap"] is False
     assert analytics["change_digest"] == {}
+    # F011 §4.2.5 — analytics["trend_digest"] now uses the public build_trend_digest
+    # shape: {primary_chart: {...}, drill_downs: [...]}. The legacy 12-panel
+    # views/dimensions/data[view][dim] shape was retired in this task.
     trend = analytics["trend_digest"]
-    assert set(trend["views"]) == {"week", "month", "year"}
-    assert set(trend["dimensions"]) == {"sentiment", "issues", "products", "competition"}
-    assert trend["default_view"] == "month"
-    assert trend["default_dimension"] == "sentiment"
-    for view in trend["views"]:
-        for dimension in trend["dimensions"]:
-            item = trend["data"][view][dimension]
-            assert item["status"] in {"ready", "accumulating", "degraded"}
-            assert "status_message" in item
-            assert "kpis" in item
-            assert "primary_chart" in item
-            assert "table" in item
+    assert "primary_chart" in trend
+    assert "drill_downs" in trend
+    primary = trend["primary_chart"]
+    assert primary.get("kind") == "health_trend"
+    assert primary.get("default_window") in {"7d", "30d", "12m"}
+    assert primary.get("confidence") in {"high", "medium", "low", "no_data"}
 
 
 def test_self_focus_on_negative_clusters(analytics_db):
@@ -1254,7 +1251,14 @@ def test_build_dual_window_analytics_has_no_delta_keys(analytics_db):
         assert delta_keys == [], f"Window analytics should have no delta keys, found: {delta_keys}"
 
 
-def test_build_dual_trend_digest_has_mixed_ready_and_accumulating_states(analytics_db):
+# F011 §4.2.5 — retired: legacy 12-panel data shape replaced by primary_chart+drill_downs
+# Original test asserted result["trend_digest"]["data"]["month"][dim]["status"] across
+# the 4 dimensions × 3 views. The new shape exposes a single primary_chart for "口碑
+# 健康度趋势" plus 3 drill_downs (top_issues / product_ratings / competitor_radar).
+# Mixed-state coverage of ready/accumulating per-block is no longer meaningful;
+# confidence-tier coverage lives in tests/server/test_trend_digest_thresholds.py.
+def test_build_dual_trend_digest_uses_primary_chart_shape(analytics_db):
+    """Smoke: build_dual_report_analytics still emits the new trend_digest shape."""
     from qbu_crawler.server.report_analytics import build_dual_report_analytics
 
     run = _create_daily_run("2026-03-29", status="reporting")
@@ -1262,12 +1266,10 @@ def test_build_dual_trend_digest_has_mixed_ready_and_accumulating_states(analyti
 
     result = build_dual_report_analytics(snapshot)
 
-    month = result["trend_digest"]["data"]["month"]
-    assert month["sentiment"]["status"] == "ready"
-    assert month["issues"]["status"] == "ready"
-    assert month["competition"]["status"] == "ready"
-    assert month["products"]["status"] == "accumulating"
-    assert month["products"]["primary_chart"]["status"] == "accumulating"
+    trend = result["trend_digest"]
+    assert "primary_chart" in trend
+    assert "drill_downs" in trend
+    assert trend["primary_chart"].get("kind") == "health_trend"
 
 
 def test_sentiment_trend_bucket_health_is_bayesian_shrunk():

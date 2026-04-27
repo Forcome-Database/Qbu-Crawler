@@ -26,13 +26,6 @@
   {% set change_warnings = change_digest.warnings or {} %}
   {% set change_empty = change_digest.empty_state or {} %}
   {% set trend_digest = analytics.trend_digest or {} %}
-  {% set trend_views = trend_digest.views or [] %}
-  {% set trend_dimensions = trend_digest.dimensions or [] %}
-  {% set default_view = trend_digest.default_view or "month" %}
-  {% set default_dimension = trend_digest.default_dimension or "sentiment" %}
-  {% set trend_view_labels = {"week": "近7天", "month": "近30天", "year": "近12个月"} %}
-  {% set trend_dimension_labels = {"sentiment": "评论声量与情绪", "issues": "问题结构", "products": "产品状态", "competition": "竞品对标"} %}
-  {% set trend_dimension_notes = trend_digest.dimension_notes or {} %}
   {% set risk_products = analytics.self.risk_products if analytics.self is defined else [] %}
   {% set gap_analysis = analytics.competitor.gap_analysis if analytics.competitor is defined else [] %}
   {% set benchmarks = analytics.competitor.benchmark_examples if analytics.competitor is defined else [] %}
@@ -213,131 +206,60 @@
 
     <section id="tab-trends" class="tab-panel" role="tabpanel">
       <h2 class="section-title">变化趋势</h2>
-      <p class="section-sub">按周期和维度观察关键指标如何变化，样本不足时显示积累或降级说明。</p>
 
-      <div class="trend-toolbar">
-        <div class="trend-switch-row">
-          {% for view in trend_views %}
-          <button class="trend-view-btn{% if view == default_view %} trend-active{% endif %}" type="button" data-trend-view="{{ view }}">{{ trend_view_labels.get(view, view) }}</button>
+      {# F011 §4.2.5 — 1 主图 + 3 折叠下钻；bootstrap (low / no_data) 单卡 #}
+      {% set td = analytics.trend_digest or {} %}
+      {% set primary = td.primary_chart or {} %}
+      {% set _confidence = primary.confidence or "no_data" %}
+
+      {% if _confidence in ("low", "no_data") %}
+      <div class="info-card bootstrap-notice trend-bootstrap-notice">
+        ℹ 趋势数据正在累积，需 ≥30 样本且每周 ≥7 个有效样本
+        {% if primary.min_sample_warning %}
+        <div class="warning-detail">{{ primary.min_sample_warning }}</div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="primary-chart">
+        <h3>口碑健康度趋势</h3>
+
+        <div id="health-trend-chart" class="health-trend-chart"
+             data-series-own='{{ primary.series_own | tojson }}'
+             data-series-competitor='{{ primary.series_competitor | tojson }}'>
+        </div>
+
+        {% if primary.comparison and primary.comparison.own_vs_prior_window %}
+        {% set _cmp = primary.comparison.own_vs_prior_window %}
+        <div class="comparison-baseline">
+          当前 {{ "%.1f"|format(_cmp.current or 0) }}
+          {% if _cmp.delta is not none %}
+            {% if _cmp.delta < 0 %}↓{% elif _cmp.delta > 0 %}↑{% else %}→{% endif %}
+            {{ "%.1f"|format(_cmp.delta|abs) }}pt
+          {% endif %}
+          vs 上期平均（对比上 {{ primary.default_window or "30 天" }}平均）
+        </div>
+        {% endif %}
+
+        <div class="window-toggle">
+          <span class="toggle-label">时间切换:</span>
+          {% for w in primary.windows_available or [] %}
+          <button type="button" data-window="{{ w }}"{% if w == primary.default_window %} class="active"{% endif %}>{{ w }}</button>
           {% endfor %}
         </div>
-        <div class="trend-switch-row">
-          {% for dimension in trend_dimensions %}
-          <button class="trend-subtab-btn{% if dimension == default_dimension %} trend-active{% endif %}" type="button" data-trend-dimension="{{ dimension }}">{{ trend_dimension_labels.get(dimension, dimension) }}</button>
-          {% endfor %}
+        <div class="anchor-toggle">
+          <span class="toggle-label">口径切换:</span>
+          <button type="button" data-anchor="scraped_at"{% if primary.default_anchor == "scraped_at" %} class="active"{% endif %}>采集时间</button>
+          <button type="button" data-anchor="date_published"{% if primary.default_anchor == "date_published" %} class="active"{% endif %}>发表时间</button>
         </div>
       </div>
 
-      {% set trend_view_notes = trend_digest.view_notes or {} %}
-      {% for view, note in trend_view_notes.items() %}
-        {% if note %}
-        <div class="trend-view-note" data-trend-view-note="{{ view }}"{% if view != default_view %} hidden{% endif %}>
-          <span class="trend-view-note-icon">ⓘ</span>
-          <span class="trend-view-note-text">{{ note }}</span>
-        </div>
-        {% endif %}
+      {% for d in td.drill_downs or [] %}
+      <details class="drill-down">
+        <summary>{{ d.title }}</summary>
+        <div class="drill-content" data-drill-id="{{ d.id }}" data-payload='{{ d.data | tojson }}'></div>
+      </details>
       {% endfor %}
-
-      {% for view in trend_views %}
-        {% for dimension in trend_dimensions %}
-          {% set trend_block = trend_digest.data[view][dimension] if trend_digest.data and view in trend_digest.data and dimension in trend_digest.data[view] else {} %}
-          {% set trend_kpis = trend_block.kpis or {} %}
-          {% set trend_table = trend_block.table or {} %}
-          {% set chart_key = "trend_" ~ view ~ "_" ~ dimension %}
-          <section id="trend-panel-{{ view }}-{{ dimension }}" class="trend-panel{% if view == default_view and dimension == default_dimension %} trend-panel-active{% endif %}" data-trend-view="{{ view }}" data-trend-dimension="{{ dimension }}">
-            <div class="trend-panel-header">
-              <div>
-                <h3>{{ trend_view_labels.get(view, view) }} / {{ trend_dimension_labels.get(dimension, dimension) }}</h3>
-                {% if trend_dimension_notes.get(dimension) %}<p>{{ trend_dimension_notes.get(dimension) }}</p>{% endif %}
-                {% if trend_block.status_message %}<p>{{ trend_block.status_message }}</p>{% endif %}
-              </div>
-              <span class="badge badge-{{ 'low' if trend_block.status == 'ready' else 'medium' if trend_block.status == 'accumulating' else 'high' }}">{{ trend_block.status or "unknown" }}</span>
-            </div>
-
-            {% set _kpi_ready = (trend_kpis.get("status") == "ready") and trend_kpis.get("items") %}
-            {% set _chart_ready = trend_block.primary_chart and trend_block.primary_chart.get("status") == "ready" %}
-            {% set _table_ready = (trend_table.get("status") == "ready") and trend_table.get("rows") %}
-            {% set _secondary = namespace(ready=false) %}
-            {% for sec_chart in trend_block.secondary_charts or [] %}
-              {% set sec_key = "trend_" ~ view ~ "_" ~ dimension ~ "_secondary_" ~ loop.index0 %}
-              {% if sec_chart.status == "ready" and sec_key in charts %}
-                {% set _secondary.ready = true %}
-              {% endif %}
-            {% endfor %}
-
-            {% if not (_kpi_ready or _chart_ready or _table_ready or _secondary.ready) %}
-            <div class="trend-status trend-status-{{ trend_block.status or 'degraded' }}">
-              {{ trend_block.status_message or "样本暂未就绪，请继续积累日报样本。" }}
-            </div>
-            {% else %}
-              {% if trend_block.status != "ready" and trend_block.status_message %}
-              <div class="trend-partial-note">{{ trend_block.status_message }}</div>
-              {% endif %}
-
-              {% if _kpi_ready %}
-              <div class="trend-kpi-grid">
-                {% for item in trend_kpis["items"] %}
-                <article class="trend-kpi-card">
-                  <span class="trend-kpi-label">{{ item.label or "" }}</span>
-                  <strong class="trend-kpi-value">{{ item.value if item.value is not none else "-" }}</strong>
-                </article>
-                {% endfor %}
-              </div>
-              {% endif %}
-
-              {% if _chart_ready and chart_key in charts %}
-              <div class="chart-container trend-chart-container">
-                {% if trend_block.primary_chart and trend_block.primary_chart.title %}
-                <h3>{{ trend_block.primary_chart.title }}</h3>
-                {% endif %}
-                <canvas data-chart-config='{{ charts[chart_key] | tojson }}'></canvas>
-              </div>
-              {% elif trend_block.primary_chart and trend_block.primary_chart.get("status") != "ready" %}
-              <div class="trend-chart-placeholder">主图数据积累中</div>
-              {% endif %}
-
-              {% if trend_block.secondary_charts %}
-              <div class="trend-secondary-grid">
-                {% for sec_chart in trend_block.secondary_charts %}
-                  {% set sec_key = "trend_" ~ view ~ "_" ~ dimension ~ "_secondary_" ~ loop.index0 %}
-                  {% if sec_chart.status == "ready" and sec_key in charts %}
-                  <div class="trend-secondary-chart">
-                    {% if sec_chart.title %}<h4>{{ sec_chart.title }}</h4>{% endif %}
-                    <canvas data-chart-config='{{ charts[sec_key] | tojson }}'></canvas>
-                  </div>
-                  {% elif sec_chart.status and sec_chart.status != "ready" %}
-                  <div class="trend-chart-placeholder">{{ sec_chart.title or "辅图" }}数据积累中</div>
-                  {% endif %}
-                {% endfor %}
-              </div>
-              {% endif %}
-
-              {% if _table_ready %}
-              <div class="table-wrap trend-table-wrap">
-                <table class="data-table">
-                  <thead>
-                    <tr>
-                      {% for column in trend_table.columns or [] %}
-                      <th>{{ column }}</th>
-                      {% endfor %}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for row in trend_table.rows %}
-                    <tr>
-                      {% for value in row.values() %}
-                      <td>{{ value if value is not none else "-" }}</td>
-                      {% endfor %}
-                    </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              {% endif %}
-            {% endif %}
-          </section>
-        {% endfor %}
-      {% endfor %}
+      {% endif %}
     </section>
 
     <section id="tab-issues" class="tab-panel" role="tabpanel">

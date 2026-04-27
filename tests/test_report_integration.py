@@ -181,19 +181,22 @@ class TestAnalyticsPipeline:
         # issue_cards lives under self
         assert "issue_cards" in normalized.get("self", {})
 
-    def test_trend_digest_sentiment_uses_review_publish_dates(self, populated_db, sample_snapshot):
+    # F011 §4.2.5 — retired: legacy 12-panel data shape replaced by primary_chart+drill_downs
+    # Original test asserted on analytics["trend_digest"]["data"]["month"]["sentiment"]
+    # ["primary_chart"] (legacy shape: labels[] + series[].data[]), and verified
+    # that the sentiment series anchors on date_published (excluding the future
+    # 2026-04-01 date). The new shape exposes `analytics.trend_digest.primary_chart`
+    # with `series_own[].date` (already date-anchored). Date-anchor coverage
+    # lives in tests/server/test_date_published_anchor.py and
+    # tests/server/test_trend_digest_thresholds.py.
+    def test_trend_digest_uses_primary_chart_shape(self, populated_db, sample_snapshot):
+        """Smoke: build_report_analytics emits the new trend_digest shape with
+        a primary_chart keyed off `kind=health_trend`."""
         analytics = report_analytics.build_report_analytics(sample_snapshot)
-
-        chart = analytics["trend_digest"]["data"]["month"]["sentiment"]["primary_chart"]
-        active_labels = [
-            label
-            for label, value in zip(chart["labels"], chart["series"][0]["data"])
-            if value
-        ]
-
-        assert chart["status"] == "ready"
-        assert "2026-03-15" in active_labels
-        assert "2026-04-01" not in active_labels
+        trend = analytics["trend_digest"]
+        assert "primary_chart" in trend
+        assert "drill_downs" in trend
+        assert trend["primary_chart"].get("kind") == "health_trend"
 
     def test_normalize_analytics_negative_rate_display(self, populated_db, sample_snapshot):
         analytics = report_analytics.build_report_analytics(sample_snapshot)

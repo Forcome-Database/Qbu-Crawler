@@ -85,6 +85,69 @@
     if (numEl) animateCounter(numEl, 0, val, 1200, 1);
   }
 
+  /* =========================================================================
+     F011 §4.2.5 — Render the single health-trend primary chart as inline SVG.
+     Reads data-series-own / data-series-competitor JSON from the container.
+     Vanilla DOM, no external deps. No-ops if container missing or both series
+     empty (bootstrap branch renders a notice instead of this container).
+     ========================================================================= */
+  function initHealthTrendChart() {
+    var container = document.getElementById('health-trend-chart');
+    if (!container) return;
+    var seriesOwn, seriesCompetitor;
+    try {
+      seriesOwn = JSON.parse(container.getAttribute('data-series-own') || '[]');
+      seriesCompetitor = JSON.parse(container.getAttribute('data-series-competitor') || '[]');
+    } catch (e) { return; }
+    var allPoints = (seriesOwn || []).concat(seriesCompetitor || []);
+    if (!allPoints.length) return;
+
+    var w = container.clientWidth || 600;
+    var h = 280;
+    var padL = 40, padR = 16, padT = 16, padB = 32;
+    var innerW = w - padL - padR, innerH = h - padT - padB;
+
+    var dates = allPoints.map(function (p) { return p.date; });
+    var uniqDates = [];
+    dates.forEach(function (d) { if (uniqDates.indexOf(d) < 0) uniqDates.push(d); });
+    uniqDates.sort();
+    var values = allPoints.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
+    var vMin = Math.min.apply(null, values.concat([0]));
+    var vMax = Math.max.apply(null, values.concat([100]));
+    if (vMax === vMin) vMax = vMin + 1;
+
+    function xFor(date) {
+      var idx = uniqDates.indexOf(date);
+      if (uniqDates.length <= 1) return padL + innerW / 2;
+      return padL + (idx / (uniqDates.length - 1)) * innerW;
+    }
+    function yFor(value) {
+      return padT + innerH - ((value - vMin) / (vMax - vMin)) * innerH;
+    }
+    function pathFor(series, color) {
+      if (!series || !series.length) return '';
+      var d = series.map(function (p, i) {
+        return (i === 0 ? 'M' : 'L') + xFor(p.date).toFixed(1) + ',' + yFor(p.value).toFixed(1);
+      }).join(' ');
+      return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2"/>';
+    }
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '">';
+    // Axes
+    svg += '<line x1="' + padL + '" y1="' + padT + '" x2="' + padL + '" y2="' + (padT + innerH) + '" stroke="#cbd5e1"/>';
+    svg += '<line x1="' + padL + '" y1="' + (padT + innerH) + '" x2="' + (padL + innerW) + '" y2="' + (padT + innerH) + '" stroke="#cbd5e1"/>';
+    svg += pathFor(seriesOwn, '#16a34a');         // green: own
+    svg += pathFor(seriesCompetitor, '#dc2626');  // red: competitor
+    // Legend
+    svg += '<g font-size="11" font-family="sans-serif">';
+    svg += '<rect x="' + (padL + 4) + '" y="' + (padT + 4) + '" width="10" height="2" fill="#16a34a"/>';
+    svg += '<text x="' + (padL + 18) + '" y="' + (padT + 8) + '">自有</text>';
+    svg += '<rect x="' + (padL + 60) + '" y="' + (padT + 4) + '" width="10" height="2" fill="#dc2626"/>';
+    svg += '<text x="' + (padL + 74) + '" y="' + (padT + 8) + '">竞品</text>';
+    svg += '</g>';
+    svg += '</svg>';
+    container.innerHTML = svg;
+  }
+
   function initTrendPanels() {
     var viewBtns = document.querySelectorAll('.trend-view-btn[data-trend-view]');
     var dimensionBtns = document.querySelectorAll('.trend-subtab-btn[data-trend-dimension]');
@@ -567,6 +630,7 @@
   function boot() {
     initTabs();
     initTrendPanels();
+    initHealthTrendChart();
     initGauge();
     initCounters();
     initCollapsible();

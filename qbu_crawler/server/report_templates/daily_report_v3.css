@@ -1664,3 +1664,120 @@ details summary:hover { color: var(--accent); }
 }
 .trend-view-note[hidden] { display: none; }
 .trend-view-note-icon { margin-right: 6px; font-weight: 600; color: #c8a96b; }
+
+/* ==========================================================================
+   F011 §4.2.5 — Trend section: 1 primary chart + 3 collapsible drill-downs
+   ========================================================================== */
+
+.primary-chart {
+  padding: var(--sp-lg);
+  margin-bottom: var(--sp-lg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.primary-chart > h3 {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  margin: 0 0 var(--sp-md);
+  color: var(--text);
+}
+
+.health-trend-chart {
+  min-height: 280px;
+  width: 100%;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+  display: block;
+  margin-bottom: var(--sp-md);
+}
+
+.comparison-baseline {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-md);
+  line-height: 1.5;
+}
+
+.window-toggle,
+.anchor-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-xs);
+  margin-top: var(--sp-sm);
+  font-size: var(--fs-sm);
+}
+
+.window-toggle .toggle-label,
+.anchor-toggle .toggle-label {
+  color: var(--text-secondary);
+  margin-right: var(--sp-xs);
+}
+
+.window-toggle button,
+.anchor-toggle button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.window-toggle button:hover,
+.anchor-toggle button:hover {
+  background: var(--surface-sunken);
+}
+
+.window-toggle button.active,
+.anchor-toggle button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.drill-down {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--sp-sm) 0;
+}
+
+.drill-down > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: var(--fs-md);
+  padding: var(--sp-xs) 0;
+  list-style: none;
+  color: var(--text);
+}
+
+.drill-down > summary::-webkit-details-marker { display: none; }
+
+.drill-down > summary::before {
+  content: "▶";
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 0.15s ease;
+  font-size: 0.8em;
+  color: var(--text-secondary);
+}
+
+.drill-down[open] > summary::before { transform: rotate(90deg); }
+
+.drill-content {
+  padding: var(--sp-sm) 0 0 var(--sp-md);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.trend-bootstrap-notice .warning-detail {
+  margin-top: var(--sp-xs);
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary, var(--text-secondary));
+  font-style: italic;
+}
