@@ -13,7 +13,7 @@
 {% set _analytics    = analytics or {} %}
 {% set _kpis         = _analytics.get("kpis", {}) %}
 {% set _self         = _analytics.get("self", {}) %}
-{% set _report_copy  = _analytics.get("report_copy", {}) %}
+{% set _report_copy  = _analytics.get("report_copy") or {} %}
 {% set _bullets      = (_report_copy.get("executive_bullets") or [])[:3] %}
 {% set _priorities   = (_report_copy.get("improvement_priorities") or [])[:3] %}
 {% set _hero         = _report_copy.get("hero_headline") or "" %}
@@ -21,14 +21,14 @@
 
 {# ── KPI 数值 ── #}
 {% set _health = _kpis.get("health_index") %}
-{% set _own_pos = _kpis.get("own_positive_review_rows") or 0 %}
-{% set _own_total = _kpis.get("own_review_rows") or 0 %}
-{% set _own_neg_rate = _kpis.get("own_negative_review_rate") or 0 %}
+{% set _own_pos = _kpis.get("own_positive_review_rows", 0) %}
+{% set _own_total = _kpis.get("own_review_rows", 0) %}
+{% set _own_neg_rate = _kpis.get("own_negative_review_rate", 0) %}
 {% set _own_neg_rate_display = _kpis.get("own_negative_review_rate_display") %}
 {% set _positive_rate_display = ((_own_pos / _own_total * 100) | round(1)) ~ "%" if _own_total else "—" %}
-{% set _own_pc = _kpis.get("own_product_count") or 0 %}
-{% set _comp_pc = _kpis.get("competitor_product_count") or 0 %}
-{% set _ingested = _kpis.get("ingested_review_rows") or 0 %}
+{% set _own_pc = _kpis.get("own_product_count", 0) %}
+{% set _comp_pc = _kpis.get("competitor_product_count", 0) %}
+{% set _ingested = _kpis.get("ingested_review_rows", 0) %}
 
 {# ── 健康灯阈值 ≥85 绿 / [70,85) 黄 / <70 红 ── #}
 {% set _health_num = _health if _health is number else (_health | float if _health else 0) %}

@@ -1232,7 +1232,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
                 snapshot, send_email=send_email, output_path=output_path,
             )
             result["mode"] = "full"
-            # Full-mode email now uses email_full.html.j2 via _render_full_email_html()
+            # Full-mode email now uses email_full.html.j2 via report.render_email_full()
             result.setdefault("status", "completed")
             return result
         elif mode == "change":
@@ -1280,55 +1280,6 @@ def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
         match = raw_by_label.get(nc.get("label_code"))
         if match and "deep_analysis" in match:
             nc["deep_analysis"] = match["deep_analysis"]
-
-
-def render_email_full(snapshot, analytics):
-    """F011 §4.1 — render the full-mode email body (email_full.html.j2).
-
-    Public entry point. The new template only consumes:
-      - logical_date  (from snapshot)
-      - analytics.kpis.{health_index, own_positive_review_rows, own_review_rows,
-                        own_negative_review_rate, own_negative_review_rate_display,
-                        own_product_count, competitor_product_count,
-                        ingested_review_rows}
-      - analytics.report_copy.{hero_headline, executive_bullets[],
-                                improvement_priorities[].{label_display,
-                                  short_title, affected_products_count}}
-      - analytics.self.product_status[].{product_name, status_lamp,
-                                          primary_concern}  (Task 3.4)
-
-    Other legacy template vars (change_digest, risk_products, alert_level,
-    cumulative_kpis, window, etc.) are no longer consumed by §4.1; the new
-    layout deliberately drops them.
-    """
-    from jinja2 import Environment, FileSystemLoader, select_autoescape
-
-    template_dir = Path(__file__).parent / "report_templates"
-    env = Environment(
-        loader=FileSystemLoader(str(template_dir)),
-        autoescape=select_autoescape(["html", "j2"]),
-    )
-
-    # F011 §4.1 — the new template consumes raw analytics fields only:
-    # kpis (health_index, own_*_review_rows, own_negative_review_rate,
-    # own_/competitor_product_count, ingested_review_rows), report_copy
-    # (hero_headline / executive_bullets / improvement_priorities), and
-    # self.product_status. We deliberately do NOT call
-    # normalize_deep_report_analytics here so the upstream caller stays the
-    # single source of truth for KPIs (avoids double-shrinkage on
-    # health_index and surprising overrides for callers that pre-compute
-    # values). `analytics` is passed through verbatim.
-    tpl = env.get_template("email_full.html.j2")
-    return tpl.render(
-        logical_date=snapshot.get("logical_date", "") if snapshot else "",
-        snapshot=snapshot or {},
-        analytics=analytics or {},
-    )
-
-
-def _render_full_email_html(snapshot, analytics):
-    """Internal alias kept for the production caller and legacy tests."""
-    return render_email_full(snapshot, analytics)
 
 
 def generate_full_report_from_snapshot(
@@ -1471,7 +1422,7 @@ def generate_full_report_from_snapshot(
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
         # Render email_full.html.j2 (replaces legacy daily_report_email.html.j2)
         try:
-            body_html = _render_full_email_html(snapshot, analytics)
+            body_html = report.render_email_full(snapshot, analytics)
         except Exception:
             _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
             body_html = report.render_daily_email_html(snapshot, analytics)

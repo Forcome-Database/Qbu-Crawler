@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from qbu_crawler.server.report_snapshot import render_email_full
+from qbu_crawler.server.report import render_email_full
 
 
 def _mock_snapshot(logical_date="2026-04-27"):
@@ -199,3 +199,41 @@ def test_email_full_size_under_50kb():
     html = render_email_full(snapshot=_mock_snapshot(), analytics=_mock_analytics())
     size = len(html.encode("utf-8"))
     assert size < 50 * 1024, f"html size {size} bytes exceeds 50KB budget"
+
+
+# ──────────────────────────────────────────────────────────
+# Test 6 (review I-3): None-safe report_copy extraction
+# ──────────────────────────────────────────────────────────
+def test_email_full_handles_none_report_copy():
+    """analytics["report_copy"] = None (e.g. JSON null) must not crash.
+
+    Hero / executive_bullets / improvement_priorities sections should render
+    gracefully empty rather than raising AttributeError on `.get` against None.
+    """
+    analytics = {
+        "report_copy": None,
+        "kpis": {
+            "health_index": 96.2,
+            "own_positive_review_rows": 180,
+            "own_review_rows": 190,
+            "own_negative_review_rate": 0.024,
+            "own_negative_review_rate_display": "2.4%",
+            "own_product_count": 5,
+            "competitor_product_count": 3,
+            "ingested_review_rows": 42,
+        },
+        "self": {
+            "risk_products": [],
+            "top_negative_clusters": [],
+            "product_status": [],
+        },
+    }
+    # Must not raise.
+    html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
+    # KPI lights still rendered.
+    assert "总体口碑" in html
+    # Hero headline area must render without injecting dummy text.
+    # `_hero` resolves to "" when report_copy is missing/None — so the
+    # mock executive bullets text shouldn't appear.
+    assert "本期口碑稳健" not in html
+    assert ".75 HP 售后开关失灵" not in html

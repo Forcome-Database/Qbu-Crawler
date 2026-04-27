@@ -1422,7 +1422,7 @@ def test_render_full_email_html_prefers_top_level_kpis_and_change_digest(monkeyp
         },
     )
 
-    html = report_snapshot._render_full_email_html(
+    html = report_snapshot.report.render_email_full(
         {
             "run_id": 8,
             "logical_date": "2026-04-23",
@@ -1546,7 +1546,7 @@ def test_render_full_email_html_includes_competitor_positive_review_signals(monk
         },
     )
 
-    html = report_snapshot._render_full_email_html(
+    html = report_snapshot.report.render_email_full(
         {
             "run_id": 8,
             "logical_date": "2026-04-23",
@@ -1665,7 +1665,7 @@ def test_generate_full_report_returns_relative_artifact_paths(snapshot_db, monke
     # Stub all heavyweight collaborators — we only test the path-shaping behavior
     monkeypatch.setattr(report_snapshot.report, "query_report_data", lambda *a, **kw: ([], []))
     monkeypatch.setattr(report_snapshot.report, "query_cumulative_data", lambda *a, **kw: ([], []))
-    monkeypatch.setattr(report_snapshot, "_render_full_email_html", lambda *a, **kw: "<html></html>")
+    monkeypatch.setattr(report_snapshot.report, "render_email_full", lambda *a, **kw: "<html></html>")
     monkeypatch.setattr(report_snapshot.report, "send_email", lambda **kw: {"success": True, "recipients": []})
 
     frozen = report_snapshot.freeze_report_snapshot(
