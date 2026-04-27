@@ -1310,6 +1310,83 @@ def _benchmark_examples(labeled_reviews):
     return items[:5]
 
 
+# ── F011 §4.2.7 v1.2 — weakness opportunities (scoped) ──────────────────
+WEAKNESS_OPP_MIN_COMPETITOR_COMPLAINTS = 3
+WEAKNESS_OPP_MIN_OUR_POSITIVE = 10
+
+
+def _generate_advantage_direction(label_code: str) -> str:
+    """Rule-based advantage direction copy.
+
+    LLM enhancement deferred to F011 v1.3 follow-up; this stub keeps the
+    schema stable so downstream consumers can render copy today.
+    """
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+    label_zh = _LABEL_DISPLAY.get(label_code, label_code)
+    return f"我方 {label_zh} 差异化"
+
+
+def _build_weakness_opportunities(labeled_reviews) -> list[dict]:
+    """F011 §4.2.7 v1.2 — Top 3 competitor negative labels mapped to our positive advantages.
+
+    Conditions (both must hold for a label to qualify):
+      - competitor.negative_count[label] >= ``WEAKNESS_OPP_MIN_COMPETITOR_COMPLAINTS``
+      - own.positive_count[label] >= ``WEAKNESS_OPP_MIN_OUR_POSITIVE``
+    """
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    own_label_stats: dict[str, dict] = {}
+    comp_label_stats: dict[str, dict] = {}
+    for item in labeled_reviews:
+        review = item.get("review") or {}
+        ownership = review.get("ownership") or "competitor"
+        target = own_label_stats if ownership == "own" else comp_label_stats
+        product_name = review.get("product_name") or ""
+        for label in item.get("labels") or []:
+            code = label.get("label_code")
+            if not code:
+                continue
+            stats = target.setdefault(code, {
+                "positive_count": 0,
+                "negative_count": 0,
+                "total": 0,
+                "products": set(),
+            })
+            polarity = label.get("label_polarity")
+            if polarity == "positive":
+                stats["positive_count"] += 1
+            elif polarity == "negative":
+                stats["negative_count"] += 1
+            stats["total"] += 1
+            if product_name:
+                stats["products"].add(product_name)
+
+    eligible_comp = [
+        (code, stats) for code, stats in comp_label_stats.items()
+        if stats["negative_count"] >= WEAKNESS_OPP_MIN_COMPETITOR_COMPLAINTS
+    ]
+    eligible_comp.sort(key=lambda kv: kv[1]["negative_count"], reverse=True)
+
+    opportunities = []
+    for code, comp_stats in eligible_comp:
+        if len(opportunities) >= 3:
+            break
+        our_stats = own_label_stats.get(code, {})
+        our_positive = our_stats.get("positive_count", 0)
+        if our_positive < WEAKNESS_OPP_MIN_OUR_POSITIVE:
+            continue
+        opportunities.append({
+            "competitor_complaint_theme": code,
+            "competitor_complaint_display": _LABEL_DISPLAY.get(code, code),
+            "competitor_evidence_count": comp_stats["negative_count"],
+            "competitor_products_affected": sorted(comp_stats["products"]),
+            "our_advantage_label": code,
+            "our_positive_count": our_positive,
+            "our_advantage_direction": _generate_advantage_direction(code),
+        })
+    return opportunities
+
+
 def _negative_opportunities(labeled_reviews):
     items = []
     for item in labeled_reviews:
@@ -1546,18 +1623,28 @@ def _compute_chart_data(labeled_reviews, snapshot):
             if polarity == "positive":
                 dim_pos[ownership][dim] = dim_pos[ownership].get(dim, 0) + 1
 
-    # Only include dimensions with data from BOTH sides
-    all_dims = sorted(set(dim_total["own"]) & set(dim_total["competitor"]))
-    if len(all_dims) >= 3:
+    # F011 §4.2.7.3 v1.2 — Top 6-8 aggregation: only dims with data from BOTH sides,
+    # sorted by combined mention volume desc, capped at RADAR_MAX_CATEGORIES.
+    RADAR_MAX_CATEGORIES = 8
+    shared_dims = set(dim_total["own"]) & set(dim_total["competitor"])
+    dims_with_total = [
+        (d, dim_total["own"].get(d, 0) + dim_total["competitor"].get(d, 0))
+        for d in shared_dims
+    ]
+    # Sort by total volume desc, tie-break alphabetically for determinism.
+    dims_with_total.sort(key=lambda dt: (-dt[1], dt[0]))
+    top_dims = [d for d, _ in dims_with_total[:RADAR_MAX_CATEGORIES]]
+
+    if len(top_dims) >= 3:
         result["_radar_data"] = {
-            "categories": all_dims,
+            "categories": top_dims,
             "own_values": [
                 round(dim_pos["own"].get(d, 0) / max(dim_total["own"].get(d, 1), 1), 2)
-                for d in all_dims
+                for d in top_dims
             ],
             "competitor_values": [
                 round(dim_pos["competitor"].get(d, 0) / max(dim_total["competitor"].get(d, 1), 1), 2)
-                for d in all_dims
+                for d in top_dims
             ],
         }
 
@@ -3248,6 +3335,8 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
             "top_positive_themes": top_positive_themes,
             "benchmark_examples": _benchmark_examples(labeled_reviews),
             "negative_opportunities": _negative_opportunities(labeled_reviews),
+            # F011 §4.2.7 v1.2 — competitor weakness ↔ our advantage opportunities
+            "weakness_opportunities": _build_weakness_opportunities(labeled_reviews),
         },
         "appendix": {
             "image_reviews": sorted(

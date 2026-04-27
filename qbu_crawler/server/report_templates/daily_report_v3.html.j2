@@ -52,7 +52,7 @@
     <button data-tab="trends" class="tab-btn" role="tab">变化趋势</button>
     <button data-tab="issues" class="tab-btn" role="tab">问题诊断 <span class="tab-badge">{{ (analytics.issue_cards or []) | length }}</span></button>
     <button data-tab="products" class="tab-btn" role="tab">产品排行 <span class="tab-badge">{{ analytics.kpis.own_product_count or 0 }}</span></button>
-    <button data-tab="competitive" class="tab-btn" role="tab">竞品对标</button>
+    <button data-tab="competitive" class="tab-btn" role="tab">竞品启示</button>
     <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ (snapshot.reviews or []) | length }}</span></button>
   </nav>
 
@@ -427,52 +427,99 @@
       {% endif %}
     </section>
 
+    {# F011 §4.2.7 v1.2 — 竞品启示 4-block layout (replaces 竞品对标) #}
     <section id="tab-competitive" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">竞品对标</h2>
-      {% if gap_analysis %}
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>维度</th>
-              <th>类型</th>
-              <th>优先级</th>
-              <th>竞品好评</th>
-              <th>自有差评</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for gap in gap_analysis %}
-            <tr>
-              <td>{{ gap.label_display or "" }}</td>
-              <td>{{ gap.gap_type or "" }}</td>
-              <td>{{ gap.priority_display or "" }}</td>
-              <td>{{ gap.competitor_positive_count or 0 }}</td>
-              <td>{{ gap.own_negative_count or 0 }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <h2 class="section-title">竞品启示</h2>
+
+      {# Block 1: 竞品弱点 = 我方机会 #}
+      {% set _weakness = (analytics.competitor or {}).get("weakness_opportunities") or [] %}
+      {% if _weakness %}
+      <div class="competitor-block weakness-opp-card">
+        <h3>⚡ 竞品弱点 = 我方机会</h3>
+        <ul>
+          {% for opp in _weakness %}
+          <li>
+            <strong>{{ opp.competitor_complaint_display }}</strong>
+            （{{ opp.competitor_evidence_count }} 条差评）
+            → {{ opp.our_advantage_direction }}
+            <small>（我方 {{ opp.our_positive_count }} 条正面证据）</small>
+          </li>
+          {% endfor %}
+        </ul>
       </div>
       {% endif %}
-      {% if charts.radar %}
-      <div class="chart-container">
-        <h3>竞品对标雷达图</h3>
-        <div style="max-width:420px;margin:0 auto;">
+
+      {# Block 2: 我们能借鉴竞品什么 — flat list rendering #}
+      {# TODO: F011 v1.3 — split benchmark_examples into product_design / marketing_message / service_model categories #}
+      {% set _benchmarks = (analytics.competitor or {}).get("benchmark_examples") or [] %}
+      {% if _benchmarks %}
+      <div class="competitor-block benchmark-card">
+        <h3>✨ 我们能借鉴竞品什么</h3>
+        <ul>
+          {% for item in _benchmarks[:5] %}
+          <li>
+            <strong>{{ item.product_name or item.product_sku or "未命名" }}</strong>:
+            {{ item.body_cn or item.headline_cn or item.body or item.headline or "" }}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {# Block 3: 多维度对标雷达 #}
+      {% if analytics._radar_data and analytics._radar_data.categories %}
+      <div class="competitor-block radar-card">
+        <h3>📡 多维度对标雷达 (核心 {{ analytics._radar_data.categories | length }} 维)</h3>
+        {% if charts.radar %}
+        <div class="chart-container" style="max-width:480px;margin:0 auto;">
           <canvas data-chart-config='{{ charts.radar | tojson }}'></canvas>
         </div>
+        {% else %}
+        <div id="radar-chart" data-radar='{{ analytics._radar_data | tojson }}'></div>
+        {% endif %}
       </div>
       {% endif %}
-      {% if benchmarks %}
-      {% for benchmark in benchmarks[:3] %}
-      <blockquote class="quote-block quote-positive reveal">
-        <div class="quote-meta">
-          <strong>{{ benchmark.product_name or "" }}</strong>
-          <span>{{ benchmark.label_display_list or "" }}</span>
+
+      {# Block 4: 竞品评分两极分化 (relocated from panorama) #}
+      {% if charts.sentiment_comp %}
+      <div class="competitor-block rating-distribution-card">
+        <h3>📊 竞品评分两极分化</h3>
+        <div class="chart-container">
+          <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
         </div>
-        <p class="quote-cn">{{ benchmark.summary_text or "" }}</p>
-      </blockquote>
-      {% endfor %}
+        <p class="insight-note">↗ 启示：竞品 ≤2★ 占比偏高的产品对应我方差异化机会</p>
+      </div>
+      {% endif %}
+
+      {# Gap analysis table preserved for compatibility (table format remains relevant) #}
+      {% if gap_analysis %}
+      <div class="competitor-block">
+        <h3>📋 维度差距对照</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>维度</th>
+                <th>类型</th>
+                <th>优先级</th>
+                <th>竞品好评</th>
+                <th>自有差评</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for gap in gap_analysis %}
+              <tr>
+                <td>{{ gap.label_display or "" }}</td>
+                <td>{{ gap.gap_type or "" }}</td>
+                <td>{{ gap.priority_display or "" }}</td>
+                <td>{{ gap.competitor_positive_count or 0 }}</td>
+                <td>{{ gap.own_negative_count or 0 }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
       {% endif %}
     </section>
 
