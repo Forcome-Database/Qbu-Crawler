@@ -13,7 +13,8 @@ def _make_review(*, ownership, rating, scraped_at, product_name="Widget A", sku=
         "product_name": product_name,
         "product_sku": sku,
         "headline": "h", "body": "b",
-        "analysis_labels_parsed": [],
+        # F011 §4.2.5 I-5 — canonical field is `analysis_labels` (JSON string).
+        "analysis_labels": "[]",
     }
 
 
@@ -164,7 +165,7 @@ def test_immediate_attention_handles_mixed_tz_suffixes():
                 "date_published": "2026-04-26", "date_published_parsed": "2026-04-26",
                 "product_name": "X", "product_sku": "S1",
                 "headline": "h", "body": "b",
-                "analysis_labels_parsed": [],
+                "analysis_labels": "[]",
             },
             # Out-of-window review (UTC-naive 2026-04-25T05:00:00 → before 16:00 Shanghai threshold)
             {
@@ -173,7 +174,7 @@ def test_immediate_attention_handles_mixed_tz_suffixes():
                 "date_published": "2026-04-25", "date_published_parsed": "2026-04-25",
                 "product_name": "X", "product_sku": "S1",
                 "headline": "h", "body": "b",
-                "analysis_labels_parsed": [],
+                "analysis_labels": "[]",
             },
         ],
     }

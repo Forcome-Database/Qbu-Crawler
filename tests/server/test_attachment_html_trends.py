@@ -248,7 +248,9 @@ def _make_review(date_str, *, rating=4, ownership="own"):
         "scraped_at": date_str + "T10:00:00+08:00",
         "product_sku": "SKU-A",
         "product_name": "Product A",
-        "analysis_labels_parsed": [],
+        # F011 §4.2.5 I-5 — canonical field is `analysis_labels` (JSON string),
+        # not the phantom `analysis_labels_parsed` that older fixtures used.
+        "analysis_labels": "[]",
     }
 
 

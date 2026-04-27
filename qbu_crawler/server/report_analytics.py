@@ -2483,6 +2483,25 @@ def _build_trend_comparison(series_own: list, prev_window_data) -> dict | None:
     }
 
 
+def _parse_analysis_labels(review: dict) -> list:
+    """Parse a review's ``analysis_labels`` (canonical JSON-string field) into a list.
+
+    F011 §4.2.5 I-5 fix — drill-down builders previously read a phantom
+    ``analysis_labels_parsed`` key that no upstream code ever writes, silently
+    returning empty drill-down items in production. The DB column / `report.py`
+    query alias is `analysis_labels` (a JSON string of ``[{code, polarity, ...}]``);
+    parse it inline here so each call site stays self-contained.
+
+    Per review-discipline in the task brief: do NOT swallow malformed JSON —
+    fail loudly so we notice corruption upstream instead of silently emptying.
+    """
+    raw = review.get("analysis_labels") or "[]"
+    if isinstance(raw, list):
+        return raw
+    parsed = json.loads(raw)
+    return parsed if isinstance(parsed, list) else []
+
+
 def _build_top_issues_drilldown(reviews: list, window: str) -> dict:
     """Lightweight Top Issues drill-down (placeholder shape; richer in Task 3.x)."""
     from collections import Counter as _C
@@ -2490,7 +2509,9 @@ def _build_top_issues_drilldown(reviews: list, window: str) -> dict:
                and (r.get("rating") or 5) <= 2]
     label_counter: _C = _C()
     for r in own_neg:
-        for lab in (r.get("analysis_labels_parsed") or []):
+        for lab in _parse_analysis_labels(r):
+            if not isinstance(lab, dict):
+                continue
             if (lab.get("polarity") or "") == "negative" and lab.get("code"):
                 label_counter[lab["code"]] += 1
     return {
@@ -2534,7 +2555,9 @@ def _build_competitor_radar_drilldown(reviews: list) -> dict:
     for r in reviews:
         if (r.get("ownership") or "") != "competitor":
             continue
-        for lab in (r.get("analysis_labels_parsed") or []):
+        for lab in _parse_analysis_labels(r):
+            if not isinstance(lab, dict):
+                continue
             if (lab.get("polarity") or "") == "positive" and lab.get("code"):
                 counter[lab["code"]] += 1
     return {

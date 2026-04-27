@@ -148,6 +148,12 @@
     container.innerHTML = svg;
   }
 
+  // F011 §4.2.5 / Task 3.3 — initTrendPanels (and the .trend-panel print-mode loop
+  // below) only fire when daily_report_v3_legacy.html.j2 renders the multi-panel
+  // view/dimension switcher. The current daily_report_v3.html.j2 emits a single
+  // primary chart + 3 drill-downs and does NOT use these classes, so the selectors
+  // below find nothing and the function early-returns. KEEP this code until Task 4.6
+  // retires the legacy template.
   function initTrendPanels() {
     var viewBtns = document.querySelectorAll('.trend-view-btn[data-trend-view]');
     var dimensionBtns = document.querySelectorAll('.trend-subtab-btn[data-trend-dimension]');

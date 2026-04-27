@@ -107,6 +107,69 @@ def test_drill_downs_are_three_items_with_full_contract():
         assert drill["data"].get("kind") == expected_id
 
 
+def test_drill_down_top_issues_actually_aggregates_labels():
+    """F011 §4.2.5 I-5 regression — top_issues drill-down must aggregate label
+    data, not silently return empty items because of phantom
+    analysis_labels_parsed field. Production rows write `analysis_labels` as a
+    JSON string (see report.py SQL alias `ra.labels AS analysis_labels`); the
+    builder used to read a non-existent `analysis_labels_parsed` key and return
+    an empty list for every product, even when labels were present."""
+    import json
+    reviews = [
+        {
+            "id": i,
+            "ownership": "own",
+            "rating": 2,
+            "scraped_at": "2026-04-25T10:00:00+08:00",
+            "date_published": "2026-04-25",
+            "product_name": "Widget A",
+            "product_sku": "SKU-A",
+            # Realistic shape that production code actually writes (JSON string).
+            "analysis_labels": json.dumps([
+                {"code": "structure_design", "polarity": "negative", "display": "结构设计"},
+            ]),
+        }
+        for i in range(40)
+    ]
+    digest = build_trend_digest(reviews=reviews)
+    # drill_downs[0] is wrapped by _wrap_drilldown → {"id": ..., "title": ..., "data": {...}}
+    top_issues = digest["drill_downs"][0]
+    assert top_issues["id"] == "top_issues"
+    items = top_issues["data"].get("items")
+    assert items, (
+        "top_issues drill-down silently empty (phantom analysis_labels_parsed bug): "
+        f"{top_issues['data']}"
+    )
+    # Aggregation should have collapsed all 40 reviews onto the single label code.
+    assert items[0] == {"label_code": "structure_design", "review_count": 40}
+
+
+def test_drill_down_competitor_radar_actually_aggregates_labels():
+    """F011 §4.2.5 I-5 regression — competitor_radar drill-down has the same
+    phantom-field bug class as top_issues. Same fix, same assertion shape."""
+    import json
+    reviews = [
+        {
+            "id": i,
+            "ownership": "competitor",
+            "rating": 5,
+            "scraped_at": "2026-04-25T10:00:00+08:00",
+            "product_name": "Rival B",
+            "product_sku": "SKU-B",
+            "analysis_labels": json.dumps([
+                {"code": "ease_of_use", "polarity": "positive"},
+            ]),
+        }
+        for i in range(10)
+    ]
+    digest = build_trend_digest(reviews=reviews)
+    radar = digest["drill_downs"][2]
+    assert radar["id"] == "competitor_radar"
+    items = radar["data"].get("items")
+    assert items, f"competitor_radar drill-down silently empty: {radar['data']}"
+    assert items[0] == {"label_code": "ease_of_use", "review_count": 10}
+
+
 def test_competitor_series_separate():
     reviews = [
         _r(f"2026-04-{d:02d}", rating=4, ownership="own") for d in range(20, 27)

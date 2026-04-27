@@ -629,7 +629,18 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     for pname, rev_list in own_new_neg_by_product.items():
         label_codes = []
         for r in rev_list:
-            for lab in (r.get("analysis_labels_parsed") or []):
+            # F011 §4.2.5 I-5 — analysis_labels is a JSON string in DB rows;
+            # the old `analysis_labels_parsed` key was phantom (no upstream
+            # writer), making this loop silently skip every review.
+            raw_labels = r.get("analysis_labels") or "[]"
+            if isinstance(raw_labels, list):
+                labels_iter = raw_labels
+            else:
+                parsed = json.loads(raw_labels)
+                labels_iter = parsed if isinstance(parsed, list) else []
+            for lab in labels_iter:
+                if not isinstance(lab, dict):
+                    continue
                 if (lab.get("polarity") or "").lower() == "negative":
                     if lab.get("code"):
                         label_codes.append(lab["code"])
