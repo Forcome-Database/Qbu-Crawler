@@ -1781,3 +1781,46 @@ details summary:hover { color: var(--accent); }
   color: var(--text-tertiary, var(--text-secondary));
   font-style: italic;
 }
+
+/* ==========================================================================
+   F011 §4.2.3 — Product status lamp table
+   ========================================================================== */
+.product-status-table .lamp { font-size: 16px; margin-right: 4px; }
+.product-status-table .status-label { font-weight: 600; }
+.product-status-table .primary-concern { color: var(--text-secondary); }
+.product-status-table .hover-only {
+  font-size: 12px;
+  color: var(--text-tertiary, var(--text-muted));
+}
+.product-status-table .risk-score[data-tooltip] {
+  cursor: help;
+  border-bottom: 1px dotted var(--border);
+}
+.product-status-table .status-row.status-red { background: var(--critical-bg, #fef2f2); }
+.product-status-table .status-row.status-yellow { background: var(--medium-bg, #fefce8); }
+.product-status-table .status-row.status-gray { color: var(--text-muted); }
+
+/* ==========================================================================
+   F011 §4.2.6 — Panorama filter chrome
+   ========================================================================== */
+.panorama-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.panorama-filters select,
+.panorama-filters input[type=checkbox] {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.panorama-filters .checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.panorama-table tbody tr[style*="display: none"] { display: none !important; }

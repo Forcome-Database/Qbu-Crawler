@@ -630,6 +630,49 @@
   }
 
   /* =========================================================================
+     F011 §4.2.6 — Panorama client-side filters (5 filters: ownership,
+     rating, has_images, recent, label). Reads tr.dataset, hides non-matches.
+     ========================================================================= */
+
+  function matchPanoramaFilters(d, f) {
+    if (f.ownership && d.ownership !== f.ownership) return false;
+    var rating = parseFloat(d.rating);
+    if (f.rating === 'low' && !(rating <= 2)) return false;
+    if (f.rating === 'mid' && rating !== 3) return false;
+    if (f.rating === 'high' && !(rating >= 4)) return false;
+    if (f.has_images && d.hasImages !== '1') return false;
+    if (f.recent && d.recent !== '1') return false;
+    if (f.label && (d.labels || '').split(',').indexOf(f.label) === -1) return false;
+    return true;
+  }
+
+  function applyPanoramaFilters() {
+    var ownEl = document.querySelector('.panorama-filters [name=ownership]');
+    var rateEl = document.querySelector('.panorama-filters [name=rating]');
+    var imgEl = document.querySelector('.panorama-filters [name=has_images]');
+    var recEl = document.querySelector('.panorama-filters [name=recent]');
+    var labEl = document.querySelector('.panorama-filters [name=label]');
+    var filters = {
+      ownership: ownEl ? ownEl.value : '',
+      rating: rateEl ? rateEl.value : '',
+      has_images: imgEl ? imgEl.checked : false,
+      recent: recEl ? recEl.checked : false,
+      label: labEl ? labEl.value : '',
+    };
+    document.querySelectorAll('.panorama-table tbody tr').forEach(function (tr) {
+      tr.style.display = matchPanoramaFilters(tr.dataset, filters) ? '' : 'none';
+    });
+  }
+
+  function initPanoramaFilters() {
+    var inputs = document.querySelectorAll('.panorama-filters select, .panorama-filters input');
+    if (!inputs.length) return;
+    inputs.forEach(function (el) {
+      el.addEventListener('change', applyPanoramaFilters);
+    });
+  }
+
+  /* =========================================================================
      BOOT
      ========================================================================= */
 
@@ -648,6 +691,7 @@
     initCharts();
     initReveal();
     initStarRatings();
+    initPanoramaFilters();
   }
 
   if (document.readyState === 'loading') {

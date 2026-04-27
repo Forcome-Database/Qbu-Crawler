@@ -301,38 +301,57 @@
     </section>
 
     <section id="tab-products" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">自有产品排行</h2>
-      <p class="section-sub">按风险分从高到低排列。</p>
-      {% if risk_products %}
+      <h2 class="section-title">自有产品状态</h2>
+      <p class="section-sub">灯 + 一句原因（详细风险因子悬停查看）。</p>
+
+      {% set product_status = (analytics.self or {}).get("product_status") or [] %}
+      {% if product_status %}
       <div class="table-wrap">
-        <table class="data-table">
+        <table class="data-table product-status-table">
           <thead>
             <tr>
+              <th>状态</th>
               <th>产品</th>
-              <th>SKU</th>
-              <th>评分</th>
-              <th>差评率</th>
-              <th>差评数</th>
-              <th>风险分</th>
+              <th>主要问题</th>
+              <th class="hover-only">风险分</th>
             </tr>
           </thead>
           <tbody>
-            {% for product in risk_products %}
-            <tr>
-              <td>{{ product.product_name or "" }}</td>
-              <td>{{ product.product_sku or "" }}</td>
-              <td>{{ product.rating_avg or "" }}</td>
-              <td>{{ (product.negative_rate * 100) | round(0) if product.negative_rate else "0" }}%</td>
-              <td>{{ product.negative_review_rows or 0 }}</td>
-              <td>{{ product.risk_score or 0 }}</td>
+            {% for p in product_status %}
+            <tr class="status-row status-{{ p.status_lamp }}">
+              <td>
+                <span class="lamp lamp-{{ p.status_lamp }}" aria-hidden="true">
+                  {%- if p.status_lamp == "green" -%}🟢
+                  {%- elif p.status_lamp == "yellow" -%}🟡
+                  {%- elif p.status_lamp == "red" -%}🔴
+                  {%- else -%}⚪{%- endif -%}
+                </span>
+                <span class="status-label">{{ p.status_label }}</span>
+              </td>
+              <td>{{ p.product_name or p.product_sku }}</td>
+              <td class="primary-concern">
+                {%- if p.primary_concern -%}
+                  {{ p.primary_concern }}
+                {%- elif p.status_lamp == 'green' -%}
+                  健康
+                {%- elif p.status_lamp == 'gray' -%}
+                  无数据
+                {%- endif -%}
+              </td>
+              <td class="risk-detail hover-only">
+                <span class="risk-score" data-tooltip='{{ (p.risk_factors or {}) | tojson }}'>
+                  {{ "%.1f"|format(p.risk_score or 0) }}
+                </span>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       {% else %}
-      <div class="empty-state">暂无产品风险数据。</div>
+      <div class="empty-state">暂无产品状态数据。</div>
       {% endif %}
+
       {% if charts.scatter %}
       <div class="chart-container">
         <h3>价格-评分象限</h3>
@@ -390,93 +409,63 @@
       {% endif %}
     </section>
 
-    <section id="tab-panorama" class="tab-panel" role="tabpanel">
+    <section id="tab-panorama" class="tab-panel panorama" role="tabpanel">
       <h2 class="section-title">全景数据</h2>
-      <div class="chart-grid">
-        {% if charts.sentiment_own %}
-        <div class="chart-container">
-          <h3>自有产品评分分布</h3>
-          <canvas data-chart-config='{{ charts.sentiment_own | tojson }}'></canvas>
-        </div>
-        {% endif %}
-        {% if charts.sentiment_comp %}
-        <div class="chart-container">
-          <h3>竞品评分分布</h3>
-          <canvas data-chart-config='{{ charts.sentiment_comp | tojson }}'></canvas>
-        </div>
-        {% endif %}
+      <p class="section-sub">{{ (snapshot.reviews or []) | length }} 条评论 · 5 个客户端筛选器</p>
+
+      <div class="panorama-filters">
+        <select name="ownership" aria-label="归属">
+          <option value="">全部归属</option>
+          <option value="own">自有</option>
+          <option value="competitor">竞品</option>
+        </select>
+        <select name="rating" aria-label="评分">
+          <option value="">全部评分</option>
+          <option value="low">≤2 星</option>
+          <option value="mid">3 星</option>
+          <option value="high">≥4 星</option>
+        </select>
+        <label class="checkbox-label"><input type="checkbox" name="has_images"> 仅含图</label>
+        <label class="checkbox-label"><input type="checkbox" name="recent"> 近 30 天</label>
+        <select name="label" aria-label="标签">
+          <option value="">全部标签</option>
+          {% for l in analytics.label_options or [] %}
+          <option value="{{ l.code }}">{{ l.display }}</option>
+          {% endfor %}
+        </select>
       </div>
 
-      {% if charts.heatmap and charts.heatmap.type == "table" %}
-      <div class="heatmap-container">
-        <h3>特征情感热力图</h3>
-        <table class="heatmap-table">
-          <thead>
-            <tr>
-              <th>产品 / 特征</th>
-              {% for x_label in charts.heatmap.x_labels or [] %}
-              <th>{{ x_label }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for y_label in charts.heatmap.y_labels or [] %}
-            {% set row_index = loop.index0 %}
-            {% set row_values = charts.heatmap.z[row_index] if charts.heatmap.z and row_index < (charts.heatmap.z | length) else [] %}
-            <tr>
-              <th>{{ y_label }}</th>
-              {% for x_label in charts.heatmap.x_labels or [] %}
-              {% set value = row_values[loop.index0] if row_values and loop.index0 < (row_values | length) else 0 %}
-              <td class="heatmap-cell {% if value > 0.2 %}heatmap-cell-positive{% elif value < -0.2 %}heatmap-cell-negative{% else %}heatmap-cell-neutral{% endif %}">
-                {{ "%.2f"|format(value) }}
-              </td>
-              {% endfor %}
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% endif %}
-
-      {% if snapshot.reviews %}
-      <h3 class="mt-lg">评论明细</h3>
-      <div class="filter-bar">
-        <input type="text" class="filter-input" data-target="review-table" placeholder="搜索产品、标题、评论内容...">
-        <div class="filter-pills">
-          <button class="filter-pill active" data-ownership="all">全部</button>
-          <button class="filter-pill" data-ownership="own">自有</button>
-          <button class="filter-pill" data-ownership="comp">竞品</button>
-        </div>
-        <span class="filter-count"></span>
-      </div>
       <div class="table-wrap">
-        <table class="data-table" id="review-table">
+        <table class="data-table panorama-table">
           <thead>
             <tr>
-              <th data-sortable>产品</th>
-              <th data-sortable>归属</th>
-              <th data-sortable>评分</th>
-              <th data-sortable>标题</th>
+              <th>归属</th>
+              <th>产品</th>
+              <th>评分</th>
+              <th>标题</th>
               <th>正文</th>
-              <th data-sortable>日期</th>
+              <th>发表日期</th>
             </tr>
           </thead>
           <tbody>
-            {% for review in snapshot.reviews %}
-            <tr>
-              <td>{{ review.product_name or "" }}</td>
-              <td>{{ "自有" if review.ownership == "own" else "竞品" }}</td>
-              <td><span class="quote-stars" data-rating="{{ review.rating }}"></span></td>
-              <td>{{ review.headline_cn or review.headline or "" }}</td>
-              <td>{{ (review.body_cn or review.body or "")[:160] }}</td>
-              <td>{{ review.date_published_parsed or review.date_published or "" }}</td>
+            {% for r in snapshot.reviews or [] %}
+            <tr data-review-id="{{ r.id }}"
+                data-ownership="{{ r.ownership or '' }}"
+                data-rating="{{ r.rating or 0 }}"
+                data-has-images="{{ '1' if r.images else '0' }}"
+                data-recent="{{ '1' if r.is_recent else '0' }}"
+                data-labels="{{ (r.label_codes or []) | join(',') }}">
+              <td>{{ '自有' if r.ownership == 'own' else '竞品' if r.ownership == 'competitor' else '' }}</td>
+              <td>{{ r.product_name or '' }}</td>
+              <td>{{ r.rating or '' }}</td>
+              <td>{{ r.headline_cn or r.headline or '' }}</td>
+              <td class="review-body">{{ (r.body_cn or r.body_translated or r.body or '') | truncate(200) }}</td>
+              <td>{{ r.date_published or '' }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-      <div id="review-pagination" class="pagination"></div>
-      {% endif %}
     </section>
   </main>
 

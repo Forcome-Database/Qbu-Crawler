@@ -1015,6 +1015,230 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
     return items
 
 
+# F011 §4.2.3 — Product status lamps
+# ─────────────────────────────────────────────────────────────────────────
+# Returns ALL own products (including healthy/no-data ones) classified by
+# four lamp states. The HTML attachment renders this as 灯 + 一句原因.
+# Detailed risk_score / risk_factors live in the hover tooltip only.
+_STATUS_LABEL_MAP = {
+    "green": "健康",
+    "yellow": "需关注",
+    "red": "高风险",
+    "gray": "无数据",
+}
+
+
+def _product_status(labeled_reviews, snapshot_products=None, logical_date=None):
+    """Build per-product status-lamp records for ALL own products.
+
+    F011 §4.2.3 lamp rules:
+      🔴 red:    risk_score >= HIGH_RISK_THRESHOLD (35)
+      🟡 yellow: 0.85 * threshold <= risk_score < threshold
+                 OR has any negative review (negative_review_count >= 1)
+      🟢 green:  no negative AND risk_score < 0.85 * threshold
+      ⚪ gray:   ingested_reviews == 0 (no data)
+
+    primary_concern:
+      - red/yellow → top-1 (or top-2 joined with " + ") negative label_display
+      - green/gray → ""
+    """
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY, _parse_date_flexible
+
+    if logical_date:
+        try:
+            ref_date = date.fromisoformat(logical_date) if isinstance(logical_date, str) else logical_date
+        except (ValueError, TypeError):
+            ref_date = date.today()
+    else:
+        ref_date = date.today()
+    recency_window = timedelta(days=90)
+    max_severity_score = float(_SEVERITY_SCORE.get("critical", max(_SEVERITY_SCORE.values())))
+
+    # Pre-build per-SKU site-stats from snapshot_products
+    site_review_count = {}
+    site_rating = {}
+    own_skus_from_products = []
+    sku_to_name = {}
+    for p in (snapshot_products or []):
+        sku = p.get("sku") or ""
+        if not sku:
+            continue
+        site_review_count[sku] = p.get("review_count") or 0
+        site_rating[sku] = p.get("rating")
+        sku_to_name[sku] = p.get("name") or p.get("product_name")
+        # Treat as own when explicit ownership=='own' OR no ownership column
+        # (legacy products without ownership default to own scope; gating below
+        # filters out competitor products since they won't appear in own-review aggregation).
+        if (p.get("ownership") or "own") == "own":
+            own_skus_from_products.append(sku)
+
+    # Aggregate reviews per own SKU
+    by_sku = {}
+    for item in labeled_reviews:
+        review = item["review"]
+        if review.get("ownership") != "own":
+            continue
+        sku = review.get("product_sku") or ""
+        if not sku:
+            continue
+        entry = by_sku.setdefault(sku, {
+            "product_name": review.get("product_name"),
+            "product_sku": sku,
+            "all_items": [],
+            "negative_items": [],
+            "image_negative_count": 0,
+            "neg_label_counts": {},
+        })
+        entry["all_items"].append(item)
+        rating = float(review.get("rating") or 0)
+        if rating <= config.NEGATIVE_THRESHOLD:
+            entry["negative_items"].append(item)
+            if item.get("images"):
+                entry["image_negative_count"] += 1
+            for label in item.get("labels", []):
+                if label.get("label_polarity") == "negative":
+                    lc = label["label_code"]
+                    entry["neg_label_counts"][lc] = entry["neg_label_counts"].get(lc, 0) + 1
+
+    # Union of SKUs: those with reviews + those declared own in snapshot_products
+    all_skus = set(by_sku.keys()) | set(own_skus_from_products)
+
+    records = []
+    near_high_threshold = 0.85 * HIGH_RISK_THRESHOLD  # 29.75
+
+    for sku in all_skus:
+        entry = by_sku.get(sku)
+        ingested = len(entry["all_items"]) if entry else 0
+        product_name = (entry["product_name"] if entry else None) or sku_to_name.get(sku)
+
+        # Gray: zero ingested
+        if ingested == 0:
+            records.append({
+                "product_name": product_name,
+                "product_sku": sku,
+                "status_lamp": "gray",
+                "status_label": _STATUS_LABEL_MAP["gray"],
+                "primary_concern": "",
+                "risk_score": 0.0,
+                "risk_factors": None,
+                "near_high_risk": False,
+            })
+            continue
+
+        neg_items = entry["negative_items"]
+        neg_count = len(neg_items)
+        total_reviews = site_review_count.get(sku, 0)
+
+        factors = compute_risk_score({
+            "ingested_count": ingested,
+            "review_count": total_reviews,
+            "negative_review_count": neg_count,
+        })
+        neg_rate = factors["neg_rate"]
+
+        if neg_count == 0:
+            risk_score = 0.0
+            risk_factors = None
+        else:
+            severity_scores = []
+            for neg_item in neg_items:
+                neg_labels = [l for l in neg_item.get("labels", []) if l.get("label_polarity") == "negative"]
+                if neg_labels:
+                    max_sev = max(_SEVERITY_SCORE.get(l.get("severity", "low"), 1) for l in neg_labels)
+                else:
+                    max_sev = 2 if float(neg_item["review"].get("rating", 0)) <= 1 else 1
+                severity_scores.append(max_sev / max_severity_score)
+            severity_avg = sum(severity_scores) / len(severity_scores) if severity_scores else 0.0
+            evidence_rate = entry["image_negative_count"] / neg_count
+
+            recent_neg = 0
+            for neg_item in neg_items:
+                review = neg_item["review"]
+                raw_parsed = review.get("date_published_parsed")
+                pub_date = _parse_date_flexible(raw_parsed) if raw_parsed else None
+                if pub_date is None:
+                    pub_date = _parse_date_flexible(review.get("date_published"))
+                if pub_date and (ref_date - pub_date) <= recency_window:
+                    recent_neg += 1
+            recency = recent_neg / neg_count
+            volume_sig = min(neg_count / 10.0, 1.0)
+
+            risk_score_raw = (
+                0.35 * neg_rate
+                + 0.25 * severity_avg
+                + 0.15 * evidence_rate
+                + 0.15 * recency
+                + 0.10 * volume_sig
+            )
+            risk_score = round(min(risk_score_raw, 1.0) * 100, 1)
+            risk_factors = {
+                "neg_rate": round(neg_rate, 4),
+                "severity": round(severity_avg, 4),
+                "evidence": round(evidence_rate, 4),
+                "recency": round(recency, 4),
+                "volume_sig": round(volume_sig, 4),
+            }
+
+        # Lamp classification
+        if risk_score >= HIGH_RISK_THRESHOLD:
+            lamp = "red"
+        elif risk_score >= near_high_threshold or neg_count >= 1:
+            lamp = "yellow"
+        else:
+            lamp = "green"
+
+        # primary_concern: top-1 (or top-2 joined) negative label_display
+        if lamp in ("yellow", "red"):
+            top_codes = sorted(
+                entry["neg_label_counts"].items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[:2]
+            display_parts = [_LABEL_DISPLAY.get(code, code) for code, _ in top_codes]
+            primary_concern = " + ".join(display_parts) if display_parts else ""
+        else:
+            primary_concern = ""
+
+        records.append({
+            "product_name": product_name,
+            "product_sku": sku,
+            "status_lamp": lamp,
+            "status_label": _STATUS_LABEL_MAP[lamp],
+            "primary_concern": primary_concern,
+            "risk_score": risk_score,
+            "risk_factors": risk_factors,
+            "near_high_risk": is_near_high_risk(risk_score),
+        })
+
+    # Sort: red > yellow > green > gray, then by risk_score desc, sku
+    lamp_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
+    records.sort(key=lambda r: (
+        lamp_order.get(r["status_lamp"], 4),
+        -(r.get("risk_score") or 0.0),
+        r.get("product_sku") or "",
+    ))
+    return records
+
+
+def _build_label_options(labeled_reviews):
+    """F011 §4.2.6 — label codes actually present in labeled_reviews,
+    sorted by frequency desc, for panorama label filter dropdown.
+    """
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    counts = {}
+    for item in labeled_reviews:
+        for label in item.get("labels", []) or []:
+            code = label.get("label_code")
+            if not code:
+                continue
+            counts[code] = counts.get(code, 0) + 1
+    sorted_codes = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    return [
+        {"code": code, "display": _LABEL_DISPLAY.get(code, code)}
+        for code, _ in sorted_codes
+    ]
+
+
 def _recommendations(top_negative_clusters):
     items = []
     for cluster in top_negative_clusters[:5]:
@@ -2867,6 +3091,12 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
         "self": {
             "risk_products": _risk_products(labeled_reviews, snapshot_products=snapshot.get("products", []),
                                             logical_date=snapshot.get("logical_date")),
+            # F011 §4.2.3 — full-coverage status lamps for ALL own products (incl. healthy/no-data)
+            "product_status": _product_status(
+                labeled_reviews,
+                snapshot_products=snapshot.get("products", []),
+                logical_date=snapshot.get("logical_date"),
+            ),
             "top_negative_clusters": top_negative_clusters,
             "top_positive_clusters": own_positive_clusters,
             "recommendations": _recommendations(top_negative_clusters),
@@ -2891,6 +3121,8 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
                 "competitor_reviews": len(competitor_reviews),
             },
         },
+        # F011 §4.2.6 — labels actually present in this run, for panorama label filter dropdown
+        "label_options": _build_label_options(labeled_reviews),
         **chart_data,
         "_trend_series": _trend_series,
     }

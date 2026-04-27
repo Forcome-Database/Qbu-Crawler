@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from datetime import date, timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -18,6 +19,50 @@ from qbu_crawler.server.report_charts import build_chartjs_configs
 logger = logging.getLogger(__name__)
 
 
+def _annotate_reviews(reviews, logical_date_str):
+    """F011 §4.2.6 — annotate review dicts with derived flags for panorama filters.
+
+    Adds (idempotent — re-running over already-annotated reviews is a no-op):
+      - is_recent (bool): date_published within 30 days of logical_date
+      - label_codes (list[str]): codes parsed from analysis_labels JSON string
+
+    Mutates each review dict in-place; safe to call once per render.
+    """
+    try:
+        ref_date = date.fromisoformat((logical_date_str or "")[:10]) if logical_date_str else date.today()
+    except (ValueError, TypeError):
+        ref_date = date.today()
+    cutoff = ref_date - timedelta(days=30)
+
+    for r in reviews or []:
+        # is_recent
+        try:
+            d = date.fromisoformat((r.get("date_published") or "")[:10])
+            r["is_recent"] = d >= cutoff
+        except (ValueError, TypeError):
+            r["is_recent"] = False
+
+        # label_codes — parse JSON-string analysis_labels (Task 3.3 canonical field)
+        raw = r.get("analysis_labels")
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw or "[]")
+            except (json.JSONDecodeError, TypeError):
+                parsed = []
+        elif isinstance(raw, list):
+            parsed = raw
+        else:
+            parsed = []
+        codes = []
+        for lab in parsed or []:
+            if not isinstance(lab, dict):
+                continue
+            code = lab.get("code") or lab.get("label_code")
+            if code:
+                codes.append(code)
+        r["label_codes"] = codes
+
+
 def _render_v3_html_string(snapshot, analytics):
     """Render the V3 interactive HTML report to a string.
 
@@ -27,6 +72,9 @@ def _render_v3_html_string(snapshot, analytics):
         (F011 §4.2.4 contract; preferred entry for tests).
     """
     normalized = normalize_deep_report_analytics(analytics)
+
+    # F011 §4.2.6 — annotate reviews for panorama filter chrome (idempotent)
+    _annotate_reviews(snapshot.get("reviews") or [], snapshot.get("logical_date"))
 
     # Compute alert level before passing to template
     computed_alert = _compute_alert_level(normalized)

@@ -357,22 +357,9 @@ class TestV3TemplateRender:
         assert "累计评论" in html
         assert "本期采集窗口内入库的自有产品评论行数" not in html
 
-    def test_panorama_renders_heatmap_table(self):
-        context = _render_context("baseline", "bootstrap", "bootstrap")
-        context["charts"]["heatmap"] = {
-            "type": "table",
-            "x_labels": ["质量", "结构"],
-            "y_labels": ["SKU-A", "SKU-B", "SKU-C"],
-            "z": [[0.8, -0.2], [0.1, 0.5], [-0.7, 0.0]],
-        }
-
-        html = _template().render(**context)
-        heatmap_html = html[html.index("特征情感热力图"):]
-
-        assert "特征情感热力图" in html
-        assert "heatmap-table" in html
-        assert "SKU-A" in html
-        assert "<canvas" not in heatmap_html.split("</table>", 1)[0]
+    # F011 §4.2.6 — retired: panorama no longer renders heatmap or rating-distribution
+    # charts. New panorama is filters + flat 561-row review table.
+    # New attachment coverage lives in tests/server/test_attachment_html_other.py.
 
     # F011 §4.2.5 — retired: legacy 12-panel data shape replaced by primary_chart+drill_downs
     # Original tests asserted on:
