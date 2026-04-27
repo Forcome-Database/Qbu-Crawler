@@ -128,6 +128,36 @@ _POLARITY_DISPLAY = {"positive": "正面", "negative": "负面"}
 _SEVERITY_DISPLAY = {"critical": "危急", "high": "高", "medium": "中", "low": "低"}
 _STOCK_DISPLAY = {"in_stock": "有货", "out_of_stock": "缺货", "unknown": "未知"}
 
+# F011 §4.3 — impact_category enum (severity-axis) display
+IMPACT_CATEGORY_DISPLAY = {
+    "functional": "功能性",
+    "durability": "耐用性",
+    "safety": "安全性",
+    "cosmetic": "外观",
+    "service": "服务",
+}
+
+# F011 §4.3 + H19 — failure_mode 9-class enum display
+FAILURE_MODE_DISPLAY = {
+    "none": "无",
+    "gear_failure": "齿轮失效",
+    "motor_anomaly": "电机异常",
+    "casing_assembly": "壳体/装配",
+    "material_finish": "表面/材料",
+    "control_electrical": "控制/电气",
+    "noise": "噪音",
+    "cleaning_difficulty": "清洁困难",
+    "other": "其他",
+}
+
+# F011 §4.3 — status lamp icon prefix for the 核心数据 sheet
+_STATUS_LAMP_DISPLAY = {
+    "red": "🔴 高风险",
+    "yellow": "🟡 需关注",
+    "green": "🟢 良好",
+    "gray": "⚪ 无数据",
+}
+
 from qbu_crawler.server.report_common import _LABEL_DISPLAY  # label_code → 中文
 
 
@@ -1021,6 +1051,18 @@ def _generate_analytical_excel(
     analytics: dict | None,
     report_date: datetime | None = None,
 ) -> str:
+    """F011 §4.3 — generate the 4-sheet analytical Excel workbook.
+
+    Sheets (in order):
+      1. 核心数据   — per-product summary with status lamp + dual-denominator
+                      negative rate (H10) + 主要问题 from product_status
+      2. 现在该做什么 — improvement_priorities (LLM/fallback) with short_title +
+                      affected_products + full_action + evidence_count
+      3. 评论原文   — raw reviews with normalized impact_category enum (H12) and
+                      failure_mode 9-class enum (H19), distinct from labels
+      4. 竞品启示   — competitor benchmark_examples (positive) +
+                      negative_opportunities (negative) themes
+    """
     if analytics is None:
         return _legacy_generate_excel(products, reviews, report_date=report_date)
 
@@ -1041,13 +1083,6 @@ def _generate_analytical_excel(
     report_semantics = analytics.get("report_semantics") or (
         "bootstrap" if analytics.get("mode", "baseline") == "baseline" else "incremental"
     )
-    change_digest = analytics.get("change_digest") or {}
-    digest_summary = change_digest.get("summary") or {}
-    digest_warnings = change_digest.get("warnings") or {}
-    digest_issue_changes = change_digest.get("issue_changes") or {}
-    digest_product_changes = change_digest.get("product_changes") or {}
-    digest_review_signals = change_digest.get("review_signals") or {}
-    digest_empty_state = change_digest.get("empty_state") or {}
     window_review_ids = set(analytics.get("window_review_ids") or [])
     fresh_cutoff = report_date - timedelta(days=30)
 
@@ -1079,12 +1114,6 @@ def _generate_analytical_excel(
         if value in (None, "", "None", "null"):
             return ""
         return str(value)
-
-    def _snippet(value, limit=60):
-        text = _safe_text(value)
-        if len(text) <= limit:
-            return text
-        return f"{text[:limit - 1]}…"
 
     def _parse_review_datetime(review):
         raw = review.get("date_published_parsed") or review.get("date_published")
@@ -1133,31 +1162,9 @@ def _generate_analytical_excel(
             if _safe_text(item)
         )
 
-    def _impact_category_display(review, labels_text):
-        return (
-            _safe_text(review.get("impact_category"))
-            or _safe_text(review.get("failure_mode"))
-            or labels_text
-        )
-
-    def _headline_display(review):
-        return (
-            _safe_text(review.get("headline_cn"))
-            or _safe_text(review.get("headline"))
-            or _snippet(review.get("body_cn") or review.get("body"))
-            or "图片证据"
-        )
-
-    def _body_display(review):
-        return _safe_text(review.get("body_cn")) or _safe_text(review.get("body"))
-
-    def _render_change_value(value, change_type=None):
-        if change_type == "stock":
-            return _xl_display(value or "unknown", _STOCK_DISPLAY)
-        return value if value not in (None, "") else ""
-
-    review_counts_by_sku = {}
-    negative_counts_by_sku = {}
+    # ── Pre-aggregate review counts by SKU (used in 核心数据) ─────────────
+    review_counts_by_sku: dict[str, int] = {}
+    negative_counts_by_sku: dict[str, int] = {}
     for review in reviews:
         sku = review.get("product_sku") or ""
         if not sku:
@@ -1166,16 +1173,102 @@ def _generate_analytical_excel(
         if (review.get("rating") or 5) <= config.NEGATIVE_THRESHOLD:
             negative_counts_by_sku[sku] = negative_counts_by_sku.get(sku, 0) + 1
 
-    ws1 = wb.active
-    ws1.title = "评论明细"
-    review_headers = [
-        "ID", "窗口归属", "产品名称", "SKU", "归属", "评分", "情感", "标签", "影响类别", "失效模式",
-        "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)", "特征短语", "洞察", "评论时间", "照片",
+    self_block = analytics.get("self") or {}
+    product_status_by_sku = {
+        item.get("product_sku"): item
+        for item in (self_block.get("product_status") or [])
+        if item.get("product_sku")
+    }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Sheet 1: 核心数据 (F011 §4.3.2 — 14 cols)
+    # ─────────────────────────────────────────────────────────────────────
+    ws_core = wb.active
+    ws_core.title = "核心数据"
+    core_headers = [
+        "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
+        "站点评分", "站点评论数", "采集评论数", "覆盖率",
+        "差评数", "差评率(站点分母)", "差评率(采集分母)",
+        "状态灯", "主要问题",
     ]
-    _write_headers(ws1, review_headers)
+    _write_headers(ws_core, core_headers)
+    for product in products:
+        sku = product.get("sku") or ""
+        site_count = int(product.get("review_count") or 0)
+        ingested = review_counts_by_sku.get(sku, 0)
+        negatives = negative_counts_by_sku.get(sku, 0)
+        coverage = (ingested / site_count) if site_count > 0 else None
+        rate_site = (negatives / site_count) if site_count > 0 else None
+        rate_ingested = (negatives / ingested) if ingested > 0 else None
+
+        ownership = product.get("ownership") or "own"
+        status_entry = product_status_by_sku.get(sku) if ownership == "own" else None
+        if status_entry:
+            lamp_value = _STATUS_LAMP_DISPLAY.get(
+                status_entry.get("status_lamp"),
+                status_entry.get("status_label") or "",
+            )
+            primary_concern = status_entry.get("primary_concern") or ""
+        else:
+            lamp_value = "" if ownership == "own" else "—"
+            primary_concern = ""
+
+        ws_core.append([
+            product.get("name"),
+            sku,
+            product.get("site"),
+            _xl_display(ownership, _OWNERSHIP_DISPLAY),
+            product.get("price"),
+            _xl_display(product.get("stock_status"), _STOCK_DISPLAY),
+            product.get("rating"),
+            site_count,
+            ingested,
+            round(coverage, 4) if coverage is not None else "—",
+            negatives,
+            round(rate_site, 4) if rate_site is not None else "—",
+            round(rate_ingested, 4) if rate_ingested is not None else "—",
+            lamp_value,
+            primary_concern,
+        ])
+    _auto_widths(ws_core)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Sheet 2: 现在该做什么 (F011 §4.3.2 — 7 cols, top-5 priorities)
+    # ─────────────────────────────────────────────────────────────────────
+    ws_reco = wb.create_sheet("现在该做什么")
+    reco_headers = [
+        "序号", "短标题", "影响产品数", "影响产品列表",
+        "用户原话(典型)", "改良方向", "证据数",
+    ]
+    _write_headers(ws_reco, reco_headers)
+    priorities = (analytics.get("report_copy") or {}).get("improvement_priorities") or []
+    for idx, rec in enumerate(priorities[:5], start=1):
+        affected = rec.get("affected_products") or []
+        ws_reco.append([
+            idx,
+            _safe_text(rec.get("short_title")),
+            int(rec.get("affected_products_count") or len(affected) or 0),
+            "、".join(str(p) for p in affected if p),
+            _safe_text(rec.get("top_complaint")),
+            _safe_text(rec.get("full_action")),
+            int(rec.get("evidence_count") or 0),
+        ])
+    _auto_widths(ws_reco)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Sheet 3: 评论原文 (F011 §4.3.2 — 18 cols, retains image embed)
+    # ─────────────────────────────────────────────────────────────────────
+    ws_rev = wb.create_sheet("评论原文")
+    review_headers = [
+        "ID", "窗口归属", "产品名称", "SKU", "归属", "评分", "情感", "标签",
+        "影响类别", "失效模式",
+        "标题(原文)", "标题(中文)", "内容(原文)", "内容(中文)",
+        "特征短语", "洞察", "评论时间", "照片",
+    ]
+    _write_headers(ws_rev, review_headers)
     images_col = len(review_headers)
 
-    all_image_urls = set()
+    all_image_urls: set[str] = set()
     for review in reviews:
         for url in _parse_json_list(review.get("images") or []):
             if isinstance(url, str) and url.startswith("http"):
@@ -1186,6 +1279,13 @@ def _generate_analytical_excel(
         images_list = _parse_json_list(review.get("images") or [])
         labels_text = _labels_text(review)
         features_text = _features_text(review)
+
+        impact_raw = _safe_text(review.get("impact_category"))
+        impact_display = IMPACT_CATEGORY_DISPLAY.get(impact_raw, impact_raw)
+
+        failure_raw = _safe_text(review.get("failure_mode"))
+        failure_display = FAILURE_MODE_DISPLAY.get(failure_raw, failure_raw)
+
         row = [
             review.get("id"),
             _review_new_flag(review),
@@ -1195,20 +1295,20 @@ def _generate_analytical_excel(
             review.get("rating"),
             _xl_display(review.get("sentiment"), _SENTIMENT_DISPLAY),
             labels_text,
-            _impact_category_display(review, labels_text),
-            _safe_text(review.get("failure_mode")),
+            impact_display,
+            failure_display,
             _safe_text(review.get("headline")),
-            _headline_display(review),
+            _safe_text(review.get("headline_cn")),
             _safe_text(review.get("body")),
-            _body_display(review),
+            _safe_text(review.get("body_cn")),
             features_text,
             _safe_text(review.get("analysis_insight_cn") or review.get("insight_cn")),
             _safe_text(review.get("date_published_parsed") or review.get("date_published")),
             "",
         ]
-        ws1.append(row)
+        ws_rev.append(row)
 
-        row_idx = ws1.max_row
+        row_idx = ws_rev.max_row
         embedded_count = 0
         for url in images_list:
             if not isinstance(url, str) or not url.startswith("http"):
@@ -1234,257 +1334,78 @@ def _generate_analytical_excel(
                 pixels_to_EMU(xl_img.height),
             )
             xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
-            ws1.add_image(xl_img)
+            ws_rev.add_image(xl_img)
             embedded_count += 1
 
         if embedded_count > 0:
             row_height_px = embedded_count * (_IMG_THUMB_HEIGHT + _IMG_THUMB_SPACING)
-            ws1.row_dimensions[row_idx].height = row_height_px * 0.75
+            ws_rev.row_dimensions[row_idx].height = row_height_px * 0.75
         elif images_list:
-            ws1.cell(row=row_idx, column=images_col, value="\n".join(str(item) for item in images_list))
+            ws_rev.cell(
+                row=row_idx, column=images_col,
+                value="\n".join(str(item) for item in images_list),
+            )
 
-    _auto_widths(ws1)
-    ws1.column_dimensions[get_column_letter(images_col)].width = _IMG_COL_WIDTH
+    _auto_widths(ws_rev)
+    ws_rev.column_dimensions[get_column_letter(images_col)].width = _IMG_COL_WIDTH
 
-    ws2 = wb.create_sheet("产品概览")
-    product_headers = [
-        "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
-        "站点评分", "站点评论数", "采集评论数", "差评数", "差评率", "风险分",
-    ]
-    _write_headers(ws2, product_headers)
-    risk_by_sku = {
-        item["product_sku"]: item
-        for item in (analytics.get("self") or {}).get("risk_products") or []
-        if item.get("product_sku")
-    }
-    for product in products:
-        sku = product.get("sku") or ""
-        risk = risk_by_sku.get(sku, {})
-        collected_review_count = review_counts_by_sku.get(sku, 0)
-        negative_review_count = risk.get("negative_review_rows")
-        if negative_review_count is None:
-            negative_review_count = negative_counts_by_sku.get(sku, 0)
-        negative_rate = risk.get("negative_rate")
-        if negative_rate in (None, "") and collected_review_count:
-            negative_rate = negative_review_count / collected_review_count
-        ws2.append([
-            product.get("name"),
-            sku,
-            product.get("site"),
-            _xl_display(product.get("ownership"), _OWNERSHIP_DISPLAY),
-            product.get("price"),
-            _xl_display(product.get("stock_status"), _STOCK_DISPLAY),
-            product.get("rating"),
-            product.get("review_count"),
-            collected_review_count,
-            negative_review_count or 0,
-            negative_rate,
-            risk.get("risk_score"),
+    # ─────────────────────────────────────────────────────────────────────
+    # Sheet 4: 竞品启示 (F011 §4.3.2 — 5 cols, top-3 + top-3)
+    # ─────────────────────────────────────────────────────────────────────
+    ws_comp = wb.create_sheet("竞品启示")
+    comp_headers = ["类型", "主题", "证据数", "典型评论(中文)", "涉及产品"]
+    _write_headers(ws_comp, comp_headers)
+
+    competitor = analytics.get("competitor") or {}
+
+    def _theme_topic(item):
+        # benchmark_examples / negative_opportunities expose label_codes
+        codes = item.get("label_codes") or []
+        if codes:
+            return _xl_display(codes[0], _LABEL_DISPLAY)
+        return _safe_text(item.get("label_display") or item.get("topic"))
+
+    def _theme_example(item):
+        return (
+            _safe_text(item.get("body_cn"))
+            or _safe_text(item.get("headline_cn"))
+            or _safe_text(item.get("body"))
+            or _safe_text(item.get("headline"))
+        )
+
+    def _theme_product(item):
+        return _safe_text(item.get("product_name") or item.get("product_sku"))
+
+    benchmark_items = (competitor.get("benchmark_examples") or [])[:3]
+    negative_items = (competitor.get("negative_opportunities") or [])[:3]
+
+    for item in benchmark_items:
+        codes = item.get("label_codes") or []
+        ws_comp.append([
+            "可借鉴",
+            _theme_topic(item) or "—",
+            len(codes) if codes else 1,
+            _theme_example(item) or "—",
+            _theme_product(item) or "—",
         ])
 
-    _auto_widths(ws2)
-
-    ws_change = wb.create_sheet("今日变化")
-    _write_headers(ws_change, ["模块", "项目", "值", "说明"])
-    baseline_day_index = digest_summary.get("baseline_day_index") or 1
-    baseline_display_state = digest_summary.get("baseline_display_state") or (
-        "initial" if baseline_day_index == 1 else "building"
-    )
-    if report_semantics == "bootstrap" and baseline_display_state == "building":
-        change_status_label = f"基线建立期第{baseline_day_index}天"
-    elif report_semantics == "bootstrap":
-        change_status_label = "监控起点"
-    else:
-        change_status_label = "今日变化"
-    change_status_description = digest_summary.get("window_meaning") or (
-        "首次建档，当前结果用于建立监控基线。"
-        if report_semantics == "bootstrap"
-        else "聚焦本次运行中需要优先关注的新增变化。"
-    )
-    ws_change.append([
-        "状态",
-        change_status_label,
-        change_digest.get("view_state") or report_semantics,
-        change_status_description,
-    ])
-    for label, value in (
-        ("本次入库评论", digest_summary.get("ingested_review_count", 0)),
-        ("新近评论", digest_summary.get("fresh_review_count", 0)),
-        ("历史补采", digest_summary.get("historical_backfill_count", 0)),
-        ("自有新近差评", digest_summary.get("fresh_own_negative_count", 0)),
-        ("新增问题", digest_summary.get("issue_new_count", 0)),
-        ("升级问题", digest_summary.get("issue_escalated_count", 0)),
-        ("改善问题", digest_summary.get("issue_improving_count", 0)),
-        ("产品状态变更", digest_summary.get("state_change_count", 0)),
-    ):
-        ws_change.append(["摘要", label, value, ""])
-
-    for warning_key in ("translation_incomplete", "estimated_dates", "backfill_dominant"):
-        warning = digest_warnings.get(warning_key) or {}
-        if warning.get("enabled"):
-            ws_change.append(["提示", warning_key, "已触发", _safe_text(warning.get("message"))])
-
-    if digest_empty_state.get("enabled"):
-        ws_change.append([
-            "空态",
-            _safe_text(digest_empty_state.get("title")),
-            "",
-            _safe_text(digest_empty_state.get("description")),
+    for item in negative_items:
+        codes = item.get("label_codes") or []
+        ws_comp.append([
+            "短板",
+            _theme_topic(item) or "—",
+            len(codes) if codes else 1,
+            _theme_example(item) or "—",
+            _theme_product(item) or "—",
         ])
 
-    for change_type in ("new", "escalated", "improving", "de_escalated"):
-        for item in digest_issue_changes.get(change_type) or []:
-            ws_change.append([
-                "问题变化",
-                _safe_text(item.get("label_display") or item.get("label_code")),
-                item.get("current_review_count", 0),
-                f"{change_type} / Δ{item.get('delta_review_count', 0)} / 影响SKU {item.get('affected_product_count', 0)}",
-            ])
+    if not benchmark_items and not negative_items:
+        ws_comp.append(["—", "—", 0, "无竞品评论数据", "—"])
 
-    for change_title, change_key in (
-        ("价格变化", "price_changes"),
-        ("库存变化", "stock_changes"),
-        ("评分变化", "rating_changes"),
-        ("新增产品", "new_products"),
-        ("下线产品", "removed_products"),
-    ):
-        for item in digest_product_changes.get(change_key) or []:
-            ws_change.append([
-                "产品变化",
-                _safe_text(item.get("name") or item.get("sku")),
-                f"{_render_change_value(item.get('old'), 'stock' if change_key == 'stock_changes' else None)} -> {_render_change_value(item.get('new'), 'stock' if change_key == 'stock_changes' else None)}",
-                change_title,
-            ])
-
-    for signal_key, signal_title in (
-        ("fresh_negative_reviews", "自有新近差评"),
-        ("fresh_competitor_positive_reviews", "竞品新近好评"),
-    ):
-        for item in digest_review_signals.get(signal_key) or []:
-            label_text = _labels_text(item)
-            ws_change.append([
-                "评论信号",
-                _headline_display(item),
-                item.get("rating"),
-                f"{signal_title} / {_impact_category_display(item, label_text)}",
-            ])
-
-    _auto_widths(ws_change)
-
-    ws3 = wb.create_sheet("问题标签")
-    _write_headers(ws3, ["评论ID", "产品SKU", "问题标签", "极性", "严重度", "置信度"])
-    for review in reviews:
-        for label in _parse_json_list(review.get("analysis_labels") or "[]"):
-            if not isinstance(label, dict):
-                continue
-            ws3.append([
-                review.get("id"),
-                review.get("product_sku"),
-                _xl_display(label.get("code"), _LABEL_DISPLAY),
-                _xl_display(label.get("polarity"), _POLARITY_DISPLAY),
-                _xl_display(label.get("severity"), _SEVERITY_DISPLAY),
-                label.get("confidence"),
-            ])
-
-    _auto_widths(ws3)
-
-    ws4 = wb.create_sheet("趋势数据")
-    ws4.append(["产品快照明细"])
-    _write_headers(ws4, ["日期", "SKU", "产品名称", "价格", "评分", "评论数", "库存状态"])
-    for trend in analytics.get("_trend_series") or []:
-        for point in trend.get("series") or []:
-            ws4.append([
-                point.get("date"),
-                trend.get("product_sku"),
-                trend.get("product_name"),
-                point.get("price"),
-                point.get("rating"),
-                point.get("review_count"),
-                _xl_display(point.get("stock_status"), _STOCK_DISPLAY),
-            ])
-
-    trend_digest = analytics.get("trend_digest") or {}
-    trend_data = trend_digest.get("data") or {}
-    trend_view_labels = {"week": "近7天", "month": "近30天", "year": "近12个月"}
-    trend_dimension_labels = {
-        "sentiment": "评论声量与情绪",
-        "issues": "问题结构",
-        "products": "产品状态",
-        "competition": "竞品对标",
-    }
-    trend_table_column_keys = {
-        "日期": "bucket",
-        "评论量": "review_count",
-        "自有差评": "own_negative_count",
-        "自有差评率": "own_negative_rate",
-        "健康分": "health_index",
-        "问题": "label_display",
-        "评论数": "review_count",
-        "影响产品数": "affected_product_count",
-        "SKU": "sku",
-        "产品": "name",
-        "当前价格": "current_price",
-        "当前库存": "current_stock",
-        "当前评分": "current_rating",
-        "当前评论总数": "current_review_count",
-        "快照点数": "snapshot_points",
-        "价格变化次数": "price_change_count",
-        "库存变化次数": "stock_change_count",
-        "最近库存变化": "latest_stock_change",
-        "最新抓取时间": "scraped_at",
-        "自有均分": "own_avg_rating",
-        "竞品均分": "competitor_avg_rating",
-        "竞品好评率": "competitor_positive_rate",
-    }
-    dimension_notes = trend_digest.get("dimension_notes") or {}
-    for view in trend_digest.get("views") or []:
-        dimensions = trend_data.get(view) or {}
-        for dimension in trend_digest.get("dimensions") or []:
-            block = dimensions.get(dimension) or {}
-            title = f"{trend_view_labels.get(view, view)} / {trend_dimension_labels.get(dimension, dimension)}"
-            ws4.append([])
-            ws4.append([title, block.get("status") or "", block.get("status_message") or "", dimension_notes.get(dimension, "")])
-
-            kpis = (block.get("kpis") or {}).get("items") or []
-            if kpis:
-                ws4.append([f"{title} / KPI"])
-                ws4.append(["类型", "指标", "值", "说明"])
-                for item in kpis:
-                    ws4.append(["KPI", item.get("label") or "", item.get("value"), ""])
-
-            primary = block.get("primary_chart") or {}
-            if primary:
-                ws4.append([f"{title} / 主图", primary.get("title") or "", primary.get("status") or ""])
-                for series in primary.get("series") or []:
-                    for label, value in zip(primary.get("labels") or [], series.get("data") or []):
-                        ws4.append(["主图", label, series.get("name") or "", value])
-
-            for sec_chart in block.get("secondary_charts") or []:
-                ws4.append([f"{title} / 辅图：{sec_chart.get('title') or ''}", sec_chart.get("status") or ""])
-                for series in sec_chart.get("series") or []:
-                    for label, value in zip(sec_chart.get("labels") or [], series.get("data") or []):
-                        ws4.append(["辅图", label, series.get("name") or "", value])
-
-            table = block.get("table") or {}
-            if table.get("columns"):
-                ws4.append([f"{title} / 表格"])
-                ws4.append(list(table.get("columns") or []))
-                columns = list(table.get("columns") or [])
-                for row in table.get("rows") or []:
-                    if isinstance(row, dict):
-                        ws4.append([
-                            row.get(column)
-                            if column in row
-                            else row.get(trend_table_column_keys.get(column, column), "")
-                            for column in columns
-                        ])
-                    else:
-                        ws4.append(list(row))
-
-    _auto_widths(ws4)
+    _auto_widths(ws_comp)
 
     wb.save(filepath)
-    logger.info("V3 5-sheet Excel generated: %s", filepath)
+    logger.info("F011 4-sheet Excel generated: %s", filepath)
     return filepath
 
 

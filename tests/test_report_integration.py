@@ -351,7 +351,8 @@ class TestExcelGeneration:
         )
         assert Path(path).exists()
 
-    def test_generate_analytical_excel_has_five_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_generate_analytical_excel_has_four_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+        """F011 §4.3 — replaced 5-sheet layout with 4-sheet (核心数据 / 现在该做什么 / 评论原文 / 竞品启示)."""
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -364,10 +365,11 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        assert len(wb.sheetnames) == 5
-        assert set(wb.sheetnames) == {"评论明细", "产品概览", "今日变化", "问题标签", "趋势数据"}
+        assert len(wb.sheetnames) == 4
+        assert set(wb.sheetnames) == {"核心数据", "现在该做什么", "评论原文", "竞品启示"}
 
-    def test_review_detail_sheet_has_sentiment_column(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_review_original_sheet_has_sentiment_column(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+        """F011 §4.3 — '评论明细' renamed to '评论原文'; sentiment column retained."""
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -380,11 +382,12 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        ws = wb["评论明细"]
+        ws = wb["评论原文"]
         headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
         assert "情感" in headers
 
-    def test_review_detail_sheet_has_data_rows(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+    def test_review_original_sheet_has_data_rows(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
+        """F011 §4.3 — review rows still emitted; image embedding still gated by URL presence."""
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -397,11 +400,9 @@ class TestExcelGeneration:
 
         import openpyxl
         wb = openpyxl.load_workbook(path)
-        ws = wb["评论明细"]
+        ws = wb["评论原文"]
         # Header + at least one data row
         assert ws.max_row >= 2
-        # No embedded images in the governed analytical format
-        assert len(ws._images) == 0
 
 
 # ── LLM Insights (Fallback) ───────────────────────────────────────────────────
