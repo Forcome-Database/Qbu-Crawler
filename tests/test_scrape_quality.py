@@ -110,3 +110,87 @@ def test_data_quality_alert_integration_sends_email(tmp_path, monkeypatch):
     # Template rendered with the threshold-driven highlight
     assert "20.0%" in captured["body_html"]  # rating ratio as %
     assert "QBU 采集数据质量告警" in captured["body_html"]
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# F011 Critical B-1 — email_data_quality template defensive against missing
+#                     v3 quality keys
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _render_data_quality_template(quality: dict, **kwargs) -> str:
+    """Render email_data_quality.html.j2 with the supplied quality dict."""
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+    tpl_dir = (
+        Path(__file__).resolve().parent.parent
+        / "qbu_crawler" / "server" / "report_templates"
+    )
+    env = Environment(
+        loader=FileSystemLoader(str(tpl_dir)),
+        undefined=StrictUndefined,  # match Jinja default; surfaces UndefinedError
+        autoescape=True,
+    )
+    template = env.get_template("email_data_quality.html.j2")
+    ctx = {
+        "logical_date": "2026-04-27",
+        "run_id": 99,
+        "threshold": 0.10,
+        "severity": kwargs.get("severity"),
+        "quality": quality,
+    }
+    return template.render(**ctx)
+
+
+def test_email_data_quality_renders_with_legacy_dict_no_completeness():
+    """F011 Critical B-1 — legacy quality dict (pre-F011 fields only) must
+    render without UndefinedError. Previously crashed on
+    ``quality.scrape_completeness_ratio is not none`` because Jinja resolves
+    missing keys to ``Undefined`` (not ``None``)."""
+    legacy_quality = {
+        "total": 10,
+        "missing_rating": 1,
+        "missing_stock": 0,
+        "missing_review_count": 0,
+        "missing_rating_ratio": 0.10,
+        "missing_stock_ratio": 0.0,
+        "missing_review_count_ratio": 0.0,
+    }
+    html = _render_data_quality_template(legacy_quality)
+    assert "QBU 采集数据质量告警" in html
+    # Optional v3 panels must NOT render when the keys are absent
+    assert "采集完整率" not in html
+    assert "P0 · 零采集 SKU" not in html
+    assert "P1 · 通知 deadletter" not in html
+    assert "估算日期占比" not in html
+
+
+def test_email_data_quality_renders_with_full_v3_dict():
+    """F011 Critical B-1 — full v3 dict renders all panels including
+    severity badge and zero_scrape_skus list."""
+    v3_quality = {
+        "total": 20,
+        "missing_rating": 2,
+        "missing_stock": 1,
+        "missing_review_count": 0,
+        "missing_rating_ratio": 0.10,
+        "missing_stock_ratio": 0.05,
+        "missing_review_count_ratio": 0.0,
+        "scrape_completeness_ratio": 0.55,  # < 0.6 → red
+        "zero_scrape_skus": ["SKU-A", "SKU-B", "SKU-C"],
+        "outbox_deadletter_count": 4,
+        "estimated_date_ratio": 0.42,  # > 0.3 → orange
+    }
+    html = _render_data_quality_template(v3_quality, severity="P0")
+    # severity badge
+    assert "P0" in html
+    # all v3 panels rendered
+    assert "采集完整率" in html
+    assert "55.0%" in html
+    assert "P0 · 零采集 SKU" in html
+    assert "SKU-A" in html
+    assert "P1 · 通知 deadletter" in html
+    assert "4 条" in html
+    assert "估算日期占比" in html
+    assert "42.0%" in html
