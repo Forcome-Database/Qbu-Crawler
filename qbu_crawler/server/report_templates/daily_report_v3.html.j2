@@ -140,6 +140,8 @@
             {% if rec.evidence_review_ids %}
             <div class="evidence-refs">
               {% for rid in rec.evidence_review_ids[:5] %}
+                {# F011 §4.2.2 — chip target depends on matching id="review-{{ rid }}" rendered
+                   on the panorama-table <tr> below; do not rename without updating both ends. #}
                 <a href="#review-{{ rid }}" class="evidence-chip">#{{ rid }}</a>
               {% endfor %}
               {% if (rec.evidence_review_ids | length) > 5 %}
@@ -521,7 +523,8 @@
           </thead>
           <tbody>
             {% for r in snapshot.reviews or [] %}
-            <tr data-review-id="{{ r.id }}"
+            <tr id="review-{{ r.id }}"
+                data-review-id="{{ r.id }}"
                 data-ownership="{{ r.ownership or '' }}"
                 data-rating="{{ r.rating or 0 }}"
                 data-has-images="{{ '1' if r.images else '0' }}"

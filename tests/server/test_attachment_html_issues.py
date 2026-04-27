@@ -225,3 +225,59 @@ def test_format_frequent_period_none():
     assert _format_frequent_period(None, None) is None
     assert _format_frequent_period("2024-03-15", None) is None
     assert _format_frequent_period(None, "2024-08-22") is None
+
+
+def test_format_frequent_period_same_month():
+    from qbu_crawler.server.report_common import _format_frequent_period
+    fp = _format_frequent_period("2024-03-15", "2024-03-22")
+    assert fp == {"start": "2024-03", "end": "2024-03"}
+
+
+def test_format_frequent_period_reversed_inputs_swap():
+    """When first_seen > last_seen (data quality bug), function swaps to produce
+    a valid range. Documented behavior — caller need not pre-sort."""
+    from qbu_crawler.server.report_common import _format_frequent_period
+    fp = _format_frequent_period("2024-08-22", "2024-03-15")
+    assert fp == {"start": "2024-03", "end": "2024-08"}
+
+
+def test_format_frequent_period_unparseable_returns_none():
+    from qbu_crawler.server.report_common import _format_frequent_period
+    assert _format_frequent_period("garbage", "2024-08-22") is None
+    assert _format_frequent_period("2024-08-22", "not-a-date") is None
+
+
+# ──────────────────────────────────────────────────────────
+# §4.2.2 — evidence chip anchor wiring
+# ──────────────────────────────────────────────────────────
+def test_evidence_chip_links_have_matching_anchors():
+    """F011 §4.2.2 — every chip href="#review-N" must have a matching id="review-N"
+    elsewhere in the rendered page so the link doesn't dead-jump."""
+    # Build snapshot reviews whose IDs match the first priority's evidence_review_ids
+    priorities = _v3_priorities_fixture()
+    chip_target_ids = []
+    for p in priorities:
+        chip_target_ids.extend((p.get("evidence_review_ids") or [])[:5])
+    reviews = [
+        {
+            "id": rid,
+            "ownership": "own",
+            "product_name": "Test Product",
+            "rating": 2,
+            "headline": f"headline-{rid}",
+            "body": f"body-{rid}",
+            "date_published": "2024-08-01",
+            "label_codes": [],
+            "is_recent": False,
+            "images": None,
+        }
+        for rid in chip_target_ids
+    ]
+    snapshot = _base_snapshot(reviews=reviews)
+    analytics = _base_analytics(improvement_priorities=priorities)
+    html = render_attachment_html(snapshot, analytics)
+    chip_ids = set(re.findall(r'href="#review-(\d+)"', html))
+    anchor_ids = set(re.findall(r'id="review-(\d+)"', html))
+    if chip_ids:  # only assert when chips are rendered (skip if empty case)
+        missing = chip_ids - anchor_ids
+        assert not missing, f"Evidence chip targets without anchors: {missing}"
