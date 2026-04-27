@@ -6,7 +6,7 @@
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
 
   <tr><td style="background:#b45309;padding:16px 24px;color:#fff;">
-    <div style="font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 采集数据质量告警</div>
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 采集数据质量告警{% if severity %} · {{ severity }}{% endif %}</div>
     <div style="font-size:11px;opacity:0.75;margin-top:4px;">{{ logical_date }} · run #{{ run_id }}</div>
   </td></tr>
 
@@ -36,6 +36,41 @@
       </tr>
       {% endfor %}
     </table>
+
+    {% if quality.zero_scrape_skus or quality.outbox_deadletter_count or quality.estimated_date_ratio or quality.scrape_completeness_ratio is not none %}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;margin-top:12px;">
+      {% if quality.zero_scrape_skus %}
+      <tr>
+        <td style="padding:6px 10px;color:#b91c1c;font-weight:700;">P0 · 零采集 SKU</td>
+        <td style="padding:6px 10px;text-align:right;font-family:monospace;color:#1a1a2e;">
+          {{ quality.zero_scrape_skus|length }} 个：{{ quality.zero_scrape_skus[:5]|join(', ') }}{% if quality.zero_scrape_skus|length > 5 %} …{% endif %}
+        </td>
+      </tr>
+      {% endif %}
+      {% if quality.scrape_completeness_ratio is not none %}
+      <tr>
+        <td style="padding:6px 10px;color:#1a1a2e;">采集完整率</td>
+        <td style="padding:6px 10px;text-align:right;font-family:monospace;font-weight:700;color:{% if quality.scrape_completeness_ratio < 0.6 %}#b91c1c{% else %}#1a1a2e{% endif %};">
+          {{ '%.1f' % (quality.scrape_completeness_ratio * 100) }}%
+        </td>
+      </tr>
+      {% endif %}
+      {% if quality.outbox_deadletter_count %}
+      <tr>
+        <td style="padding:6px 10px;color:#b45309;font-weight:700;">P1 · 通知 deadletter</td>
+        <td style="padding:6px 10px;text-align:right;font-family:monospace;">{{ quality.outbox_deadletter_count }} 条</td>
+      </tr>
+      {% endif %}
+      {% if quality.estimated_date_ratio %}
+      <tr>
+        <td style="padding:6px 10px;color:#8e8ea0;">估算日期占比</td>
+        <td style="padding:6px 10px;text-align:right;font-family:monospace;color:{% if quality.estimated_date_ratio > 0.3 %}#b45309{% else %}#8e8ea0{% endif %};">
+          {{ '%.1f' % (quality.estimated_date_ratio * 100) }}%
+        </td>
+      </tr>
+      {% endif %}
+    </table>
+    {% endif %}
 
     <p style="margin:12px 0 0;font-size:11px;color:#8e8ea0;line-height:1.6;">
       该邮件由采集数据质量守护自动发出，不等于业务数据变动。业务变动邮件另行推送。

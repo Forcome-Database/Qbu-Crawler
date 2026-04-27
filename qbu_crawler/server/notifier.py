@@ -270,3 +270,67 @@ def _notification_dedupe_key(notification: dict) -> str:
     identifier = notification.get("id") or "unknown"
     kind = notification.get("kind") or "notification"
     return f"notification:{identifier}:{kind}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# F011 §4.4.1 — internal ops alert severity ladder
+# ──────────────────────────────────────────────────────────────────────────
+
+OPS_ALERT_SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
+
+
+def _evaluate_ops_alert_triggers(quality: dict) -> tuple[bool, str]:
+    """F011 §4.4.1 — return (triggered, max_severity).
+
+    Triggers (highest precedence first):
+      - zero_scrape_skus non-empty → P0
+      - scrape_completeness_ratio < 0.6 → P1
+      - outbox_deadletter_count > 0 → P1
+      - estimated_date_ratio > 0.3 → P2
+
+    The returned severity is the *highest* among all firing triggers
+    (P0 > P1 > P2 in priority). Empty string is returned when nothing
+    fires alongside ``triggered=False``.
+    """
+    severities: list[str] = []
+    if quality.get("zero_scrape_skus"):
+        severities.append("P0")
+    if (quality.get("scrape_completeness_ratio") or 1.0) < 0.6:
+        severities.append("P1")
+    if (quality.get("outbox_deadletter_count") or 0) > 0:
+        severities.append("P1")
+    if (quality.get("estimated_date_ratio") or 0.0) > 0.3:
+        severities.append("P2")
+
+    if not severities:
+        return (False, "")
+    # Lowest rank value = highest severity (P0=0 < P1=1 < P2=2)
+    severity = min(severities, key=lambda s: OPS_ALERT_SEVERITY_RANK.get(s, 99))
+    return (True, severity)
+
+
+def downgrade_report_phase_on_deadletter(conn, run_id: int) -> bool:
+    """F011 H13 — when notification_outbox has deadletter rows for ``run_id``,
+    downgrade ``workflow_runs.report_phase`` from ``'full_sent'`` to
+    ``'full_sent_local'``.
+
+    Returns True if a downgrade actually occurred, False otherwise (no
+    deadletter rows OR phase wasn't ``full_sent``). Uses a substring
+    match on ``payload`` JSON because outbox payloads are stored as text;
+    callers should ensure ``run_id`` is embedded as ``"run_id":<id>``.
+    """
+    cur = conn.cursor()
+    deadletter_count = cur.execute(
+        "SELECT COUNT(*) FROM notification_outbox "
+        "WHERE status='deadletter' AND payload LIKE ?",
+        (f'%"run_id":{run_id}%',),
+    ).fetchone()[0]
+    if deadletter_count == 0:
+        return False
+    result = cur.execute(
+        "UPDATE workflow_runs SET report_phase='full_sent_local' "
+        "WHERE id=? AND report_phase='full_sent'",
+        (run_id,),
+    )
+    conn.commit()
+    return result.rowcount > 0
