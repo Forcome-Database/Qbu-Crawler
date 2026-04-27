@@ -83,7 +83,8 @@ def _bootstrap_analytics():
             "empty_state": {"enabled": False},
             "immediate_attention": {"own_new_negative_reviews": [],
                                     "own_rating_drops": [], "own_stock_alerts": []},
-            "trend_changes": {"new": [], "escalated": [], "improving": [], "de_escalated": []},
+            "trend_changes": {"new_issues": [], "escalated_issues": [],
+                              "improving_issues": [], "de_escalated_issues": []},
             "competitive_opportunities": {"competitor_new_negative_reviews": [],
                                           "competitor_new_positive_reviews": []},
         },
@@ -265,3 +266,92 @@ def test_today_changes_empty_layers_hidden():
     assert "立即关注" not in html
     assert "趋势变化" not in html
     assert "反向利用" not in html
+
+
+# ──────────────────────────────────────────────────────────
+# F011 §4.2.4 — trend_changes key-name contract (regression)
+# ──────────────────────────────────────────────────────────
+def _empty_analytics_for_digest(report_semantics="incremental"):
+    return {
+        "report_semantics": report_semantics,
+        "kpis": {"untranslated_count": 0},
+        "self": {"top_negative_clusters": []},
+        "baseline_day_index": 1,
+        "baseline_display_state": "initial",
+    }
+
+
+def test_trend_changes_keys_match_template_contract():
+    """F011 §4.2.4 — change_digest.trend_changes must use *_issues key names
+    that the daily_report_v3.html.j2 template reads."""
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    snapshot = {
+        "logical_date": "2026-04-26",
+        "data_since": "2026-04-25T00:00:00+08:00",
+        "data_until": "2026-04-27T00:00:00+08:00",
+        "reviews": [],
+        "products": [],
+    }
+    digest = build_change_digest(snapshot, _empty_analytics_for_digest())
+    tc = digest["trend_changes"]
+    assert "new_issues" in tc
+    assert "escalated_issues" in tc
+    assert "improving_issues" in tc
+    # Old names must NOT be present (would mask reintroduction of the bug)
+    assert "new" not in tc
+    assert "escalated" not in tc
+    assert "improving" not in tc
+
+
+def test_trend_changes_layer_renders_real_builder_output():
+    """F011 §4.2.4 regression — Layer 2 must actually render builder data.
+
+    Build a real change_digest via build_change_digest() with a populated
+    `top_negative_clusters` (no previous_analytics → all clusters become "new").
+    Then render the attachment HTML and assert the trend label appears in
+    Layer 2 (📈 趋势变化). If the builder→template wire is broken (e.g.
+    keys revert to bare `new/escalated/...`), the issue label disappears.
+    """
+    from qbu_crawler.server.report_snapshot import build_change_digest
+
+    snapshot = {
+        "logical_date": "2026-04-26",
+        "data_since": "2026-04-25T00:00:00+08:00",
+        "data_until": "2026-04-27T00:00:00+08:00",
+        "reviews": [],
+        "products": [],
+    }
+    analytics_for_digest = {
+        "report_semantics": "incremental",
+        "kpis": {"untranslated_count": 0},
+        "self": {
+            "top_negative_clusters": [
+                {
+                    "label_code": "switch_failure",
+                    "label_display": "开关失灵",
+                    "review_count": 4,
+                    "severity": "high",
+                    "affected_product_count": 2,
+                    "affected_products": ["P1", "P2"],
+                },
+            ],
+        },
+        "baseline_day_index": 5,
+        "baseline_display_state": "stable",
+    }
+    digest = build_change_digest(snapshot, analytics_for_digest, previous_analytics=None)
+    # Sanity: the cluster lands in trend_changes.new_issues (not bare "new")
+    assert digest["trend_changes"]["new_issues"], (
+        f"expected new_issues populated; got {digest['trend_changes']!r}"
+    )
+
+    html = render_attachment_html(
+        snapshot=_mature_snapshot(),
+        analytics=_mature_analytics(change_digest=digest),
+    )
+    assert "趋势变化" in html, "Layer 2 H3 must render when builder produced trend_changes"
+    assert "开关失灵" in html, (
+        "trend_changes label_display must reach the rendered HTML; "
+        "missing it means builder→template key contract is broken"
+    )

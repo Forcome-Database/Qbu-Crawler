@@ -123,7 +123,10 @@ def test_immediate_attention_falls_back_when_data_since_absent():
 
 
 def test_trend_changes_mirrors_issue_changes_for_now():
-    """trend_changes layer wraps issue_changes (will be richer in later tasks)."""
+    """trend_changes layer wraps issue_changes (will be richer in later tasks).
+
+    F011 §4.2.4 — keys MUST be `*_issues` to match daily_report_v3.html.j2 template.
+    """
     snapshot = {
         "logical_date": "2026-04-26",
         "data_since": "2026-04-26T00:00:00+08:00",
@@ -132,9 +135,9 @@ def test_trend_changes_mirrors_issue_changes_for_now():
         "reviews": [],
     }
     digest = build_change_digest(snapshot, _empty_analytics())
-    assert digest["trend_changes"]["new"] == digest["issue_changes"]["new"]
-    assert "escalated" in digest["trend_changes"]
-    assert "improving" in digest["trend_changes"]
+    assert digest["trend_changes"]["new_issues"] == digest["issue_changes"]["new"]
+    assert "escalated_issues" in digest["trend_changes"]
+    assert "improving_issues" in digest["trend_changes"]
 
 
 def test_existing_keys_preserved():

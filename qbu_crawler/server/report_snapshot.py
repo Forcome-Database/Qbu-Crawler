@@ -689,11 +689,14 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     }
 
     # --- trend_changes (mirror issue_changes; richer aggregation in follow-up tasks) ---
+    # F011 §4.2.4 — keys MUST end in `_issues` to match the template contract
+    # (daily_report_v3.html.j2:184-194). Renaming them here would silently break
+    # Layer 2 (📈 趋势变化) rendering in production.
     trend_changes = {
-        "new": list(issue_changes.get("new", [])),
-        "escalated": list(issue_changes.get("escalated", [])),
-        "improving": list(issue_changes.get("improving", [])),
-        "de_escalated": list(issue_changes.get("de_escalated", [])),
+        "new_issues": list(issue_changes.get("new", [])),
+        "escalated_issues": list(issue_changes.get("escalated", [])),
+        "improving_issues": list(issue_changes.get("improving", [])),
+        "de_escalated_issues": list(issue_changes.get("de_escalated", [])),
     }
 
     # --- competitive_opportunities ---
