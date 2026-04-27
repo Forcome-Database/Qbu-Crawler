@@ -1381,6 +1381,20 @@ def test_build_change_digest_uses_empty_state_for_incremental_without_significan
     assert digest["product_changes"]["price_changes"] == []
 
 
+# ── F011 §4.1.3 — retired legacy template assertions ──
+# The two tests below
+# (test_render_full_email_html_prefers_top_level_kpis_and_change_digest /
+#  test_render_full_email_html_includes_competitor_positive_review_signals)
+# asserted that the email body rendered change_digest sections
+# (price/stock/issue change blocks, fresh_competitor_positive_reviews list).
+# F011 §4.1 strips those blocks from the email body in favor of 4 KPI lamps
+# + Hero + Top 3 + product_status. The new render contract lives in
+# tests/server/test_email_full_template.py. Both tests are now skipped to
+# document the historical contract; they can be safely deleted in a follow-up.
+import pytest as _f011_pytest
+
+
+@_f011_pytest.mark.skip(reason="F011 §4.1.3 — change_digest blocks removed from email body")
 def test_render_full_email_html_prefers_top_level_kpis_and_change_digest(monkeypatch):
     from qbu_crawler.server import report_snapshot
 
@@ -1504,6 +1518,7 @@ def test_render_full_email_html_prefers_top_level_kpis_and_change_digest(monkeyp
     assert "旧价格来源" not in html
 
 
+@_f011_pytest.mark.skip(reason="F011 §4.1.3 — competitor positive-review block removed from email body")
 def test_render_full_email_html_includes_competitor_positive_review_signals(monkeypatch):
     from qbu_crawler.server import report_snapshot
 

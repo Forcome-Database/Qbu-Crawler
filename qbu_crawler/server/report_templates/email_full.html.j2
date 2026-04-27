@@ -5,258 +5,240 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
-{% set _analytics = analytics or {} %}
-{% set _kpis = _analytics.get("kpis", {}) %}
-{% set _digest = _analytics.get("change_digest", {}) %}
-{% set _summary = _digest.get("summary", {}) %}
-{% set _issues = _digest.get("issue_changes", {}) %}
-{% set _products = _digest.get("product_changes", {}) %}
-{% set _signals = _digest.get("review_signals", {}) %}
-{% set _warnings = _digest.get("warnings", {}) %}
-{% set _empty = _digest.get("empty_state", {}) %}
-{% set _view_state = _digest.get("view_state", "") %}
-{% set _semantics = _analytics.get("report_semantics", "incremental") %}
-{% set _baseline_day_index = _summary.get("baseline_day_index", 1) %}
-{% set _baseline_is_building = _summary.get("baseline_display_state") == "building" %}
-{% set _recent_review_count = _kpis.get("recently_published_count") if _kpis.get("recently_published_count") is not none else _summary.get("fresh_review_count", 0) %}
-{% set _report_copy = report_copy if report_copy is defined and report_copy else _analytics.get("report_copy", {}) %}
-{% set _bullets = _report_copy.get("executive_bullets", []) %}
-{% set _risk = risk_products if risk_products is defined and risk_products else (_analytics.get("self", {}) or {}).get("risk_products", []) %}
-{% set _fresh_competitor_positive_reviews = _signals.get("fresh_competitor_positive_reviews", []) %}
-{% set _stock_display = {"in_stock": "有货", "out_of_stock": "缺货", "unknown": "未知"} %}
-{% set _alert = alert_level or "green" %}
-{% if _alert == "red" %}
-  {% set _accent = "#b91c1c" %}
-  {% set _hero_bg = "#fef2f2" %}
-{% elif _alert == "yellow" %}
-  {% set _accent = "#a16207" %}
-  {% set _hero_bg = "#fefce8" %}
+{# ──────────────────────────────────────────────────────────
+   F011 §4.1 — email_full.html.j2 重构 (4 KPI 灯 + Hero + Top 3 + 产品状态)
+   max-width 640px / table 布局 / 内联 CSS / 无 JS / 无外部 CSS
+   ────────────────────────────────────────────────────────── #}
+
+{% set _analytics    = analytics or {} %}
+{% set _kpis         = _analytics.get("kpis", {}) %}
+{% set _self         = _analytics.get("self", {}) %}
+{% set _report_copy  = _analytics.get("report_copy", {}) %}
+{% set _bullets      = (_report_copy.get("executive_bullets") or [])[:3] %}
+{% set _priorities   = (_report_copy.get("improvement_priorities") or [])[:3] %}
+{% set _hero         = _report_copy.get("hero_headline") or "" %}
+{% set _product_status = _self.get("product_status") or [] %}
+
+{# ── KPI 数值 ── #}
+{% set _health = _kpis.get("health_index") %}
+{% set _own_pos = _kpis.get("own_positive_review_rows") or 0 %}
+{% set _own_total = _kpis.get("own_review_rows") or 0 %}
+{% set _own_neg_rate = _kpis.get("own_negative_review_rate") or 0 %}
+{% set _own_neg_rate_display = _kpis.get("own_negative_review_rate_display") %}
+{% set _positive_rate_display = ((_own_pos / _own_total * 100) | round(1)) ~ "%" if _own_total else "—" %}
+{% set _own_pc = _kpis.get("own_product_count") or 0 %}
+{% set _comp_pc = _kpis.get("competitor_product_count") or 0 %}
+{% set _ingested = _kpis.get("ingested_review_rows") or 0 %}
+
+{# ── 健康灯阈值 ≥85 绿 / [70,85) 黄 / <70 红 ── #}
+{% set _health_num = _health if _health is number else (_health | float if _health else 0) %}
+{% if _health is none or _health == "" %}
+  {% set _health_lamp = "gray" %}
+  {% set _health_emoji = "⚪" %}
+  {% set _health_label = "无数据" %}
+{% elif _health_num >= 85 %}
+  {% set _health_lamp = "green" %}
+  {% set _health_emoji = "🟢" %}
+  {% set _health_label = "优秀" %}
+{% elif _health_num >= 70 %}
+  {% set _health_lamp = "yellow" %}
+  {% set _health_emoji = "🟡" %}
+  {% set _health_label = "关注" %}
 {% else %}
-  {% set _accent = "#047857" %}
-  {% set _hero_bg = "#ecfdf5" %}
+  {% set _health_lamp = "red" %}
+  {% set _health_emoji = "🔴" %}
+  {% set _health_label = "警戒" %}
 {% endif %}
+
+{# ── 差评率灯（参考阈值：≤2% 绿 / (2%,5%] 黄 / >5% 红） ── #}
+{% set _neg_pct = (_own_neg_rate * 100) if _own_neg_rate else 0 %}
+{% if _own_total == 0 %}
+  {% set _neg_lamp = "gray" %}
+  {% set _neg_emoji = "⚪" %}
+{% elif _neg_pct <= 2 %}
+  {% set _neg_lamp = "green" %}
+  {% set _neg_emoji = "🟢" %}
+{% elif _neg_pct <= 5 %}
+  {% set _neg_lamp = "yellow" %}
+  {% set _neg_emoji = "🟡" %}
+{% else %}
+  {% set _neg_lamp = "red" %}
+  {% set _neg_emoji = "🔴" %}
+{% endif %}
+
+{# ── 好评率灯（统一绿色，量级判断） ── #}
+{% set _pos_emoji = "🟢" if _own_total else "⚪" %}
+{% set _pos_lamp = "green" if _own_total else "gray" %}
+
+{# ── 需关注产品计数（v1.1 / I2：黄+红灯产品数，非硬编码 risk_score≥25）
+       Jinja 的 {% set %} 在 for 循环内是局部作用域，必须用 namespace 跨循环聚合 ── #}
+{% set _ns = namespace(count=0, first="") %}
+{% for ps in _product_status %}
+  {% if ps.get("status_lamp") in ("yellow", "red") %}
+    {% set _ns.count = _ns.count + 1 %}
+    {% if not _ns.first %}{% set _ns.first = ps.get("product_name") or "" %}{% endif %}
+  {% endif %}
+{% endfor %}
+{% set _attention_count = _ns.count %}
+{% set _attention_first = _ns.first %}
+{% if _attention_count == 0 %}
+  {% set _attention_lamp = "green" %}
+  {% set _attention_emoji = "🟢" %}
+{% elif _attention_count <= 1 %}
+  {% set _attention_lamp = "yellow" %}
+  {% set _attention_emoji = "🟡" %}
+{% else %}
+  {% set _attention_lamp = "red" %}
+  {% set _attention_emoji = "🔴" %}
+{% endif %}
+
+{# ── 产品状态灯 emoji 映射 ── #}
+{% set _lamp_emoji_map = {"red": "🔴", "yellow": "🟡", "green": "🟢", "gray": "⚪"} %}
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;">
   <tr>
     <td align="center" style="padding:20px 12px;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+
+        {# ── 1. 标题 + 副标题 ── #}
         <tr>
-          <td style="background:#1d4ed8;padding:18px 24px;color:#ffffff;">
-            <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">QBU 网评监控</div>
-            <div style="font-size:11px;opacity:0.8;margin-top:4px;">{{ logical_date }}</div>
+          <td style="padding:20px 24px 8px;">
+            <div style="font-size:18px;font-weight:800;color:#0f172a;line-height:1.3;">QBU 评论分析 · {{ logical_date }}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:6px;">
+              本期 自有 {{ _own_pc }} 款 / 竞品 {{ _comp_pc }} 款 / 共 {{ _ingested }} 条评论
+            </div>
           </td>
         </tr>
 
+        {# ── 2. KPI 灯条（4 张语义灯） ── #}
         <tr>
-          <td style="background:{{ _hero_bg }};padding:24px;">
-            <div style="font-size:12px;color:{{ _accent }};font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">整体概览</div>
-            <div style="font-size:44px;line-height:1;font-weight:800;color:{{ _accent }};margin-top:8px;">{{ _kpis.get("health_index", "-") }}</div>
-            <div style="font-size:12px;color:#475569;margin-top:8px;">健康指数 / 100</div>
-          </td>
-        </tr>
-
-        {% if alert_text %}
-        <tr>
-          <td style="padding:12px 24px;background:#111827;color:#ffffff;font-size:12px;">{{ alert_text }}</td>
-        </tr>
-        {% endif %}
-
-        <tr>
-          <td style="padding:18px 24px 8px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">核心指标</div>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:0 24px 12px;">
+          <td style="padding:12px 24px 16px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td width="32%" style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;text-align:center;">
-                  <div style="font-size:11px;color:#64748b;">累计自有评论</div>
-                  <div style="font-size:24px;font-weight:700;color:#0f172a;margin-top:6px;">{{ _kpis.get("own_review_rows", 0) }}</div>
-                </td>
-                <td width="2%"></td>
-                <td width="32%" style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;text-align:center;">
-                  <div style="font-size:11px;color:#64748b;">高风险产品</div>
-                  <div style="font-size:24px;font-weight:700;color:#0f172a;margin-top:6px;">{{ _kpis.get("high_risk_count", 0) }}</div>
-                </td>
-                <td width="2%"></td>
-                <td width="32%" style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;text-align:center;">
-                  <div style="font-size:11px;color:#64748b;">覆盖产品</div>
-                  <div style="font-size:24px;font-weight:700;color:#0f172a;margin-top:6px;">{{ _kpis.get("own_product_count", 0) }} / {{ _kpis.get("competitor_product_count", 0) }}</div>
+              {# 总体口碑 #}
+              <tr class="lamp-{{ _health_lamp }}">
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
+                  <span style="font-size:16px;">{{ _health_emoji }}</span>
+                  <strong style="margin-left:6px;">总体口碑</strong>
+                  <span style="margin-left:8px;color:#475569;">
+                    {{ _health_label }}{% if _health is not none and _health != "" %} ({{ _health }}){% endif %}
+                  </span>
                 </td>
               </tr>
-            </table>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
-              <tr>
-                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">累计自有评论<br><strong style="font-size:16px;color:#0f172a;">{{ _kpis.get("own_review_rows", 0) }}</strong></td>
-                <td width="1%"></td>
-                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">累计竞品评论<br><strong style="font-size:16px;color:#0f172a;">{{ _kpis.get("competitor_review_rows", 0) }}</strong></td>
-                <td width="1%"></td>
-                <td width="24%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">本次入库评论<br><strong style="font-size:16px;color:#0f172a;">{{ _summary.get("ingested_review_count", _kpis.get("ingested_review_rows", 0)) }}</strong></td>
-                <td width="1%"></td>
-                <td width="25%" style="padding:8px;background:#ffffff;border:1px solid #e2e8f0;text-align:center;font-size:11px;color:#64748b;">近30天评论<br><strong style="font-size:16px;color:#0f172a;">{{ _recent_review_count or 0 }}</strong></td>
+              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              {# 好评率 #}
+              <tr class="lamp-{{ _pos_lamp }}">
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
+                  <span style="font-size:16px;">{{ _pos_emoji }}</span>
+                  <strong style="margin-left:6px;">好评率</strong>
+                  <span style="margin-left:8px;color:#475569;">{{ _positive_rate_display }}</span>
+                </td>
+              </tr>
+              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              {# 差评率 #}
+              <tr class="lamp-{{ _neg_lamp }}">
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
+                  <span style="font-size:16px;">{{ _neg_emoji }}</span>
+                  <strong style="margin-left:6px;">差评率</strong>
+                  <span style="margin-left:8px;color:#475569;">
+                    {{ _own_neg_rate_display or ((_neg_pct | round(1)) ~ "%") }} (≤2 星 / 自有评论)
+                  </span>
+                </td>
+              </tr>
+              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              {# 需关注产品 #}
+              <tr class="lamp-{{ _attention_lamp }}">
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
+                  <span style="font-size:16px;">{{ _attention_emoji }}</span>
+                  <strong style="margin-left:6px;">需关注产品 {{ _attention_count }} 个</strong>
+                  {% if _attention_first %}
+                  <span style="margin-left:8px;color:#475569;">{{ _attention_first }}{% if _attention_count > 1 %} 等{% endif %}</span>
+                  {% endif %}
+                </td>
               </tr>
             </table>
           </td>
         </tr>
 
+        {# ── 3. 关键判断（Hero + 3 bullets） ── #}
+        {% if _hero or _bullets %}
         <tr>
-          <td style="padding:18px 24px 8px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">今日变化</div>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:0 24px 18px;">
-            {% if _semantics == "bootstrap" or _view_state == "bootstrap" %}
-            <div style="padding:14px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a;font-size:13px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">{{ "Baseline Building" if _baseline_is_building else "Monitoring Start" }}</div>
-              <div style="font-weight:700;margin-top:4px;">{{ "基线建立期第" ~ _baseline_day_index ~ "天" if _baseline_is_building else "监控起点" }}</div>
-              <div style="margin-top:6px;">{{ _summary.get("window_meaning", "首次建档，当前结果用于建立监控基线。") }}</div>
-            </div>
-            {% elif _empty.get("enabled") %}
-            <div style="padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;color:#475569;font-size:13px;">
-              <div style="font-weight:700;">{{ _empty.get("title", "本期无显著变化") }}</div>
-              {% if _empty.get("description") %}
-              <div style="margin-top:6px;">{{ _empty.get("description") }}</div>
-              {% endif %}
+          <td style="padding:0 24px 16px;">
+            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">关键判断</div>
+            {% if _hero %}
+            <div style="margin-top:8px;padding:12px 14px;background:#f1f5f9;border-left:3px solid #1d4ed8;border-radius:0 8px 8px 0;font-size:14px;color:#0f172a;line-height:1.55;">
+              {{ _hero }}
             </div>
             {% endif %}
-
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;">
-              <tr>
-                <td width="48%" style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
-                  <div style="font-size:11px;color:#64748b;">本次入库评论</div>
-                  <div style="font-size:22px;font-weight:700;color:#0f172a;margin-top:6px;">{{ _summary.get("ingested_review_count", 0) }}</div>
-                  <div style="font-size:11px;color:#64748b;margin-top:6px;">新近 {{ _summary.get("fresh_review_count", 0) }} / 补采 {{ _summary.get("historical_backfill_count", 0) }}</div>
-                </td>
-                <td width="4%"></td>
-                <td width="48%" style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
-                  <div style="font-size:11px;color:#64748b;">重点风险</div>
-                  <div style="font-size:13px;color:#0f172a;line-height:1.8;margin-top:6px;">
-                    自有新近差评 {{ _summary.get("fresh_own_negative_count", 0) }}<br>
-                    新增问题 {{ _summary.get("issue_new_count", 0) }} / 升级问题 {{ _summary.get("issue_escalated_count", 0) }}<br>
-                    产品状态变更 {{ _summary.get("state_change_count", 0) }}
-                  </div>
-                </td>
-              </tr>
-            </table>
-
-            {% for warning_key in ["translation_incomplete", "estimated_dates", "backfill_dominant"] %}
-            {% set _warning = _warnings.get(warning_key, {}) %}
-            {% if _warning.get("enabled") %}
-            <div style="margin-top:10px;padding:10px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:10px;color:#9a3412;font-size:12px;">
-              {{ _warning.get("message", "") }}
-            </div>
-            {% endif %}
-            {% endfor %}
-          </td>
-        </tr>
-
-        {% if _issues.get("new") or _issues.get("escalated") or _issues.get("improving") %}
-        <tr>
-          <td style="padding:0 24px 18px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">问题变化</div>
-            {% for section_key, section_title, section_color in [
-              ("new", "新增问题", "#a16207"),
-              ("escalated", "升级问题", "#b91c1c"),
-              ("improving", "改善问题", "#047857")
-            ] %}
-            {% for item in _issues.get(section_key, [])[:3] %}
-            <div style="padding:10px 12px;border-left:3px solid {{ section_color }};background:#f8fafc;border-radius:0 10px 10px 0;margin-bottom:8px;">
-              <div style="font-size:13px;font-weight:700;color:#0f172a;">{{ item.get("label_display", "") }}</div>
-              <div style="font-size:12px;color:#475569;margin-top:4px;">{{ section_title }} / 当前评论 {{ item.get("current_review_count", 0) }} / 影响 SKU {{ item.get("affected_product_count", 0) }}</div>
-            </div>
-            {% endfor %}
-            {% endfor %}
-          </td>
-        </tr>
-        {% endif %}
-
-        {% if _products.get("price_changes") or _products.get("stock_changes") %}
-        <tr>
-          <td style="padding:0 24px 18px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">产品状态变化</div>
-            {% for item in _products.get("price_changes", [])[:5] %}
-            <div style="padding:10px 12px;background:#fefce8;border:1px solid #fde68a;border-radius:10px;margin-bottom:8px;font-size:12px;color:#713f12;">
-              {{ item.get("name", item.get("sku", "")) }}：{{ item.get("old", "-") }} → {{ item.get("new", "-") }}
-            </div>
-            {% endfor %}
-            {% for item in _products.get("stock_changes", [])[:5] %}
-            <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;font-size:12px;color:#334155;">
-              {{ item.get("name", item.get("sku", "")) }}：{{ _stock_display.get(item.get("old", "unknown"), "未知") }} → {{ _stock_display.get(item.get("new", "unknown"), "未知") }}
-            </div>
-            {% endfor %}
-          </td>
-        </tr>
-        {% endif %}
-
-        {% if _fresh_competitor_positive_reviews %}
-        <tr>
-          <td style="padding:0 24px 18px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">竞品新近好评</div>
-            {% for item in _fresh_competitor_positive_reviews[:3] %}
-            <div style="padding:10px 12px;background:#ecfdf5;border:1px solid #86efac;border-radius:10px;margin-bottom:8px;">
-              <div style="font-size:13px;font-weight:700;color:#166534;">{{ item.get("product_name", "") }}</div>
-              <div style="font-size:12px;color:#166534;margin-top:4px;">{{ item.get("headline_display") or item.get("headline") or "" }}</div>
-              {% set _body = item.get("body_display") or item.get("body") %}
-              {% if _body %}
-              <div style="font-size:12px;color:#166534;margin-top:4px;">{{ _body }}</div>
-              {% endif %}
-            </div>
-            {% endfor %}
-          </td>
-        </tr>
-        {% endif %}
-
-        {% if _risk %}
-        <tr>
-          <td style="padding:0 24px 18px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">持续关注</div>
-            {% for item in _risk[:3] %}
-            <div style="padding:10px 12px;background:#fff7f7;border:1px solid #fecaca;border-radius:10px;margin-bottom:8px;">
-              <div style="font-size:13px;font-weight:700;color:#991b1b;">{{ item.get("product_name", "") }}</div>
-              <div style="font-size:12px;color:#7f1d1d;margin-top:4px;">差评 {{ item.get("negative_review_rows", 0) }}</div>
-            </div>
-            {% endfor %}
-          </td>
-        </tr>
-        {% endif %}
-
-        <tr>
-          <td style="padding:0 24px 18px;">
-            <div style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">行动建议</div>
             {% if _bullets %}
-            {% for item in _bullets[:3] %}
-            <div style="padding:10px 12px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;margin-bottom:8px;font-size:12px;color:#312e81;">
-              {{ item }}
-            </div>
-            {% endfor %}
-            {% else %}
-            <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:12px;color:#64748b;">
-              {% if _semantics == "bootstrap" or _view_state == "bootstrap" %}
-              {{ _summary.get("window_meaning", "首次建档，当前结果用于建立监控基线。") }}，本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条。
-              {% else %}
-              {% set _fresh = _summary.get("fresh_review_count", 0) %}
-              {% set _backfill = _summary.get("historical_backfill_count", 0) %}
-              本次入库评论 {{ _summary.get("ingested_review_count", 0) }} 条（近30天业务新增 {{ _fresh }}，历史补采 {{ _backfill }}）。
-              {% endif %}
-            </div>
+            <ul style="margin:10px 0 0;padding-left:20px;color:#334155;font-size:13px;line-height:1.7;">
+              {% for b in _bullets %}
+              <li>{{ b }}</li>
+              {% endfor %}
+            </ul>
             {% endif %}
-          </td>
-        </tr>
-
-        {% if report_url %}
-        <tr>
-          <td style="padding:0 24px 20px;">
-            <a href="{{ report_url }}" style="display:block;padding:12px 14px;background:#dbeafe;border:1px solid #93c5fd;border-radius:10px;color:#1d4ed8;font-size:13px;font-weight:700;text-decoration:none;">打开完整 HTML 报告</a>
           </td>
         </tr>
         {% endif %}
 
+        {# ── 4. Top 3 行动建议 ── #}
+        {% if _priorities %}
         <tr>
-          <td style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;line-height:1.8;">
-            KPI 展示统一读取 analytics.kpis，今日变化统一读取 analytics.change_digest。<br>
-            本邮件为自动生成，仅供内部参考。
+          <td style="padding:0 24px 16px;">
+            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">Top 3 行动建议</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+              {% for item in _priorities %}
+              <tr>
+                <td style="padding:10px 12px;background:#fef9c3;border:1px solid #fde68a;border-radius:8px;font-size:13px;color:#713f12;">
+                  <strong>{{ loop.index }}.</strong>
+                  {% if item.get("label_display") %}[{{ item.get("label_display") }}] {% endif %}
+                  {{ item.get("short_title") or item.get("label_display") or "" }}
+                  · 影响 {{ item.get("affected_products_count") or 0 }} 款
+                </td>
+              </tr>
+              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% endfor %}
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
+        {# ── 5. 自有产品状态（Task 3.4 才会填充 product_status；为空时整块跳过） ── #}
+        {% if _product_status %}
+        <tr>
+          <td style="padding:0 24px 16px;">
+            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">自有产品状态</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+              {% for ps in _product_status[:5] %}
+              {% set _lamp = ps.get("status_lamp") or "gray" %}
+              <tr>
+                <td style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#ffffff;font-size:13px;color:#0f172a;">
+                  <span style="font-size:14px;">{{ _lamp_emoji_map.get(_lamp, "⚪") }}</span>
+                  <span style="margin-left:6px;font-weight:600;">{{ ps.get("product_name") or "(未知产品)" }}</span>
+                  <span style="margin-left:10px;color:#475569;">
+                    {{ ps.get("primary_concern") or ("无数据" if _lamp == "gray" else "健康") }}
+                  </span>
+                </td>
+              </tr>
+              {% if not loop.last %}<tr><td style="height:4px;line-height:4px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% endfor %}
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
+        {# ── 6. 附件链接 ── #}
+        <tr>
+          <td style="padding:4px 24px 18px;">
+            <div style="font-size:12px;color:#475569;line-height:1.8;">
+              ▶ 详情 / 评论原文见附件 HTML<br>
+              ▶ 数据下钻见 Excel 附件
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:12px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;line-height:1.6;">
+            本邮件为 QBU 自动生成报告，仅供内部参考。
           </td>
         </tr>
       </table>

@@ -519,91 +519,13 @@ class TestV3TemplateRender:
         assert "产品快照样本不足" in html
 
 
-def _email_fallback_analytics(semantics, ingested, fresh, backfill):
-    return {
-        "report_semantics": semantics,
-        "is_bootstrap": semantics == "bootstrap",
-        "mode": "baseline" if semantics == "bootstrap" else "incremental",
-        "kpis": {"own_product_count": 5, "health_index": 94.9,
-                 "own_review_rows": 450, "high_risk_count": 1,
-                 "competitor_product_count": 3, "product_count": 8,
-                 "ingested_review_rows": ingested},
-        "cumulative_kpis": {},
-        "change_digest": {
-            "enabled": True,
-            "view_state": "bootstrap" if semantics == "bootstrap" else "active",
-            "summary": {"ingested_review_count": ingested,
-                        "fresh_review_count": fresh,
-                        "historical_backfill_count": backfill,
-                        "fresh_own_negative_count": 0,
-                        "issue_new_count": 0, "issue_escalated_count": 0,
-                        "issue_improving_count": 0, "state_change_count": 0,
-                        "ingested_own_review_count": 0,
-                        "ingested_competitor_review_count": 0,
-                        "ingested_own_negative_count": 0},
-            "warnings": {"translation_incomplete": {"enabled": False, "message": ""},
-                         "estimated_dates": {"enabled": False, "message": ""},
-                         "backfill_dominant": {"enabled": False, "message": ""}},
-            "empty_state": {"enabled": False, "title": "", "description": ""},
-            "issue_changes": {"new": [], "escalated": [], "improving": [], "de_escalated": []},
-            "product_changes": {"price_changes": [], "stock_changes": [],
-                                "rating_changes": [], "new_products": [], "removed_products": []},
-            "review_signals": {"fresh_competitor_positive_reviews": [], "fresh_negative_reviews": []},
-        },
-        "self": {"risk_products": [], "top_negative_clusters": [],
-                 "top_positive_themes": [], "recommendations": []},
-        "competitor": {"top_positive_themes": [], "negative_opportunities": [], "gap_analysis": []},
-        "window": {"reviews_count": ingested, "new_reviews": []},
-        "report_copy": {"executive_bullets": []},  # trigger email fallback branch
-    }
-
-
-def test_email_fallback_bootstrap_uses_baseline_wording(monkeypatch):
-    """email_full.html.j2 在 _bullets 为空时的 fallback 必须按 semantics 分路。"""
-    from qbu_crawler.server import report_snapshot
-    # Stub DB lookup: no previous context
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context",
-                        lambda run_id: (None, None))
-
-    analytics = _email_fallback_analytics("bootstrap", ingested=593, fresh=4, backfill=589)
-    snapshot = {"run_id": 0, "logical_date": "2026-04-24",
-                "reviews": [], "products": [], "untranslated_count": 0}
-    html = report_snapshot._render_full_email_html(snapshot, analytics)
-    assert "新增评论" not in html, "bootstrap email fallback 仍写「新增评论」"
-    assert "建立监控基线" in html or "监控起点" in html
-
-
-def test_email_bootstrap_second_day_uses_building_wording(monkeypatch):
-    from qbu_crawler.server import report_snapshot
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context",
-                        lambda run_id: (None, None))
-
-    analytics = _email_fallback_analytics("bootstrap", ingested=32, fresh=1, backfill=31)
-    analytics["change_digest"]["summary"].update({
-        "baseline_day_index": 2,
-        "baseline_display_state": "building",
-        "window_meaning": "基线建立期第2天，本次入库用于补足基线，不按新增口径解释",
-    })
-    snapshot = {"run_id": 0, "logical_date": "2026-04-24",
-                "reviews": [], "products": [], "untranslated_count": 0}
-    html = report_snapshot._render_full_email_html(snapshot, analytics)
-
-    assert "基线建立期第2天" in html
-    assert "首次建档" not in html
-    assert "今日新增" not in html
-
-
-def test_email_fallback_incremental_cites_fresh_and_backfill(monkeypatch):
-    from qbu_crawler.server import report_snapshot
-    monkeypatch.setattr(report_snapshot, "load_previous_report_context",
-                        lambda run_id: (None, None))
-
-    analytics = _email_fallback_analytics("incremental", ingested=50, fresh=8, backfill=42)
-    snapshot = {"run_id": 0, "logical_date": "2026-04-24",
-                "reviews": [], "products": [], "untranslated_count": 0}
-    html = report_snapshot._render_full_email_html(snapshot, analytics)
-    assert "近30天业务新增" in html or "近 30 天业务新增" in html
-    assert "历史补采" in html
+# ── F011 §4.1.3 — removed legacy email_full.html.j2 fallback-wording tests ──
+# These tests previously asserted on the bootstrap/incremental change_digest
+# banner and "本次入库 / 历史补采 / 基线建立期第N天 / 监控起点" wording.
+# F011 §4.1 redesigns the email body around 4 KPI lamps + Hero + Top 3 +
+# product_status; §4.1.3 explicitly removes the change_digest banner from the
+# email. New email-template coverage lives in
+# tests/server/test_email_full_template.py.
 
 
 def test_year_trend_panel_shows_view_note_banner(tmp_path):

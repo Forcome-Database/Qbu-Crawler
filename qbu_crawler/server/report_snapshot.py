@@ -1282,89 +1282,53 @@ def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
             nc["deep_analysis"] = match["deep_analysis"]
 
 
-def _render_full_email_html(snapshot, analytics):
-    """Render email_full.html.j2 for the full-mode email body."""
+def render_email_full(snapshot, analytics):
+    """F011 §4.1 — render the full-mode email body (email_full.html.j2).
+
+    Public entry point. The new template only consumes:
+      - logical_date  (from snapshot)
+      - analytics.kpis.{health_index, own_positive_review_rows, own_review_rows,
+                        own_negative_review_rate, own_negative_review_rate_display,
+                        own_product_count, competitor_product_count,
+                        ingested_review_rows}
+      - analytics.report_copy.{hero_headline, executive_bullets[],
+                                improvement_priorities[].{label_display,
+                                  short_title, affected_products_count}}
+      - analytics.self.product_status[].{product_name, status_lamp,
+                                          primary_concern}  (Task 3.4)
+
+    Other legacy template vars (change_digest, risk_products, alert_level,
+    cumulative_kpis, window, etc.) are no longer consumed by §4.1; the new
+    layout deliberately drops them.
+    """
     from jinja2 import Environment, FileSystemLoader, select_autoescape
-    from qbu_crawler.server.report_common import normalize_deep_report_analytics, _compute_alert_level
 
     template_dir = Path(__file__).parent / "report_templates"
     env = Environment(
         loader=FileSystemLoader(str(template_dir)),
         autoescape=select_autoescape(["html", "j2"]),
     )
-    normalized = normalize_deep_report_analytics(analytics)
-    alert = _compute_alert_level(normalized)
-    alert_level = alert[0] if isinstance(alert, (list, tuple)) else "green"
-    alert_text = alert[1] if isinstance(alert, (list, tuple)) else ""
 
-    # Dual-perspective template variables (Correction E)
-    cumulative_kpis = normalized.get("cumulative_kpis") or normalized.get("kpis", {})
-    window = normalized.get("window", {})
-    health_confidence = cumulative_kpis.get("health_confidence", "high")
-
-    # F4 fix: load previous context ONCE, reuse for detect_snapshot_changes,
-    # cluster_changes, and prev_analytics
-    prev_analytics_ctx = None
-    prev_snapshot = None
-    run_id = snapshot.get("run_id", 0)
-    if run_id:
-        prev_analytics_ctx, prev_snapshot = load_previous_report_context(run_id)
-    changes = detect_snapshot_changes(snapshot, prev_snapshot)
-
-    # New review summary for email template
-    window_reviews = window.get("new_reviews") or snapshot.get("reviews", [])
-    own_new = [r for r in window_reviews if r.get("ownership") == "own"]
-    comp_new = [r for r in window_reviews if r.get("ownership") == "competitor"]
-    new_review_summary = {
-        "own_count": len(own_new),
-        "comp_count": len(comp_new),
-        "own_negative": sum(
-            1 for r in own_new if (r.get("rating") or 5) <= config.NEGATIVE_THRESHOLD
-        ),
-    }
-
-    # Compute cluster changes for "today's changes" section
-    prev_clusters = None
-    if prev_analytics_ctx:
-        prev_clusters = (prev_analytics_ctx.get("self") or {}).get("top_negative_clusters")
-    cluster_changes = compute_cluster_changes(
-        (normalized.get("self") or {}).get("top_negative_clusters", []),
-        prev_clusters,
-        snapshot.get("logical_date", ""),
-    )
-
-    # Build report URL
-    report_url = ""
-    report_html_public_url = getattr(config, "REPORT_HTML_PUBLIC_URL", "")
-    if report_html_public_url:
-        html_name = f"workflow-run-{run_id}-full-report.html"
-        report_url = f"{report_html_public_url}/{html_name}"
-
-    # Merge snapshot changes (price/stock/rating) with cluster changes (escalated/new/improving)
-    merged_changes = {**cluster_changes}
-    merged_changes["price_changes"] = changes.get("price_changes", [])
-    merged_changes["stock_changes"] = changes.get("stock_changes", [])
-    merged_changes["rating_changes"] = changes.get("rating_changes", [])
-    merged_changes["has_changes"] = changes.get("has_changes", False)
-
+    # F011 §4.1 — the new template consumes raw analytics fields only:
+    # kpis (health_index, own_*_review_rows, own_negative_review_rate,
+    # own_/competitor_product_count, ingested_review_rows), report_copy
+    # (hero_headline / executive_bullets / improvement_priorities), and
+    # self.product_status. We deliberately do NOT call
+    # normalize_deep_report_analytics here so the upstream caller stays the
+    # single source of truth for KPIs (avoids double-shrinkage on
+    # health_index and surprising overrides for callers that pre-compute
+    # values). `analytics` is passed through verbatim.
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
-        logical_date=snapshot.get("logical_date", ""),
-        snapshot=snapshot,
-        analytics=normalized,
-        alert_level=alert_level,
-        alert_text=alert_text,
-        report_copy=normalized.get("report_copy") or analytics.get("report_copy") or {},
-        risk_products=(normalized.get("self") or {}).get("risk_products", [])[:3],
-        threshold=config.NEGATIVE_THRESHOLD,
-        # New dual-perspective variables
-        cumulative_kpis=cumulative_kpis,
-        window=window,
-        health_confidence=health_confidence,
-        changes=merged_changes,
-        new_review_summary=new_review_summary,
-        report_url=report_url,
+        logical_date=snapshot.get("logical_date", "") if snapshot else "",
+        snapshot=snapshot or {},
+        analytics=analytics or {},
     )
+
+
+def _render_full_email_html(snapshot, analytics):
+    """Internal alias kept for the production caller and legacy tests."""
+    return render_email_full(snapshot, analytics)
 
 
 def generate_full_report_from_snapshot(

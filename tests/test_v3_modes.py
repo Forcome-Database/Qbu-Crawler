@@ -820,6 +820,7 @@ class TestStockStatusThreeStateDisplay:
         # 关键：不应出现"缺货"（这是 Bug D 的核心错误展示）
         assert "缺货" not in html
 
+    @pytest.mark.skip(reason="F011 §4.1.3 — email body no longer renders stock_changes block")
     def test_email_full_also_renders_three_state(self):
         """Bug D defense-in-depth — email_full.html.j2 must share the same 3-state rendering."""
         from jinja2 import Environment, FileSystemLoader, select_autoescape
