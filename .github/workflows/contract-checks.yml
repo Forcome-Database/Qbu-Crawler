@@ -1,0 +1,49 @@
+# F011 §5.5 v1.1 — Contract checks for the report system.
+# Runs on every push to master and feature branches; gates merges.
+name: Contract Checks
+
+on:
+  push:
+    branches: [master, "feature/**"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  contract-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        run: pip install -U uv
+
+      - name: Install project dependencies
+        run: |
+          uv sync
+          uv pip install pytest jsonschema openpyxl
+
+      - name: Tooltip vs algorithm sync
+        run: uv run pytest tests/server/test_metric_tooltips_sync.py -v
+
+      - name: LLM prompt v3 schema
+        run: uv run pytest tests/server/test_llm_prompt_v3.py -v
+
+      - name: failure_mode 9-enum boundary
+        run: uv run pytest tests/server/test_failure_mode_enum.py -v
+
+      - name: Schema migration 0010 up/down
+        run: uv run pytest tests/server/test_migration_0010.py -v
+
+      - name: assert_consistency LLM contract
+        run: uv run pytest tests/server/test_llm_assert_consistency.py -v
+
+      - name: Report semantics state machine
+        run: uv run pytest tests/server/test_report_semantics.py -v
+
+      - name: F011 full server-side suite (regression)
+        run: uv run pytest tests/server/ -q
