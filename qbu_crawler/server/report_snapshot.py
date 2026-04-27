@@ -1394,8 +1394,24 @@ def generate_full_report_from_snapshot(
         analytics["change_digest"] = change_digest
         pre_normalized["change_digest"] = change_digest
 
-        # LLM insights with full context (gap_analysis, top_symptoms, etc.)
-        insights = report_llm.generate_report_insights(pre_normalized, snapshot=snapshot)
+        # F011 Critical A-1: route through v3 orchestrator (prompt v3 + schema +
+        # tone guards + assert_consistency + retry + fallback). When the LLM
+        # output yields empty improvement_priorities (LLM disabled, persistent
+        # validation failure, or sparse fallback), backfill via the rule-based
+        # `build_fallback_priorities` so the email_full Top 3 行动 block always
+        # has something to render (AC-10 / AC-18 / §5.3).
+        insights = report_llm.generate_report_insights_with_validation(
+            pre_normalized, snapshot=snapshot
+        )
+        if not (insights or {}).get("improvement_priorities"):
+            risk_products = (pre_normalized.get("self") or {}).get("risk_products") or []
+            top_negative_clusters = (
+                (pre_normalized.get("self") or {}).get("top_negative_clusters") or []
+            )
+            insights = dict(insights or {})
+            insights["improvement_priorities"] = report_analytics.build_fallback_priorities(
+                risk_products, top_negative_clusters,
+            )
         analytics["report_copy"] = insights
 
         # Cluster deep analysis (top N clusters with ≥5 reviews)

@@ -238,7 +238,7 @@ class TestFullReportAnalyticsPersistsNormalizedKpis:
             "qbu_crawler.server.report_snapshot.report.send_email",
             lambda **kw: {"success": True, "recipients": []})
         monkeypatch.setattr(
-            "qbu_crawler.server.report_llm.generate_report_insights",
+            "qbu_crawler.server.report_llm.generate_report_insights_with_validation",
             lambda *a, **kw: {"hero_headline": "", "executive_bullets": []})
 
         result = generate_full_report_from_snapshot(snapshot, send_email=False)

@@ -269,7 +269,7 @@ def test_generate_full_report_from_snapshot_uses_deep_report_email_template(tmp_
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {
             "hero_headline": "",
             "executive_summary": "",
@@ -351,7 +351,7 @@ def test_generate_full_report_from_snapshot_returns_analytics_and_html_paths(tmp
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {
             "hero_headline": "",
             "executive_summary": "",
@@ -430,7 +430,7 @@ def test_generate_full_report_from_snapshot_passes_insights_to_html_and_email(tm
             "competitive_insight": "",
         }
 
-    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", fake_generate_report_insights)
+    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights_with_validation", fake_generate_report_insights)
 
     def fake_render_v3_html(snapshot, analytics, output_path=None):
         captured["html_analytics"] = analytics
@@ -501,7 +501,7 @@ def test_generate_full_report_from_snapshot_sends_excel_and_html(monkeypatch, tm
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
@@ -571,7 +571,7 @@ def test_generate_full_report_from_snapshot_returns_email_failure_with_partial_a
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
@@ -639,7 +639,7 @@ def test_generate_full_report_from_snapshot_captures_email_exception_with_partia
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
@@ -737,7 +737,7 @@ def test_generate_full_report_from_snapshot_allows_none_email_result(monkeypatch
     )
     monkeypatch.setattr(
         report_snapshot.report_llm,
-        "generate_report_insights",
+        "generate_report_insights_with_validation",
         lambda analytics, snapshot=None: {"hero_headline": "", "executive_summary": "", "executive_bullets": [], "improvement_priorities": [], "competitive_insight": ""},
     )
     monkeypatch.setattr(
@@ -1133,7 +1133,7 @@ def test_full_report_passes_window_review_ids_and_cumulative_reviews_to_excel(tm
         },
     )
     monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda run_id: (None, None))
-    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights", lambda analytics, snapshot=None: {})
+    monkeypatch.setattr(report_snapshot.report_llm, "generate_report_insights_with_validation", lambda analytics, snapshot=None: {})
     monkeypatch.setattr(
         report_snapshot.report,
         "generate_excel",
@@ -1719,3 +1719,120 @@ def test_artifact_resolver_recovers_when_original_path_moved(snapshot_db, monkey
     assert resolved is not None, "resolver should fall back to basename in REPORT_DIR"
     assert Path(resolved).is_file()
     assert Path(resolved).name == actual_path.name
+
+
+# ──────────────────────────────────────────────────────────────────────
+# F011 Critical A-1 — wiring test: pipeline routes through v3 orchestrator
+# AND backfills improvement_priorities via build_fallback_priorities when
+# the LLM output is empty (LLM disabled / fallback path / persistent
+# validation failure).
+# ──────────────────────────────────────────────────────────────────────
+
+def test_full_report_uses_v3_llm_pipeline_and_fallback(tmp_path, monkeypatch):
+    """A-1 e2e: confirm production pipeline calls
+    `generate_report_insights_with_validation` AND that an empty
+    `improvement_priorities` from that path is backfilled by
+    `build_fallback_priorities` (so email_full Top 3 行动 always renders)."""
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+
+    excel_path = tmp_path / "workflow-run-101-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    html_path = tmp_path / "workflow-run-101-full-report.html"
+    html_path.write_text("<html></html>", encoding="utf-8")
+
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None: {
+            "mode": "baseline",
+            "kpis": {},
+            "self": {
+                "top_negative_clusters": [
+                    {
+                        "label_code": "noise",
+                        "label_display": "噪音",
+                        "review_count": 12,
+                        "affected_products": ["P-A", "P-B"],
+                    }
+                ],
+                "risk_products": [
+                    {
+                        "product_name": "P-A",
+                        "top_labels": [
+                            {"code": "structure_design", "display": "结构设计", "count": 5}
+                        ],
+                    }
+                ],
+            },
+            "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+            "appendix": {},
+        },
+    )
+    monkeypatch.setattr(report_snapshot.report_html, "render_v3_html",
+                        lambda snapshot, analytics, output_path=None: str(html_path))
+
+    captured = {"v3_called": 0, "legacy_called": 0}
+
+    def fake_v3(analytics, snapshot=None, *, max_retries=3):
+        captured["v3_called"] += 1
+        # Simulate LLM disabled / persistent failure → empty insights stub
+        return {
+            "hero_headline": "",
+            "executive_summary": "",
+            "executive_bullets": [],
+            "improvement_priorities": [],
+            "competitive_insight": "",
+        }
+
+    def fake_legacy(analytics, snapshot=None):
+        captured["legacy_called"] += 1
+        return {"improvement_priorities": []}
+
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights_with_validation",
+        fake_v3,
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights",
+        fake_legacy,
+    )
+
+    snapshot = {
+        "run_id": 101,
+        "logical_date": "2026-04-27",
+        "data_since": "2026-04-27T00:00:00+08:00",
+        "snapshot_hash": "h-a1",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"id": 1, "rating": 1, "translate_status": "done"}],
+    }
+
+    result = generate_full_report_from_snapshot(snapshot, send_email=False, output_path=str(excel_path))
+
+    # 1. v3 orchestrator must be called; legacy must NOT.
+    assert captured["v3_called"] == 1, "pipeline must call v3 orchestrator"
+    assert captured["legacy_called"] == 0, "legacy path must not be called"
+
+    # 2. Persisted analytics must contain non-empty improvement_priorities
+    #    via build_fallback_priorities.
+    saved = json.loads((Path(config.REPORT_DIR) / result["analytics_path"]).read_text(encoding="utf-8"))
+    priorities = saved["report_copy"]["improvement_priorities"]
+    assert priorities, "improvement_priorities must be backfilled by build_fallback_priorities"
+    # Rule: first row should come from risk_products[0].top_labels[0].
+    codes = [p.get("label_code") for p in priorities]
+    assert "structure_design" in codes
