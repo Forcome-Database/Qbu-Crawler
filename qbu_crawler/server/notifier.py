@@ -309,24 +309,53 @@ def _evaluate_ops_alert_triggers(quality: dict) -> tuple[bool, str]:
     return (True, severity)
 
 
+def count_outbox_deadletter(conn, run_id: int) -> int:
+    """F011 H13 — count ``notification_outbox`` deadletter rows tied to a
+    given workflow ``run_id``.
+
+    Uses ``json_extract(payload, '$.run_id')`` rather than a substring LIKE
+    so it is robust to:
+      - whitespace produced by ``json.dumps`` (default ``"run_id": 10``),
+      - prefix collisions (``run_id=1`` vs ``run_id=10``),
+      - key-ordering / nested JSON shape changes.
+
+    Falls back gracefully when the underlying SQLite build lacks JSON1
+    (very rare on Python ≥3.10) by returning ``0`` rather than raising —
+    callers treat this helper as best-effort observability.
+
+    Exported as a module-level helper so other workflow code can share the
+    exact same deadletter-counting semantics (avoids fragile per-call
+    LIKE patterns drifting out of sync with ``json.dumps`` output).
+    """
+    cur = conn.cursor()
+    try:
+        return cur.execute(
+            "SELECT COUNT(*) FROM notification_outbox "
+            "WHERE status='deadletter' "
+            "AND CAST(json_extract(payload, '$.run_id') AS INTEGER) = ?",
+            (run_id,),
+        ).fetchone()[0]
+    except Exception:  # pragma: no cover — defensive for legacy SQLite
+        logger.exception("count_outbox_deadletter: json_extract failed")
+        return 0
+
+
 def downgrade_report_phase_on_deadletter(conn, run_id: int) -> bool:
     """F011 H13 — when notification_outbox has deadletter rows for ``run_id``,
     downgrade ``workflow_runs.report_phase`` from ``'full_sent'`` to
     ``'full_sent_local'``.
 
     Returns True if a downgrade actually occurred, False otherwise (no
-    deadletter rows OR phase wasn't ``full_sent``). Uses a substring
-    match on ``payload`` JSON because outbox payloads are stored as text;
-    callers should ensure ``run_id`` is embedded as ``"run_id":<id>``.
+    deadletter rows OR phase wasn't ``full_sent``).
+
+    Uses :func:`count_outbox_deadletter` so the JSON matching semantics stay
+    consistent with the way ``models.enqueue_notification`` writes the
+    payload (``json.dumps`` produces ``"run_id": <id>`` with whitespace,
+    which the previous LIKE pattern ``%"run_id":<id>%`` never matched).
     """
-    cur = conn.cursor()
-    deadletter_count = cur.execute(
-        "SELECT COUNT(*) FROM notification_outbox "
-        "WHERE status='deadletter' AND payload LIKE ?",
-        (f'%"run_id":{run_id}%',),
-    ).fetchone()[0]
-    if deadletter_count == 0:
+    if count_outbox_deadletter(conn, run_id) == 0:
         return False
+    cur = conn.cursor()
     result = cur.execute(
         "UPDATE workflow_runs SET report_phase='full_sent_local' "
         "WHERE id=? AND report_phase='full_sent'",
