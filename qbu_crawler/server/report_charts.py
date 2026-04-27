@@ -616,6 +616,11 @@ def build_chartjs_configs(analytics):
     if products and len(products) >= 2:
         configs["scatter"] = _chartjs_scatter(products)
 
+    # DEPRECATED — F011 Task 3.4.2: V3 template (daily_report_v3.html.j2) renders the
+    # heatmap directly from `analytics._heatmap_data` (cell dicts with color_class /
+    # top_review_id / top_review_excerpt). This `configs["heatmap"]` entry is only
+    # consumed by the legacy template `daily_report_v3_legacy.html.j2`. Full removal
+    # is scheduled for Task 4.6.
     heatmap = analytics.get("_heatmap_data")
     if heatmap and len(heatmap.get("y_labels", [])) >= 3:
         configs["heatmap"] = _chartjs_heatmap_table(heatmap)
@@ -782,10 +787,16 @@ def _chartjs_scatter(products):
     }
 
 
+# DEPRECATED — F011 Task 3.4.2: The active V3 template (daily_report_v3.html.j2)
+# renders the heatmap directly from `analytics._heatmap_data` (richer cell dicts
+# with color_class / top_review_id / top_review_excerpt). The legacy template
+# `daily_report_v3_legacy.html.j2` is still the only consumer of this function's
+# output. Full removal scheduled for Task 4.6.
 def _chartjs_heatmap_table(heatmap_data):
     """Heatmap data as a table structure (Chart.js doesn't have native heatmap).
 
     Returns data for rendering as an HTML table with colored cells, not a chart.
+    Only used by `daily_report_v3_legacy.html.j2`; deprecated.
     """
     return {
         "type": "table",  # Custom: rendered as HTML table, not Chart.js canvas

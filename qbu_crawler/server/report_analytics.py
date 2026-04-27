@@ -1735,6 +1735,35 @@ def _build_heatmap_data_v12(labeled_reviews, products):
     }
 
 
+def _classify_review_positive(review: dict) -> bool:
+    """Decide whether a single review counts as "positive" for heatmap scoring.
+
+    Two paths, mutually exclusive:
+
+    1. **Explicit sentiment path** — when `review["sentiment"]` is a non-empty
+       string (the translation worker writes one of ``positive`` / ``negative``
+       / ``mixed`` / ``neutral`` per LLM analysis, persisted on `reviews.sentiment`).
+       Treat ``positive`` and ``mixed`` as positive; any other non-empty value
+       (``negative`` / ``neutral`` / etc.) is treated as non-positive WITHOUT
+       falling back to rating — the LLM verdict overrides star count.
+
+    2. **Rating fallback path** — when sentiment is missing/empty (older rows
+       written before the translator populated the column, or rows the worker
+       has not yet processed). Treats ``rating >= 4`` as positive.
+    """
+    sentiment = (review.get("sentiment") or "").lower()
+    if sentiment in {"positive", "mixed"}:
+        return True
+    if sentiment:
+        # Explicit non-positive sentiment present — LLM overrides rating.
+        return False
+    try:
+        rating = float(review.get("rating") or 0)
+    except (TypeError, ValueError):
+        rating = 0.0
+    return rating >= 4
+
+
 def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
     """F011 §4.2.6.2 v1.2 — derive cell dict from reviews matched to a cell."""
     sample_size = len(cell_reviews)
@@ -1750,21 +1779,7 @@ def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
 
     # Positive classification: prefer explicit `sentiment` if present, else
     # rating-based fallback (rating >= 4 → positive).
-    positive_count = 0
-    for r in cell_reviews:
-        sentiment = (r.get("sentiment") or "").lower()
-        if sentiment in {"positive", "mixed"}:
-            positive_count += 1
-            continue
-        if sentiment:
-            # Explicit non-positive sentiment present — do not double-count via rating
-            continue
-        try:
-            rating = float(r.get("rating") or 0)
-        except (TypeError, ValueError):
-            rating = 0.0
-        if rating >= 4:
-            positive_count += 1
+    positive_count = sum(1 for r in cell_reviews if _classify_review_positive(r))
 
     score = positive_count / sample_size
 

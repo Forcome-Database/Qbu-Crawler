@@ -375,3 +375,46 @@ def test_heatmap_html_emits_label_codes_for_drilldown():
     assert 'data-label-code="quality_stability"' in html
     # '其他' bucket emits empty data-label-code
     assert 'data-label-code=""' in html
+
+
+# ──────────────────────────────────────────────────────────
+# §4.2.6.2 — Step 6: Sentiment-vs-rating classification (I-2 regression)
+# ──────────────────────────────────────────────────────────
+def test_heatmap_classifies_positive_using_sentiment_when_present():
+    """Explicit `sentiment` from translator overrides rating-based fallback.
+
+    Reviews with `rating=2` would normally count as non-positive via the rating
+    fallback. With `sentiment="positive"` from the LLM translator, they MUST
+    flip to positive — proving the sentiment branch fires.
+    """
+    from qbu_crawler.server.report_analytics import _classify_review_positive
+
+    # 4 of 5 reviews: low rating but explicit positive sentiment → positives wins
+    cell_reviews = [
+        {"rating": 2, "sentiment": "positive"},
+        {"rating": 2, "sentiment": "positive"},
+        {"rating": 2, "sentiment": "positive"},
+        {"rating": 2, "sentiment": "mixed"},
+        {"rating": 5, "sentiment": "negative"},  # high rating but LLM said negative
+    ]
+
+    classifications = [_classify_review_positive(r) for r in cell_reviews]
+    # 4 positives (3 "positive" + 1 "mixed"), the rating=5 with negative sentiment
+    # MUST NOT be counted (LLM verdict overrides star rating).
+    assert classifications == [True, True, True, True, False]
+
+
+def test_heatmap_classifies_positive_using_rating_when_sentiment_absent():
+    """When `sentiment` is missing/empty, fall back to rating >= 4 = positive."""
+    from qbu_crawler.server.report_analytics import _classify_review_positive
+
+    cell_reviews = [
+        {"rating": 5},                       # no sentiment key → rating >= 4 → positive
+        {"rating": 4, "sentiment": ""},      # empty sentiment → rating >= 4 → positive
+        {"rating": 3, "sentiment": None},    # None sentiment → rating < 4 → not positive
+        {"rating": 1},                       # no sentiment, low rating → not positive
+        {"sentiment": ""},                   # neither → not positive
+    ]
+
+    classifications = [_classify_review_positive(r) for r in cell_reviews]
+    assert classifications == [True, True, False, False, False]

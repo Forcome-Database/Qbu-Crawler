@@ -440,8 +440,10 @@
                 {% set row = analytics._heatmap_data.z[loop.index0] %}
                 {% set y_label = y %}
                 {% for cell in row %}
-                  {% set x_label = analytics._heatmap_data.x_labels[loop.index0] %}
-                  {% set x_code = (analytics._heatmap_data.x_label_codes[loop.index0] if analytics._heatmap_data.x_label_codes else '') %}
+                  {# Bind cell_idx explicitly before any inner loop can shadow loop.index0. #}
+                  {% set cell_idx = loop.index0 %}
+                  {% set x_label = analytics._heatmap_data.x_labels[cell_idx] %}
+                  {% set x_code = (analytics._heatmap_data.x_label_codes[cell_idx] if analytics._heatmap_data.x_label_codes else '') %}
                   <td class="heatmap-cell {{ cell.color_class }}"
                       data-product="{{ y_label }}"
                       data-label="{{ x_label }}"
