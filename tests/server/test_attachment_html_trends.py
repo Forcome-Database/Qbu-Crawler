@@ -240,6 +240,58 @@ def test_trend_section_drill_downs_use_details_summary():
     assert "<summary>" in section
 
 
+def _make_review(date_str, *, rating=4, ownership="own"):
+    """Minimal review dict for build_trend_digest aggregation."""
+    return {
+        "ownership": ownership,
+        "rating": rating,
+        "scraped_at": date_str + "T10:00:00+08:00",
+        "product_sku": "SKU-A",
+        "product_name": "Product A",
+        "analysis_labels_parsed": [],
+    }
+
+
+def test_drill_downs_render_with_real_builder_output():
+    """F011 §4.2.5 regression — drill-down summaries must contain spec titles
+    when the template consumes real ``build_trend_digest`` output (not the
+    hand-crafted fixtures in this file).
+
+    This is the test that should have caught the silent-empty bug where
+    ``build_trend_digest`` emitted ``{kind, items}`` instead of the spec
+    ``{id, title, data}`` and the template rendered three empty
+    ``<summary></summary>`` blocks.
+    """
+    from qbu_crawler.server.report_analytics import build_trend_digest
+
+    # 7 days × 5 reviews = 35 → high confidence (per test_trend_digest_thresholds)
+    reviews = []
+    for d in range(20, 27):
+        for _ in range(5):
+            reviews.append(_make_review(f"2026-04-{d:02d}", rating=4))
+    real_digest = build_trend_digest(reviews=reviews)
+
+    # Sanity: builder produced spec-shape drill-downs (otherwise the e2e
+    # assertion below would fail for the wrong reason).
+    assert real_digest["primary_chart"]["confidence"] in ("high", "medium"), (
+        f"fixture must yield mature confidence so the drill-down branch renders; "
+        f"got {real_digest['primary_chart']['confidence']}"
+    )
+
+    html = render_attachment_html(
+        snapshot=_mature_snapshot(),
+        analytics=_mature_analytics(trend_digest=real_digest),
+    )
+
+    # Spec-required drill-down titles must appear (proves wire works end-to-end)
+    assert "Top 3 问题随时间" in html
+    assert "产品评分变化" in html
+    assert "竞品对标雷达" in html
+    assert 'data-drill-id="top_issues"' in html
+    assert 'data-drill-id="product_ratings"' in html
+    assert 'data-drill-id="competitor_radar"' in html
+
+
 def test_trend_section_low_confidence_shows_warning_detail():
     """confidence=low + min_sample_warning 应渲染 warning-detail 提示."""
     td = _bootstrap_trend_digest()

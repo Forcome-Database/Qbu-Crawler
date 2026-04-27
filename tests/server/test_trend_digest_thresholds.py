@@ -85,8 +85,26 @@ def test_comparison_is_none_when_prev_missing():
 
 def test_drill_downs_are_three_items():
     digest = build_trend_digest([])
-    kinds = [d["kind"] for d in digest["drill_downs"]]
-    assert kinds == ["top_issues", "product_ratings", "competitor_radar"]
+    assert len(digest["drill_downs"]) == 3
+
+
+def test_drill_downs_are_three_items_with_full_contract():
+    """F011 §4.2.5 — drill_downs must have id, title, data per spec."""
+    digest = build_trend_digest(reviews=[])
+    drills = digest["drill_downs"]
+    assert len(drills) == 3
+    expected = [
+        ("top_issues", "Top 3 问题随时间"),
+        ("product_ratings", "产品评分变化"),
+        ("competitor_radar", "竞品对标雷达"),
+    ]
+    for drill, (expected_id, expected_title) in zip(drills, expected):
+        assert drill["id"] == expected_id, f"id mismatch: {drill}"
+        assert drill["title"] == expected_title, f"title mismatch: {drill}"
+        assert "data" in drill, f"missing data: {drill}"
+        assert isinstance(drill["data"], dict), f"data not dict: {drill}"
+        # The original kind/items contract belongs inside data now
+        assert drill["data"].get("kind") == expected_id
 
 
 def test_competitor_series_separate():

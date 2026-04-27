@@ -2543,6 +2543,32 @@ def _build_competitor_radar_drilldown(reviews: list) -> dict:
     }
 
 
+# F011 §4.2.5 — drill-down spec contract: each drill_down must be wrapped with
+# stable `id` (for client-side wiring), user-visible `title`, and `data` payload.
+_DRILLDOWN_TITLES = {
+    "top_issues": "Top 3 问题随时间",
+    "product_ratings": "产品评分变化",
+    "competitor_radar": "竞品对标雷达",
+}
+
+
+def _wrap_drilldown(inner: dict) -> dict:
+    """Wrap an inner drill-down builder result into the F011 §4.2.5 spec shape:
+
+        {"id": <kind>, "title": <Chinese>, "data": <inner full payload>}
+
+    Inner builders stay pure (return `kind`/`items`/...); this wrapper alone
+    enforces the contract that the attachment HTML template consumes (see
+    daily_report_v3.html.j2: `d.title`, `d.id`, `d.data`).
+    """
+    kind = inner.get("kind", "") if isinstance(inner, dict) else ""
+    return {
+        "id": kind,
+        "title": _DRILLDOWN_TITLES.get(kind, kind),
+        "data": inner if isinstance(inner, dict) else {},
+    }
+
+
 def build_trend_digest(
     reviews: list,
     *,
@@ -2563,7 +2589,11 @@ def build_trend_digest(
             "confidence": "high" | "medium" | "low" | "no_data",
             "min_sample_warning": str | None,
           },
-          "drill_downs": [<top_issues>, <product_ratings>, <competitor_radar>]
+          "drill_downs": [
+            {"id": "top_issues",       "title": "Top 3 问题随时间", "data": {...}},
+            {"id": "product_ratings",  "title": "产品评分变化",    "data": {...}},
+            {"id": "competitor_radar", "title": "竞品对标雷达",    "data": {...}},
+          ]
         }
     """
     series_own = _aggregate_health_series(reviews, ownership="own",
@@ -2593,9 +2623,9 @@ def build_trend_digest(
     }
 
     drill_downs = [
-        _build_top_issues_drilldown(reviews, default_window),
-        _build_product_ratings_drilldown(reviews),
-        _build_competitor_radar_drilldown(reviews),
+        _wrap_drilldown(_build_top_issues_drilldown(reviews, default_window)),
+        _wrap_drilldown(_build_product_ratings_drilldown(reviews)),
+        _wrap_drilldown(_build_competitor_radar_drilldown(reviews)),
     ]
 
     return {"primary_chart": primary_chart, "drill_downs": drill_downs}
