@@ -12,6 +12,7 @@ from pathlib import Path
 
 from qbu_crawler import config, models
 from qbu_crawler.server import report, report_analytics, report_html, report_llm
+from qbu_crawler.server.report_artifacts import record_artifact
 from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO
 
 _logger = logging.getLogger(__name__)
@@ -19,6 +20,36 @@ _logger = logging.getLogger(__name__)
 _RECIPIENTS_FILE_PATH = os.path.join(
     os.path.dirname(__file__), "openclaw", "workspace", "config", "email_recipients.txt"
 )
+
+
+def _record_artifact_safe(
+    run_id, artifact_type: str, path, *, template_version: str | None = None,
+) -> None:
+    """F011 §5.1 — record one artifact with its own connection, swallowing errors.
+
+    Wired into report-generating code paths where the parent flow must not
+    abort if artifact bookkeeping fails.  Skips silently when ``run_id`` or
+    ``path`` is falsy (some code paths may pass ``None`` on partial failure).
+    """
+    if not run_id or not path:
+        return
+    try:
+        conn = models.get_conn()
+        try:
+            record_artifact(
+                conn,
+                run_id=int(run_id),
+                artifact_type=artifact_type,
+                path=str(path),
+                template_version=template_version,
+            )
+        finally:
+            conn.close()
+    except Exception:
+        _logger.warning(
+            "record_artifact(%s) failed for run %s path=%s",
+            artifact_type, run_id, path, exc_info=True,
+        )
 
 
 def get_email_recipients() -> list[str]:
@@ -883,6 +914,10 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         snapshot_path=_artifact_db_value(snapshot_path),
         snapshot_hash=snapshot_hash,
     )
+
+    # F011 §5.1 — register snapshot in report_artifacts.
+    _record_artifact_safe(run_id, "snapshot", snapshot_path)
+
     if updated:
         updated = dict(updated)
         updated["snapshot_path"] = snapshot_path
@@ -1403,6 +1438,12 @@ def generate_full_report_from_snapshot(
             json.dumps(pre_normalized, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
+        _record_artifact_safe(
+            snapshot.get("run_id"),
+            "analytics",
+            analytics_path,
+            template_version=None,
+        )
 
         # Excel uses cumulative reviews when available, with window ID marking
         if snapshot.get("cumulative"):
@@ -1418,9 +1459,21 @@ def generate_full_report_from_snapshot(
             output_path=output_path,
             analytics=analytics,
         )
+        _record_artifact_safe(
+            snapshot.get("run_id"),
+            "xlsx",
+            excel_path,
+            template_version="f011-4sheets-v1",
+        )
 
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
         html_path = report_html.render_v3_html(snapshot, analytics, output_path=html_output_path)
+        _record_artifact_safe(
+            snapshot.get("run_id"),
+            "html_attachment",
+            html_path,
+            template_version="f011-v3.0",
+        )
     except Exception as exc:
         if isinstance(exc, FullReportGenerationError):
             raise
@@ -1440,6 +1493,24 @@ def generate_full_report_from_snapshot(
         except Exception:
             _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
             body_html = report.render_daily_email_html(snapshot, analytics)
+
+        # F011 §5.1 — persist the email body to disk so it can be tracked in
+        # report_artifacts.  Failure here is non-fatal: we still send the email.
+        try:
+            email_body_path = os.path.join(
+                config.REPORT_DIR,
+                f"workflow-run-{snapshot['run_id']}-email-body.html",
+            )
+            Path(email_body_path).write_text(body_html or "", encoding="utf-8")
+            _record_artifact_safe(
+                snapshot.get("run_id"),
+                "email_body",
+                email_body_path,
+                template_version="f011-v3.0",
+            )
+        except Exception:
+            _logger.warning("email_body artifact persist failed", exc_info=True)
+
         try:
             email_result = report.send_email(
                 recipients=get_email_recipients(),
