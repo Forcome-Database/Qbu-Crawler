@@ -125,19 +125,35 @@
         </article>
       </div>
 
-      {% if analytics.top_actions %}
-      <div class="action-board">
-        <h2>建议行动</h2>
-        {% for action in analytics.top_actions %}
-        <div class="action-card reveal">
-          <span class="action-rank">{{ loop.index }}</span>
-          <div class="action-body">
-            <div class="action-title">{{ action.title }}</div>
-            <p class="action-evidence">{{ action.evidence_summary or "" }}</p>
-          </div>
+      {# F011 §4.2.2 (H14) — 现在该做什么：short_title 作主显，full_action 折叠 #}
+      {% set _priorities = (analytics.report_copy or {}).get("improvement_priorities") or [] %}
+      {% if _priorities %}
+      <section class="recommendations">
+        <h2>现在该做什么</h2>
+        {% for rec in _priorities[:5] %}
+        <div class="recommendation-card reveal">
+          <h3 class="rec-title">{{ rec.short_title or rec.label_display or rec.label_code }}</h3>
+          <div class="rec-meta">影响 {{ rec.affected_products_count or 0 }} 款 · 证据 {{ rec.evidence_count or 0 }} 条</div>
+          <details class="rec-details">
+            <summary>详情</summary>
+            <p class="rec-full-action">{{ rec.full_action }}</p>
+            {% if rec.evidence_review_ids %}
+            <div class="evidence-refs">
+              {% for rid in rec.evidence_review_ids[:5] %}
+                <a href="#review-{{ rid }}" class="evidence-chip">#{{ rid }}</a>
+              {% endfor %}
+              {% if (rec.evidence_review_ids | length) > 5 %}
+                <span class="evidence-more">+{{ (rec.evidence_review_ids | length) - 5 }} 更多</span>
+              {% endif %}
+            </div>
+            {% endif %}
+            {% if rec.affected_products %}
+            <div class="affected-products">影响 SKU: {{ rec.affected_products | join("、") }}</div>
+            {% endif %}
+          </details>
         </div>
         {% endfor %}
-      </div>
+      </section>
       {% endif %}
     </section>
 
@@ -281,6 +297,9 @@
             <span>{{ card.review_count }} 条评论</span>
             <span>{{ card.affected_product_count }} 个产品</span>
             {% if card.recency_display %}<span>{{ card.recency_display }}</span>{% endif %}
+            {% if card.frequent_period %}
+              <span class="frequent-period">高频期 {{ card.frequent_period.start }} ~ {{ card.frequent_period.end }}</span>
+            {% endif %}
           </div>
           {% for review in (card.example_reviews or [])[:2] %}
           <blockquote class="quote-block">

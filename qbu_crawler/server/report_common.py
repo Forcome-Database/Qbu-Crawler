@@ -425,7 +425,12 @@ def _parse_date_flexible(value: str | None, anchor_date=None):
 
 
 def _duration_display(first_seen: str | None, last_seen: str | None) -> str | None:
-    """Human-readable duration between two date strings (any format)."""
+    """DEPRECATED — F011 H5: replaced by ``_format_frequent_period`` for issue_cards.
+
+    The old "约 8 年" framing was misread as "this issue has been ongoing for 8 years",
+    when it actually meant "the cluster spans 8 years of review history". Kept temporarily
+    for backward compatibility with any legacy consumer; remove in Task 4.6.
+    """
     d1 = _parse_date_flexible(first_seen)
     d2 = _parse_date_flexible(last_seen)
     if not d1 or not d2:
@@ -443,6 +448,23 @@ def _duration_display(first_seen: str | None, last_seen: str | None) -> str | No
     if remaining == 0:
         return f"约 {years} 年"
     return f"约 {years} 年 {remaining} 个月"
+
+
+def _format_frequent_period(first_seen: str | None,
+                            last_seen: str | None) -> dict | None:
+    """F011 H5 — return ``{"start": "YYYY-MM", "end": "YYYY-MM"}`` or ``None``.
+
+    Replaces the misleading '约 8 年' duration framing with the actual high-frequency
+    window of the issue cluster. Returns ``None`` when either bound is unparseable so
+    the template guard (``{% if card.frequent_period %}``) can suppress the chip.
+    """
+    d1 = _parse_date_flexible(first_seen)
+    d2 = _parse_date_flexible(last_seen)
+    if not d1 or not d2:
+        return None
+    if d1 > d2:
+        d1, d2 = d2, d1
+    return {"start": d1.strftime("%Y-%m"), "end": d2.strftime("%Y-%m")}
 
 
 def _humanize_bullets(normalized):
@@ -1102,7 +1124,8 @@ def normalize_deep_report_analytics(analytics):
             "affected_product_count": cluster.get("affected_product_count", 0),
             "first_seen": cluster.get("first_seen"),
             "last_seen": cluster.get("last_seen"),
-            "duration_display": _duration_display(cluster.get("first_seen"), cluster.get("last_seen")),
+            # F011 H5 — frequent_period replaces misleading duration_display
+            "frequent_period": _format_frequent_period(cluster.get("first_seen"), cluster.get("last_seen")),
             "image_review_count": cluster.get("image_review_count", 0),
             "example_reviews": cluster.get("example_reviews") or [],
             "image_evidence": image_evidence,

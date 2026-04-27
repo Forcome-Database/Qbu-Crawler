@@ -1868,3 +1868,53 @@ details summary:hover { color: var(--accent); }
   color: var(--text-secondary);
 }
 .panorama-table tbody tr[style*="display: none"] { display: none !important; }
+
+/* ==========================================================================
+   F011 H5+H14 — improvement_priorities recommendations + frequent_period chip
+   ========================================================================== */
+.recommendations { margin: 16px 0; }
+.recommendation-card {
+  padding: 12px;
+  border-left: 3px solid #2563eb;
+  background: #f8fafc;
+  margin-bottom: 8px;
+  border-radius: 4px;
+}
+.recommendation-card .rec-title { margin: 0 0 4px 0; font-size: 16px; }
+.recommendation-card .rec-meta {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.recommendation-card .rec-details summary {
+  cursor: pointer;
+  color: #2563eb;
+}
+.recommendation-card .rec-full-action { margin: 8px 0; line-height: 1.5; }
+.recommendation-card .evidence-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.recommendation-card .evidence-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 3px;
+  font-size: 12px;
+  text-decoration: none;
+}
+.recommendation-card .evidence-more {
+  font-size: 12px;
+  color: #64748b;
+}
+.recommendation-card .affected-products {
+  font-size: 12px;
+  color: #475569;
+  margin-top: 6px;
+}
+
+/* F011 H5 — frequent_period chip on issue cards */
+.issue-card .frequent-period { color: #475569; }

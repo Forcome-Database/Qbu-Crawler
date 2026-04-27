@@ -137,8 +137,9 @@ def test_issue_cards_complete_fields():
     card = result["self"]["issue_cards"][0]
     assert card["first_seen"] == "2026-01-01"
     assert card["last_seen"] == "2026-04-01"
-    assert card["duration_display"] is not None
-    assert "月" in card["duration_display"] or "天" in card["duration_display"]
+    # F011 H5 — duration_display retired in favor of frequent_period {start,end}
+    assert "duration_display" not in card
+    assert card["frequent_period"] == {"start": "2026-01", "end": "2026-04"}
     assert len(card["example_reviews"]) == 1
     assert len(card["image_evidence"]) == 1
     assert card["image_evidence"][0]["url"] == "https://example.com/img1.jpg"
