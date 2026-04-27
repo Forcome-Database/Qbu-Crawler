@@ -1504,8 +1504,16 @@ def generate_full_report_from_snapshot(
     if send_email:
         subject, body = report.build_daily_deep_report_email(snapshot, analytics)
         # Render email_full.html.j2 (replaces legacy daily_report_email.html.j2)
+        # F011 Critical A-2: email_full.html.j2 reads kpis.health_index /
+        # own_negative_review_rate_display etc., which are written by
+        # normalize_deep_report_analytics. The raw `analytics` object lacks
+        # these fields and the template falls back to ⚪ "无数据" for all 4
+        # KPI lights. `pre_normalized` is the normalized copy and already
+        # carries the post-normalize mutations (report_copy / window_review_ids /
+        # cluster deep_analysis) via _merge_post_normalize_mutations(), so it
+        # is safe and intentional to render the email body from it.
         try:
-            body_html = report.render_email_full(snapshot, analytics)
+            body_html = report.render_email_full(snapshot, pre_normalized)
         except Exception:
             _logger.warning("email_full.html.j2 render failed, falling back to legacy", exc_info=True)
             body_html = report.render_daily_email_html(snapshot, analytics)

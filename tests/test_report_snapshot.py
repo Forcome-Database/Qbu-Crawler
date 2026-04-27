@@ -1836,3 +1836,120 @@ def test_full_report_uses_v3_llm_pipeline_and_fallback(tmp_path, monkeypatch):
     # Rule: first row should come from risk_products[0].top_labels[0].
     codes = [p.get("label_code") for p in priorities]
     assert "structure_design" in codes
+
+
+# ──────────────────────────────────────────────────────────────────────
+# F011 Critical A-2 — wiring test: production pipeline renders email_full
+# from the *normalized* analytics so the 4 KPI lights populate
+# (health_index / own_negative_review_rate_display) instead of falling
+# through to ⚪ "无数据".
+# ──────────────────────────────────────────────────────────────────────
+
+def test_email_full_in_production_pipeline_renders_health_index(tmp_path, monkeypatch):
+    from qbu_crawler.server import report
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server.report_snapshot import generate_full_report_from_snapshot
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path / "reports"))
+
+    excel_path = tmp_path / "workflow-run-202-full-report.xlsx"
+    excel_path.write_text("stub", encoding="utf-8")
+    html_path = tmp_path / "workflow-run-202-full-report.html"
+    html_path.write_text("<html></html>", encoding="utf-8")
+
+    monkeypatch.setattr(
+        report,
+        "generate_excel",
+        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
+    )
+    monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
+
+    # Build raw analytics with kpi inputs that normalize_deep_report_analytics
+    # will consume to produce health_index. Need own_review_rows ≥ 30 to avoid
+    # the small-sample shrink-to-50 prior collapsing the value.
+    raw_kpis = {
+        "own_review_rows": 200,
+        "own_positive_review_rows": 195,
+        "own_negative_review_rows": 5,
+        "own_neutral_review_rows": 0,
+        "own_product_count": 3,
+        "competitor_product_count": 2,
+        "ingested_review_rows": 40,
+    }
+    monkeypatch.setattr(
+        report_snapshot.report_analytics,
+        "build_report_analytics",
+        lambda snapshot, synced_labels=None: {
+            "mode": "baseline",
+            "kpis": dict(raw_kpis),
+            "self": {
+                "top_negative_clusters": [],
+                "risk_products": [],
+                "product_status": [
+                    {"product_name": "P-A", "status_lamp": "green",
+                     "primary_concern": ""},
+                ],
+            },
+            "competitor": {"top_positive_themes": [], "benchmark_examples": [],
+                           "negative_opportunities": []},
+            "appendix": {},
+        },
+    )
+    monkeypatch.setattr(
+        report_snapshot.report_llm,
+        "generate_report_insights_with_validation",
+        lambda analytics, snapshot=None, max_retries=3: {
+            "hero_headline": "稳健", "executive_summary": "",
+            "executive_bullets": ["要点 A"], "improvement_priorities": [],
+            "competitive_insight": "",
+        },
+    )
+    monkeypatch.setattr(report_snapshot.report_html, "render_v3_html",
+                        lambda snapshot, analytics, output_path=None: str(html_path))
+
+    # Capture the analytics object that render_email_full receives.
+    captured = {}
+    real_render_email_full = report.render_email_full
+
+    def spy_render(snap, ana):
+        captured["analytics_kpis"] = (ana or {}).get("kpis", {})
+        return real_render_email_full(snap, ana)
+
+    monkeypatch.setattr(report, "render_email_full", spy_render)
+    # Also need report module symbol used by report_snapshot.
+    monkeypatch.setattr(report_snapshot.report, "render_email_full", spy_render)
+
+    monkeypatch.setattr(
+        report,
+        "send_email",
+        lambda recipients, subject, body_text, body_html=None,
+               attachment_path=None, attachment_paths=None: {
+            "success": True, "error": None, "recipients": len(recipients),
+        },
+    )
+    monkeypatch.setattr(report_snapshot, "get_email_recipients",
+                        lambda: ["leo.xia@forcome.com"])
+
+    snapshot = {
+        "run_id": 202,
+        "logical_date": "2026-04-27",
+        "data_since": "2026-04-27T00:00:00+08:00",
+        "snapshot_hash": "h-a2",
+        "products_count": 3,
+        "reviews_count": 200,
+        "translated_count": 200,
+        "untranslated_count": 0,
+        "products": [{"site": "basspro", "ownership": "own"}],
+        "reviews": [{"id": i, "rating": 5, "translate_status": "done"} for i in range(200)],
+    }
+
+    generate_full_report_from_snapshot(snapshot, send_email=True, output_path=str(excel_path))
+
+    kpis_received = captured["analytics_kpis"]
+    # health_index must be populated by normalize_deep_report_analytics.
+    assert "health_index" in kpis_received, (
+        "render_email_full received un-normalized analytics; KPI lights would "
+        f"render ⚪ '无数据'. kpis keys = {sorted(kpis_received.keys())}"
+    )
+    # own_negative_review_rate_display is also normalize-only.
+    assert "own_negative_review_rate_display" in kpis_received
