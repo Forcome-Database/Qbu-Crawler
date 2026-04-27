@@ -46,6 +46,40 @@ from qbu_crawler.server.scope import Scope, normalize_scope
 
 logger = logging.getLogger(__name__)
 
+# ── F011 §6.4.1 v1.1 — REPORT_TEMPLATE_VERSION env routing ───────────────────
+REPORT_TEMPLATE_DIR = Path(__file__).parent / "report_templates"
+_template_log = logging.getLogger(__name__)
+
+
+def _select_template(env_template_version: str | None = None) -> str:
+    """F011 §6.4.1 — Select attachment HTML template based on env var.
+
+    REPORT_TEMPLATE_VERSION:
+      - "v3" (default) → daily_report_v3.html.j2
+      - "v3_legacy" → daily_report_v3_legacy.html.j2 (rollback path)
+      - any other value → fallback to v3 + WARNING
+      - if mapped file missing → fallback to v3 + WARNING
+    """
+    version = env_template_version or os.environ.get("REPORT_TEMPLATE_VERSION", "v3")
+    template_map = {
+        "v3": "daily_report_v3.html.j2",
+        "v3_legacy": "daily_report_v3_legacy.html.j2",
+    }
+    if version not in template_map:
+        _template_log.warning(
+            "Unknown REPORT_TEMPLATE_VERSION=%s, fallback to v3", version
+        )
+        return template_map["v3"]
+    template_file = template_map[version]
+    template_path = REPORT_TEMPLATE_DIR / template_file
+    if not template_path.exists():
+        _template_log.warning(
+            "Template %s missing, fallback to v3", template_path
+        )
+        return template_map["v3"]
+    return template_file
+
+
 _SMTP_RETRY_ATTEMPTS = 3
 
 # ── Data Query ──────────────────────────────────────────────────────────────

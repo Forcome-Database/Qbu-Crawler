@@ -93,7 +93,10 @@ def _render_v3_html_string(snapshot, analytics):
         loader=FileSystemLoader(str(template_dir)),
         autoescape=select_autoescape(["html", "j2"]),
     )
-    template = env.get_template("daily_report_v3.html.j2")
+    # F011 §6.4.1 v1.1 — env-routed template selection (local import avoids
+    # any future circular dependency between report.py and report_html.py).
+    from qbu_crawler.server.report import _select_template
+    template = env.get_template(_select_template())
 
     css_path = template_dir / "daily_report_v3.css"
     js_path = template_dir / "daily_report_v3.js"
