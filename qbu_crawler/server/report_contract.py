@@ -320,7 +320,7 @@ def _build_bootstrap_digest(snapshot, analytics, kpis, action_priorities, issue_
         immediate_attention.append(f"需关注产品 {kpis.get('attention_product_count')} 个")
     return {
         "baseline_summary": {
-            "headline": "监控起点已建立",
+            "headline": "首日基线已建档，监控起点已建立",
             "product_count": context["product_count"],
             "review_count": context["review_count"],
             "coverage_rate": kpis.get("coverage_rate"),
@@ -402,6 +402,44 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
     return contract
 
 
+def _locked_action_from_diagnostic(diagnostic):
+    if not diagnostic:
+        return None
+    affected_products = _unique_ordered(
+        diagnostic.get("allowed_products") or diagnostic.get("affected_products") or []
+    )
+    evidence_review_ids = list(diagnostic.get("evidence_review_ids") or [])
+    text_evidence = diagnostic.get("text_evidence") or []
+    top_complaint = ""
+    if text_evidence:
+        top_complaint = text_evidence[0].get("display_body") or ""
+    full_action = (
+        diagnostic.get("recommended_action")
+        or diagnostic.get("ai_recommendation")
+        or diagnostic.get("recommendation")
+        or ""
+    )
+    short_title = (
+        diagnostic.get("short_title")
+        or diagnostic.get("label_display")
+        or diagnostic.get("feature_display")
+        or diagnostic.get("label_code")
+        or ""
+    )
+    return {
+        "label_code": diagnostic.get("label_code") or "",
+        "label_display": diagnostic.get("label_display") or diagnostic.get("feature_display") or "",
+        "short_title": short_title,
+        "full_action": full_action,
+        "affected_products": affected_products,
+        "affected_products_count": len(affected_products),
+        "evidence_count": diagnostic.get("evidence_count") or len(evidence_review_ids),
+        "evidence_review_ids": evidence_review_ids,
+        "top_complaint": top_complaint,
+        "source": "evidence_fallback",
+    }
+
+
 def merge_llm_copy_into_contract(contract, llm_copy):
     merged = copy.deepcopy(contract or {})
     merged.setdefault("action_priorities", [])
@@ -412,9 +450,13 @@ def merge_llm_copy_into_contract(contract, llm_copy):
         if item.get("label_code")
     }
     actions = []
+    seen_labels = set()
     for item in (llm_copy or {}).get("improvement_priorities") or []:
         action = dict(item)
         label_code = action.get("label_code")
+        if label_code and label_code in seen_labels:
+            warnings.append(f"priority {label_code} duplicated and skipped")
+            continue
         diagnostic = diagnostics.get(label_code) or {}
         allowed_products = set(diagnostic.get("allowed_products") or diagnostic.get("affected_products") or [])
         allowed_review_ids = set(diagnostic.get("evidence_review_ids") or [])
@@ -425,10 +467,15 @@ def merge_llm_copy_into_contract(contract, llm_copy):
         if diagnostic and valid_products and valid_evidence:
             action["source"] = "llm_rewrite"
         else:
-            action["source"] = "evidence_insufficient"
             warnings.append(
                 f"priority {label_code or '<missing>'} failed evidence validation"
             )
+            fallback = _locked_action_from_diagnostic(diagnostic)
+            if fallback:
+                actions.append(fallback)
+                if label_code:
+                    seen_labels.add(label_code)
+            continue
         action.setdefault("evidence_count", len(action.get("evidence_review_ids") or []))
         action.setdefault("affected_products_count", len(action.get("affected_products") or []))
         if not action.get("top_complaint"):
@@ -436,6 +483,8 @@ def merge_llm_copy_into_contract(contract, llm_copy):
             if text_evidence:
                 action["top_complaint"] = text_evidence[0].get("display_body") or ""
         actions.append(action)
+        if label_code:
+            seen_labels.add(label_code)
     merged["action_priorities"] = actions
     merged["validation_warnings"] = warnings
     return merged

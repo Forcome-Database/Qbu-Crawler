@@ -2,7 +2,9 @@ import openpyxl
 
 from qbu_crawler import config
 from qbu_crawler.server.report import generate_excel, render_email_full
+from qbu_crawler.server.report_common import normalize_deep_report_analytics
 from qbu_crawler.server.report_html import _render_v3_html_string
+from qbu_crawler.server.report_snapshot import _merge_post_normalize_mutations
 
 
 def _contract():
@@ -224,3 +226,31 @@ def test_html_bootstrap_changes_tab_reads_contract_digest():
     assert "低覆盖产品：B" in html
     assert "需关注产品 2 个" in html
     assert "较昨日" not in html
+
+
+def test_post_normalize_mutations_refresh_contract_with_real_snapshot():
+    normalized = normalize_deep_report_analytics({
+        "report_semantics": "bootstrap",
+        "kpis": {"health_index": 96.2},
+    })
+    raw = {
+        "report_semantics": "bootstrap",
+        "report_copy": {
+            "hero_headline": "Health index 96.2 is stable",
+            "executive_summary": "Summary",
+            "executive_bullets": [],
+            "improvement_priorities": [],
+        },
+    }
+    snapshot = {
+        "logical_date": "2026-04-28",
+        "products": [{"name": "Walton's Quick Patty Maker"}],
+        "reviews": [{"id": 101}],
+    }
+
+    _merge_post_normalize_mutations(normalized, raw, snapshot=snapshot)
+
+    context = normalized["report_user_contract"]["contract_context"]
+    assert context["snapshot_source"] == "provided"
+    assert context["product_count"] == 1
+    assert context["review_count"] == 1

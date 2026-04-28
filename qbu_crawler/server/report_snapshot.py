@@ -1315,7 +1315,7 @@ def generate_report_from_snapshot(snapshot, send_email=True, output_path=None):
         raise
 
 
-def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
+def _merge_post_normalize_mutations(normalized: dict, raw: dict, snapshot=None) -> None:
     """Copy post-normalize mutations from raw analytics onto the already-normalized copy.
 
     After generate_full_report_from_snapshot calls normalize_deep_report_analytics(),
@@ -1324,6 +1324,7 @@ def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
     on-disk JSON. Matches clusters by label_code (not position) to survive future
     reordering / filtering in normalize_deep_report_analytics.
     """
+    raw_report_copy = raw.get("report_copy")
     normalized["report_copy"] = raw.get("report_copy", normalized.get("report_copy"))
     if "window_review_ids" in raw:
         normalized["window_review_ids"] = raw["window_review_ids"]
@@ -1343,6 +1344,15 @@ def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
 
     from qbu_crawler.server.report_common import normalize_deep_report_analytics
     refreshed = normalize_deep_report_analytics(normalized)
+    if isinstance(raw_report_copy, dict):
+        refreshed["report_copy"] = raw_report_copy
+    if snapshot:
+        from qbu_crawler.server.report_contract import build_report_user_contract
+        refreshed["report_user_contract"] = build_report_user_contract(
+            snapshot=snapshot,
+            analytics=refreshed,
+            llm_copy=(refreshed.get("report_copy") or None),
+        )
     normalized.clear()
     normalized.update(refreshed)
 
@@ -1465,7 +1475,7 @@ def generate_full_report_from_snapshot(
         # so re-attach those post-normalization fields here instead of
         # normalizing a second time. Cluster deep_analysis is matched by
         # label_code (not position) to survive future reordering in normalize.
-        _merge_post_normalize_mutations(pre_normalized, analytics)
+        _merge_post_normalize_mutations(pre_normalized, analytics, snapshot=snapshot)
         Path(analytics_path).write_text(
             json.dumps(pre_normalized, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",

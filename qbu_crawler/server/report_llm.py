@@ -72,11 +72,43 @@ TONE_GUARDS_PROMPT = (
 SEVERE_WORDS = ("严重", "侵蚀", "重灾区")
 HEALTH_HIGH_THRESHOLD = 90.0
 SHORT_TITLE_MAX_CHARS = 20
+EXECUTIVE_BULLET_MAX_ITEMS = 5
 
 
 def _count_chinese_or_general_chars(text: str) -> int:
     """Return user-facing character count (treats CJK and ASCII as 1 unit each)."""
     return len(text or "")
+
+
+def normalize_llm_copy_shape(llm_copy):
+    result = copy.deepcopy(llm_copy or {})
+    if not isinstance(result.get("hero_headline"), str):
+        result["hero_headline"] = ""
+    if not isinstance(result.get("executive_summary"), str):
+        result["executive_summary"] = ""
+
+    bullets = result.get("executive_bullets")
+    if isinstance(bullets, str):
+        bullets = [bullets]
+    elif not isinstance(bullets, list):
+        bullets = []
+    result["executive_bullets"] = [
+        str(item)
+        for item in bullets[:EXECUTIVE_BULLET_MAX_ITEMS]
+        if item is not None
+    ]
+
+    priorities = result.get("improvement_priorities")
+    if not isinstance(priorities, list):
+        priorities = []
+    result["improvement_priorities"] = [
+        item for item in priorities if isinstance(item, dict)
+    ]
+
+    competitive_insight = result.get("competitive_insight")
+    if competitive_insight is not None and not isinstance(competitive_insight, str):
+        result["competitive_insight"] = str(competitive_insight)
+    return result
 
 
 def validate_llm_copy(copy: dict) -> dict:
@@ -365,6 +397,7 @@ def _build_insights_prompt_v3(analytics: dict, snapshot: dict | None = None) -> 
     )
     schema_block = (
         "\n\nJSON 输出格式要求 v3（严格遵守）：\n"
+        "executive_bullets <= 5; recommended 3. Do not enumerate every KPI; merge related metrics into concise decisions.\n"
         "{\n"
         '  "hero_headline": "...",\n'
         '  "executive_summary": "...",\n'
@@ -415,6 +448,7 @@ def generate_report_insights_with_validation(
             )
             raw = (response.choices[0].message.content or "").strip()
             copy = _parse_llm_response(raw)
+            copy = normalize_llm_copy_shape(copy)
             validate_llm_copy(copy)
             validate_tone_guards(copy, kpis)
             risk_products = (analytics.get("self") or {}).get("risk_products") or []

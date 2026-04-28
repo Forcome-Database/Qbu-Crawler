@@ -1135,6 +1135,14 @@ def normalize_deep_report_analytics(analytics):
 
     issue_cards = []
     for i, cluster in enumerate(normalized["self"]["top_negative_clusters"]):
+        text_evidence = []
+        for ex in cluster.get("example_reviews") or []:
+            display_body = ex.get("summary_text") or _summary_text(ex)
+            if display_body and len(text_evidence) < 3:
+                text_evidence.append({
+                    "review_id": ex.get("id") or ex.get("review_id"),
+                    "display_body": display_body,
+                })
         # Collect image URLs from example_reviews (max 3 unique)
         image_evidence = []
         seen_urls: set[str] = set()
@@ -1175,6 +1183,7 @@ def normalize_deep_report_analytics(analytics):
             "frequent_period": _format_frequent_period(cluster.get("first_seen"), cluster.get("last_seen")),
             "image_review_count": cluster.get("image_review_count", 0),
             "example_reviews": cluster.get("example_reviews") or [],
+            "text_evidence": text_evidence,
             "image_evidence": image_evidence,
             "ai_recommendation": ai_recommendation,
             "recommendation": ai_recommendation,
