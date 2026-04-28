@@ -76,11 +76,18 @@ class MeatYourMakerScraper(BaseScraper):
                 pass
 
         # 6. 评论提取（Task 6 实现）
+        self._last_review_extraction_meta = {}
         reviews = self._extract_all_reviews(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
-        data = {"product": result, "reviews": reviews}
+        data = {
+            "product": result,
+            "reviews": reviews,
+            "scrape_meta": {
+                "review_extraction": self._last_review_extraction_meta,
+            },
+        }
         self._validate_product(data, url)
         return data
 
@@ -216,21 +223,31 @@ class MeatYourMakerScraper(BaseScraper):
 
     def _extract_all_reviews(self, tab, review_limit: int | None = None) -> list:
         """逐页翻页提取全部评论（Reviews 已在 scrape() 中展开）"""
+        self._last_review_extraction_meta = {
+            "stop_reason": "unknown",
+            "pages_seen": 0,
+            "review_limit": review_limit,
+            "extracted_review_count": 0,
+        }
         if not self._wait_for_shadow_root(tab):
+            self._last_review_extraction_meta["stop_reason"] = "no_shadow_root"
             return []
 
         all_reviews = []
         seen = set()
         max_pages = 100
 
-        for _ in range(max_pages):
+        for page_num in range(max_pages):
+            self._last_review_extraction_meta["pages_seen"] = page_num + 1
             page_reviews = self._extract_page_reviews(tab)
             for r in page_reviews:
                 key = (r.get("author", ""), r.get("headline", ""))
                 if key not in seen:
                     seen.add(key)
                     all_reviews.append(r)
+                    self._last_review_extraction_meta["extracted_review_count"] = len(all_reviews)
                     if review_limit and review_limit > 0 and len(all_reviews) >= review_limit:
+                        self._last_review_extraction_meta["stop_reason"] = "review_limit"
                         return all_reviews[:review_limit]
 
             has_next = tab.run_js("""
@@ -241,8 +258,11 @@ class MeatYourMakerScraper(BaseScraper):
                 return false;
             """)
             if not has_next:
+                self._last_review_extraction_meta["stop_reason"] = "no_next"
                 break
             time.sleep(2)
+        else:
+            self._last_review_extraction_meta["stop_reason"] = "max_pages"
 
         if review_limit and review_limit > 0:
             return all_reviews[:review_limit]

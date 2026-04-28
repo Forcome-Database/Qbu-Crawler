@@ -362,7 +362,14 @@ def downgrade_report_phase_on_deadletter(conn, run_id: int) -> bool:
         (run_id,),
     )
     conn.commit()
-    return result.rowcount > 0
+    changed = result.rowcount > 0
+    if changed:
+        try:
+            from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db
+            update_analytics_delivery_from_db(conn, run_id)
+        except Exception:
+            logger.exception("downgrade_report_phase_on_deadletter: manifest refresh failed")
+    return changed
 
 
 def reconcile_full_sent_deadletters(conn, *, limit: int = 50) -> int:

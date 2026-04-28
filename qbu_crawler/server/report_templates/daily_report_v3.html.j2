@@ -168,7 +168,6 @@
       {% if analytics.report_semantics == "bootstrap" or change_digest.view_state == "bootstrap" %}
       {% set bd = (analytics.report_user_contract or {}).get("bootstrap_digest") or {} %}
       {% set bs = bd.baseline_summary or {} %}
-      {% set dq = bd.data_quality or {} %}
       {% set bs_product_count = bs.get("product_count") %}
       {% set bs_review_count = bs.get("review_count") %}
       {% set bs_coverage_rate = bs.get("coverage_rate") %}
@@ -181,9 +180,6 @@
           {% if bs_coverage_rate is not none %}覆盖率：{{ "%.0f"|format(bs_coverage_rate * 100) }}%{% endif %}
           {% if bs_translation_rate is not none %}{% if bs_coverage_rate is not none %} · {% endif %}翻译完成率：{{ "%.0f"|format(bs_translation_rate * 100) }}%{% endif %}
         </div>
-        {% endif %}
-        {% if dq.low_coverage_products %}
-        <div>低覆盖产品：{{ dq.low_coverage_products | join("、") }}</div>
         {% endif %}
         {% if bd.immediate_attention %}
         <ul>
@@ -362,12 +358,12 @@
           <div class="issue-deep-analysis">
             {% if card.failure_modes %}
             <div><strong>失效模式</strong>
-              <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+              <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item.mode if item.mode is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
             </div>
             {% endif %}
             {% if card.root_causes %}
             <div><strong>可能根因</strong>
-              <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+              <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item.cause if item.cause is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
             </div>
             {% endif %}
             {% if card.user_workarounds %}
@@ -429,12 +425,12 @@
             <div class="issue-deep-analysis">
               {% if card.failure_modes %}
               <div><strong>失效模式</strong>
-                <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+                <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item.mode if item.mode is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
               </div>
               {% endif %}
               {% if card.root_causes %}
               <div><strong>可能根因</strong>
-                <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+                <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item.cause if item.cause is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
               </div>
               {% endif %}
               {% if card.user_workarounds %}

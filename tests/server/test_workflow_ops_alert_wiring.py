@@ -93,10 +93,11 @@ def test_workflow_ops_alert_uses_p0_p1_p2_evaluator(tmp_path, monkeypatch):
 
     captured = {"alert_called": False}
 
-    def spy_alert(*, run_id, logical_date, quality, severity=""):
+    def spy_alert(*, run_id, logical_date, quality, severity="", log_path=None):
         captured["alert_called"] = True
         captured["severity"] = severity
         captured["quality"] = quality
+        captured["log_path"] = log_path
         # Short-circuit the rest of _advance_run via the outer except.
         raise RuntimeError("__short_circuit__")
 

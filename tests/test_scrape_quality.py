@@ -86,10 +86,11 @@ def test_data_quality_alert_integration_sends_email(tmp_path, monkeypatch):
     models.init_db()
 
     captured = {}
-    def fake_send_email(*, recipients, subject, body_text, body_html):
+    def fake_send_email(*, recipients, subject, body_text, body_html, attachment_paths=None):
         captured["recipients"] = recipients
         captured["subject"] = subject
         captured["body_html"] = body_html
+        captured["attachment_paths"] = attachment_paths or []
         return {"success": True, "recipients": recipients}
 
     # Patch the exact `report.send_email` the workflow helper imports lazily
@@ -100,16 +101,45 @@ def test_data_quality_alert_integration_sends_email(tmp_path, monkeypatch):
                "missing_review_count": 0,
                "missing_rating_ratio": 0.20, "missing_stock_ratio": 0.0,
                "missing_review_count_ratio": 0.0}
+    log_path = tmp_path / "log-run-42-20260419.log"
+    log_path.write_text("run log", encoding="utf-8")
 
     workflows._send_data_quality_alert(
-        run_id=42, logical_date="2026-04-19", quality=quality)
+        run_id=42, logical_date="2026-04-19", quality=quality, log_path=str(log_path))
 
     assert captured["recipients"] == ["ops@example.com"]
-    assert "数据质量告警" in captured["subject"]
+    assert "运维日志" in captured["subject"]
+    assert "采集缺失率超阈值" not in captured["subject"]
     assert "2026-04-19" in captured["subject"]
+    assert captured["attachment_paths"] == [str(log_path)]
     # Template rendered with the threshold-driven highlight
     assert "20.0%" in captured["body_html"]  # rating ratio as %
-    assert "QBU 采集数据质量告警" in captured["body_html"]
+    assert str(log_path) in captured["body_html"]
+    assert "QBU 日报运行运维日志" in captured["body_html"]
+
+
+def test_ops_run_log_email_does_not_fallback_to_business_recipients(monkeypatch):
+    from qbu_crawler import config
+    from qbu_crawler.server import workflows
+    from qbu_crawler.server import report as _report
+
+    monkeypatch.setattr(config, "SCRAPE_QUALITY_ALERT_RECIPIENTS", [])
+
+    called = {"value": False}
+
+    def fake_send_email(*args, **kwargs):
+        called["value"] = True
+
+    monkeypatch.setattr(_report, "send_email", fake_send_email)
+
+    workflows._send_data_quality_alert(
+        run_id=42,
+        logical_date="2026-04-19",
+        quality={"total": 1},
+        log_path="data/log-run-42-20260419.log",
+    )
+
+    assert called["value"] is False
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -158,7 +188,7 @@ def test_email_data_quality_renders_with_legacy_dict_no_completeness():
         "missing_review_count_ratio": 0.0,
     }
     html = _render_data_quality_template(legacy_quality)
-    assert "QBU 采集数据质量告警" in html
+    assert "QBU 日报运行运维日志" in html
     # Optional v3 panels must NOT render when the keys are absent
     assert "采集完整率" not in html
     assert "P0 · 零采集 SKU" not in html

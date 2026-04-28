@@ -191,6 +191,7 @@ class BassProScraper(BaseScraper):
             result["review_count"] = self._to_int(agg.get("reviewCount"))
 
         # 5. BV 评论数据（从 Shadow DOM 提取）
+        self._last_review_extraction_meta = {}
         reviews = self._extract_reviews_from_dom(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
@@ -206,7 +207,13 @@ class BassProScraper(BaseScraper):
 
         self._increment_and_delay(tab)
 
-        data = {"product": result, "reviews": reviews}
+        data = {
+            "product": result,
+            "reviews": reviews,
+            "scrape_meta": {
+                "review_extraction": self._last_review_extraction_meta,
+            },
+        }
         self._validate_product(data, url)
         return data
 
@@ -344,6 +351,12 @@ class BassProScraper(BaseScraper):
         from qbu_crawler.config import MAX_REVIEWS
         effective_limit = review_limit if review_limit and review_limit > 0 else MAX_REVIEWS
         max_clicks = 200  # 安全上限
+        meta = {
+            "stop_reason": "unknown",
+            "load_more_clicks": 0,
+            "loaded_section_count": 0,
+            "review_limit": review_limit,
+        }
         for i in range(max_clicks):
             result = tab.run_js("""
                 const container = document.querySelector('[data-bv-show="reviews"]');
@@ -359,13 +372,17 @@ class BassProScraper(BaseScraper):
                 return JSON.stringify({clicked: false, count: count});
             """)
             data = json.loads(result) if isinstance(result, str) else (result or {})
+            meta["loaded_section_count"] = int(data.get("count") or 0)
             if not data.get("clicked"):
+                meta["stop_reason"] = "load_more_missing"
                 break
+            meta["load_more_clicks"] = i + 1
             prev_count = data.get("count", 0)
 
             # 检查是否达到评论数上限
             if effective_limit > 0 and prev_count >= effective_limit:
                 logger.info(f"已加载 {prev_count} 条评论，达到上限 {effective_limit}，停止加载更多")
+                meta["stop_reason"] = "review_limit"
                 break
 
             # 等待评论数量增加（最多等 5 秒）
@@ -378,7 +395,14 @@ class BassProScraper(BaseScraper):
                     return c.shadowRoot.querySelectorAll('section').length;
                 """)
                 if isinstance(new_count, int) and new_count > prev_count:
+                    meta["loaded_section_count"] = new_count
                     break
+            if effective_limit > 0 and meta["loaded_section_count"] >= effective_limit:
+                meta["stop_reason"] = "review_limit"
+                break
+        else:
+            meta["stop_reason"] = "max_clicks"
+        return meta
 
     def _scroll_all_reviews(self, tab):
         """批量滚动评论区，触发图片懒加载。
@@ -444,12 +468,15 @@ class BassProScraper(BaseScraper):
 
     def _extract_reviews_from_dom(self, tab, review_limit: int | None = None) -> list:
         """从 BV Shadow DOM 提取所有评论数据（分批提取，避免 JS 超时）"""
+        load_meta = {}
         try:
             self._click_reviews_tab(tab)
-            self._load_all_reviews(tab, review_limit=review_limit)
+            load_meta = self._load_all_reviews(tab, review_limit=review_limit)
             self._scroll_all_reviews(tab)
         except Exception as e:
             logger.warning(f"评论加载/滚动阶段异常，尝试提取已加载的评论: {e}")
+            load_meta["stop_reason"] = load_meta.get("stop_reason") or "load_error"
+            load_meta["load_error"] = str(e)
 
         # 先获取评论总数
         total = tab.run_js("""
@@ -457,8 +484,15 @@ class BassProScraper(BaseScraper):
             if (!c || !c.shadowRoot) return 0;
             return c.shadowRoot.querySelectorAll('section').length;
         """) or 0
+        load_meta["loaded_section_count"] = int(total or load_meta.get("loaded_section_count") or 0)
 
         if not total:
+            self._last_review_extraction_meta = {
+                **load_meta,
+                "stop_reason": load_meta.get("stop_reason") or "no_reviews_found",
+                "pages_seen": None,
+                "extracted_review_count": 0,
+            }
             return []
 
         # 分批提取，每批 50 个 section，避免单次 JS 执行超时
@@ -573,5 +607,10 @@ class BassProScraper(BaseScraper):
                     all_reviews.append(r)
 
         if review_limit and review_limit > 0:
-            return all_reviews[:review_limit]
+            all_reviews = all_reviews[:review_limit]
+        self._last_review_extraction_meta = {
+            **load_meta,
+            "pages_seen": None,
+            "extracted_review_count": len(all_reviews),
+        }
         return all_reviews

@@ -181,7 +181,7 @@ def test_bootstrap_digest_forbids_incremental_terms():
     assert "监控起点" in text or contract["bootstrap_digest"]["baseline_summary"]
 
 
-def test_bootstrap_digest_contains_baseline_and_data_quality():
+def test_bootstrap_digest_contains_baseline_and_excludes_ops_diagnostics():
     snapshot = {
         "logical_date": "2026-04-28",
         "products": [{"name": "A"}, {"name": "B"}],
@@ -208,9 +208,9 @@ def test_bootstrap_digest_contains_baseline_and_data_quality():
     assert digest["baseline_summary"]["review_count"] == 3
     assert digest["baseline_summary"]["coverage_rate"] == 0.75
     assert digest["baseline_summary"]["translation_completion_rate"] == 1.0
-    assert digest["data_quality"]["historical_backfill_ratio"] == 0.8
-    assert digest["data_quality"]["estimated_date_ratio"] == 0.2
-    assert digest["data_quality"]["low_coverage_products"] == ["B"]
+    assert "data_quality" not in digest
+    assert "low_coverage_products" not in str(digest)
+    assert "estimated_date_ratio" not in str(digest)
     assert digest["immediate_attention"]
 
 

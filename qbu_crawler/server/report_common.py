@@ -1261,5 +1261,8 @@ def normalize_deep_report_analytics(analytics):
         snapshot={},
         analytics=normalized,
     )
+    contract_bullets = normalized["report_user_contract"].get("executive_bullets") or []
+    if contract_bullets:
+        normalized["report_copy"]["executive_bullets"] = contract_bullets[:5]
 
     return normalized

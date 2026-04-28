@@ -347,10 +347,14 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 ## 2026-04-28 测试7 P1 报表契约治理增量
 
 - `qbu_crawler/server/report_contract.py` — 独立构建 `report_user_contract.v1`，收口 metric definitions、evidence pack、LLM copy merge、竞品启示、bootstrap digest 和 delivery contract
+- `qbu_crawler/server/run_log.py` — 将采集完整率、低覆盖 SKU、通知 deadletter、估算日期等运行诊断写入 `data/log-run-<run_id>-<yyyymmdd>.log`
+- `qbu_crawler/server/report_manifest.py` — 汇总 artifacts、业务邮件送达、workflow 通知送达、deadletter 和内部状态，并回写 analytics delivery
 - `qbu_crawler/server/report_common.py` — 归一化阶段挂载临时 contract，并保留已有 contract-only 字段
 - `qbu_crawler/server/report_html.py` — HTML 最终渲染前用真实 snapshot 刷新 contract，并同步诊断卡、heatmap、行动建议兼容字段
 - `qbu_crawler/server/report.py` — Excel / 邮件优先消费 contract 的行动建议、竞品启示和 KPI
+- `qbu_crawler/server/workflows.py` — full report workflow 追加 run log，运维异常仅通过技术邮件和日志追踪，不进入用户业务报告
 - `tests/server/test_report_contract.py` — contract builder、指标定义、证据包、竞品启示、bootstrap digest、delivery 语义回归
 - `tests/server/test_report_contract_llm.py` — LLM evidence-only prompt 和 copy merge 校验回归
 - `tests/server/test_report_contract_renderers.py` — HTML / Excel / 邮件 contract-only 消费回归
 - `tests/server/test_test7_artifact_replay.py` 与 `tests/fixtures/report_replay/` — 测试7脱敏最小 artifact replay 防回归
+- `tests/server/test_run_log.py` 与 `tests/server/test_report_manifest.py` — 测试9 run log 与 P2 manifest/delivery 回写防回归

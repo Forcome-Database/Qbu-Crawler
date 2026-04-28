@@ -259,6 +259,42 @@ def test_issue_card_renders_image_evidence_and_deep_analysis():
     assert "出厂抽检不足" in html
 
 
+def test_issue_card_deep_analysis_dicts_render_as_text_not_python_repr():
+    cluster = {
+        "label_code": "structure_design",
+        "label_display": "Structure",
+        "review_count": 3,
+        "severity": "high",
+        "affected_product_count": 1,
+        "example_reviews": [{
+            "id": 501,
+            "rating": 2,
+            "body_cn": "body",
+        }],
+        "deep_analysis": {
+            "failure_modes": [{
+                "mode": "Size is not adjustable",
+                "frequency": 2,
+                "severity": "major",
+                "example_quote": "too thick",
+            }],
+            "root_causes": [{
+                "cause": "Single mold spec",
+                "evidence": "many users mention thickness",
+                "confidence": "high",
+            }],
+        },
+    }
+    analytics = _base_analytics(top_negative_clusters=[cluster])
+
+    html = render_attachment_html(_base_snapshot(), analytics)
+
+    assert "{&#39;mode&#39;" not in html
+    assert "{'mode'" not in html
+    assert "Size is not adjustable" in html
+    assert "Single mold spec" in html
+
+
 def test_issue_image_evidence_has_bounded_css():
     css_path = Path("qbu_crawler/server/report_templates/daily_report_v3.css")
     css = css_path.read_text(encoding="utf-8")

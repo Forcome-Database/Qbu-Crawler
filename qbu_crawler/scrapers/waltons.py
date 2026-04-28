@@ -122,11 +122,18 @@ class WaltonsScraper(BaseScraper):
                 )
 
         # 3. Extract reviews
+        self._last_review_extraction_meta = {}
         reviews = self._extract_all_reviews(tab, ld_reviews_raw, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
         self._increment_and_delay(tab)
-        data = {"product": result, "reviews": reviews}
+        data = {
+            "product": result,
+            "reviews": reviews,
+            "scrape_meta": {
+                "review_extraction": self._last_review_extraction_meta,
+            },
+        }
         self._validate_product(data, url)
         return data
 
@@ -317,6 +324,12 @@ class WaltonsScraper(BaseScraper):
 
     def _extract_all_reviews(self, tab, ld_reviews_raw: list, review_limit: int | None = None) -> list:
         """Extract all reviews: try TrustSpot DOM first, fallback to JSON-LD."""
+        self._last_review_extraction_meta = {
+            "stop_reason": "unknown",
+            "pages_seen": 0,
+            "review_limit": review_limit,
+            "extracted_review_count": 0,
+        }
         trustspot_loaded = self._wait_for_trustspot(tab)
         effective_limit = review_limit if review_limit and review_limit > 0 else MAX_REVIEWS
 
@@ -324,7 +337,11 @@ class WaltonsScraper(BaseScraper):
             logger.info("TrustSpot not loaded, falling back to JSON-LD reviews")
             parsed_reviews = self._parse_ld_reviews(ld_reviews_raw)
             if effective_limit > 0:
-                return parsed_reviews[:effective_limit]
+                parsed_reviews = parsed_reviews[:effective_limit]
+            self._last_review_extraction_meta.update({
+                "stop_reason": "trustspot_not_loaded_jsonld_fallback",
+                "extracted_review_count": len(parsed_reviews),
+            })
             return parsed_reviews
 
         all_reviews = []
@@ -332,6 +349,7 @@ class WaltonsScraper(BaseScraper):
         max_pages = 100
 
         for page_num in range(max_pages):
+            self._last_review_extraction_meta["pages_seen"] = page_num + 1
             page_reviews = self._extract_page_reviews(tab)
             new_count = 0
             for r in page_reviews:
@@ -341,6 +359,7 @@ class WaltonsScraper(BaseScraper):
                     seen.add(key)
                     all_reviews.append(r)
                     new_count += 1
+                    self._last_review_extraction_meta["extracted_review_count"] = len(all_reviews)
 
             logger.info(
                 f"  [TrustSpot] 第 {page_num + 1} 页: "
@@ -352,6 +371,7 @@ class WaltonsScraper(BaseScraper):
             # 因此不能依赖按钮是否存在来终止，必须用"本页无新增评论"来判断已翻完。
             if new_count == 0:
                 logger.info("  [TrustSpot] 本页无新增评论，已翻完所有页")
+                self._last_review_extraction_meta["stop_reason"] = "no_new_reviews"
                 break
 
             # Check MAX_REVIEWS limit
@@ -360,6 +380,10 @@ class WaltonsScraper(BaseScraper):
                     f"  [TrustSpot] 已达评论上限 {effective_limit}，停止翻页"
                 )
                 all_reviews = all_reviews[:effective_limit]
+                self._last_review_extraction_meta.update({
+                    "stop_reason": "review_limit",
+                    "extracted_review_count": len(all_reviews),
+                })
                 break
 
             # Try to click next page
@@ -369,8 +393,11 @@ class WaltonsScraper(BaseScraper):
                 return false;
             """)
             if not has_next:
+                self._last_review_extraction_meta["stop_reason"] = "no_next"
                 break
             time.sleep(2)
+        else:
+            self._last_review_extraction_meta["stop_reason"] = "max_pages"
 
         return all_reviews
 

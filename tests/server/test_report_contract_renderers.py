@@ -210,11 +210,6 @@ def test_html_bootstrap_changes_tab_reads_contract_digest():
             "coverage_rate": 0.75,
             "translation_completion_rate": 1.0,
         },
-        "data_quality": {
-            "historical_backfill_ratio": 0.8,
-            "estimated_date_ratio": 0.2,
-            "low_coverage_products": ["B"],
-        },
         "immediate_attention": ["需关注产品 2 个"],
     }
     analytics = {"report_semantics": "bootstrap", "report_user_contract": contract}
@@ -223,7 +218,7 @@ def test_html_bootstrap_changes_tab_reads_contract_digest():
 
     assert "监控起点已建立" in html
     assert "当前截面：2 款产品 / 3 条评论" in html
-    assert "低覆盖产品：B" in html
+    assert "低覆盖产品：B" not in html
     assert "需关注产品 2 个" in html
     assert "较昨日" not in html
 

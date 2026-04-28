@@ -658,6 +658,19 @@ class WorkflowWorker:
                 )
             _clear_translation_progress(run_id)
             run = freeze_report_snapshot(run_id, now=now)
+            try:
+                from qbu_crawler.server.run_log import append_run_log
+                append_run_log(
+                    run_id=run_id,
+                    logical_date=run["logical_date"],
+                    event="snapshot_frozen",
+                    lines=[
+                        f"snapshot_path={run.get('snapshot_path')}",
+                        f"snapshot_hash={run.get('snapshot_hash')}",
+                    ],
+                )
+            except Exception:
+                logger.exception("WorkflowWorker: run log snapshot entry failed")
             changed = True
 
         # ── 数据质量统计与独立告警（P008 Task 6 + F011 §4.4.1） ──────
@@ -684,6 +697,20 @@ class WorkflowWorker:
                     snapshot.get("reviews") or [], run.get("logical_date") or "",
                 )
                 models.update_scrape_quality(run_id, quality)
+                log_path = None
+                try:
+                    from qbu_crawler.server.run_log import (
+                        append_run_log,
+                        build_quality_log_lines,
+                    )
+                    log_path = append_run_log(
+                        run_id=run_id,
+                        logical_date=run["logical_date"],
+                        event="scrape_quality_summary",
+                        lines=build_quality_log_lines(snapshot, quality, task_rows),
+                    )
+                except Exception:
+                    logger.exception("WorkflowWorker: run log quality entry failed")
                 triggered, severity = _evaluate_ops_alert_triggers(quality)
                 if triggered:
                     _send_data_quality_alert(
@@ -691,6 +718,7 @@ class WorkflowWorker:
                         logical_date=run["logical_date"],
                         quality=quality,
                         severity=severity,
+                        log_path=str(log_path) if log_path else None,
                     )
             except Exception:
                 logger.exception(
@@ -815,6 +843,40 @@ class WorkflowWorker:
                 finished_at=now,
                 error=None,
             )
+            try:
+                from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db
+                from qbu_crawler.server.run_log import append_run_log
+                conn = models.get_conn()
+                try:
+                    manifest = update_analytics_delivery_from_db(
+                        conn,
+                        run_id=run_id,
+                        analytics_path=analytics_path,
+                    )
+                finally:
+                    conn.close()
+                lines = [
+                    f"excel_path={excel_path}",
+                    f"html_path={html_path}",
+                    f"analytics_path={analytics_path}",
+                    f"email_success={bool(email_ok)}",
+                ]
+                if manifest:
+                    delivery = manifest.get("delivery") or {}
+                    lines.extend([
+                        f"report_generated={delivery.get('report_generated')}",
+                        f"workflow_notification_delivered={delivery.get('workflow_notification_delivered')}",
+                        f"deadletter_count={delivery.get('deadletter_count')}",
+                        f"internal_status={delivery.get('internal_status')}",
+                    ])
+                append_run_log(
+                    run_id=run_id,
+                    logical_date=run["logical_date"],
+                    event="full_report_completed",
+                    lines=lines,
+                )
+            except Exception:
+                logger.exception("WorkflowWorker: final manifest/log refresh failed")
             _maybe_trigger_ai_digest(run_id, run, snapshot, full_report)
             _clear_translation_progress(run_id)
             _clear_report_attempts(run_id)
@@ -856,12 +918,15 @@ def _send_data_quality_alert(
     logical_date: str,
     quality: dict,
     severity: str = "",
+    log_path: str | None = None,
 ) -> None:
-    """独立于业务报告的数据质量告警 (F011 §4.4.1 — severity 接入)."""
+    """独立于业务报告的运行运维日志通知。"""
     from jinja2 import Environment, FileSystemLoader, select_autoescape
     from pathlib import Path
     from qbu_crawler.server import report as _report
-    from qbu_crawler.server import report_snapshot as _rs
+    from qbu_crawler.server.run_log import build_ops_log_summary
+
+    ops_summary = build_ops_log_summary(quality, log_path or "")
 
     template_dir = Path(__file__).parent / "report_templates"
     env = Environment(
@@ -874,25 +939,27 @@ def _send_data_quality_alert(
         quality=quality,
         threshold=config.SCRAPE_QUALITY_ALERT_RATIO,
         severity=severity,
+        ops_summary=ops_summary,
+        run_log_path=log_path,
     )
 
-    recipients = (
-        config.SCRAPE_QUALITY_ALERT_RECIPIENTS
-        or _rs.get_email_recipients()
-    )
+    recipients = config.SCRAPE_QUALITY_ALERT_RECIPIENTS
     if not recipients:
-        logger.warning("Data-quality alert skipped: no recipients configured")
+        logger.warning("Ops run-log email skipped: no technical recipients configured")
         return
 
     severity_prefix = f"[{severity}] " if severity else ""
     subject = (
-        f"{severity_prefix}[数据质量告警] 采集缺失率超阈值 "
+        f"{severity_prefix}[运维日志] 日报运行需关注 "
         f"{logical_date} (run #{run_id})"
     )
     try:
         _report.send_email(
-            recipients=recipients, subject=subject,
-            body_text=subject, body_html=body_html,
+            recipients=recipients,
+            subject=subject,
+            body_text=ops_summary,
+            body_html=body_html,
+            attachment_paths=[log_path] if log_path else None,
         )
     except Exception:
         logger.exception("Data-quality alert email send failed")

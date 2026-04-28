@@ -188,6 +188,7 @@ class TaskManager:
         urls = task.params["urls"]
         products_saved = 0
         reviews_saved = 0
+        product_summaries = []
         scraper = None
 
         try:
@@ -225,6 +226,16 @@ class TaskManager:
 
                     products_saved += 1
                     reviews_saved += rc
+                    product_summaries.append({
+                        "url": url,
+                        "site": product.get("site"),
+                        "sku": product.get("sku"),
+                        "name": product.get("name"),
+                        "site_review_count": product.get("review_count"),
+                        "extracted_review_count": len(reviews),
+                        "saved_review_count": rc,
+                        "scrape_meta": data.get("scrape_meta") or product.get("scrape_meta") or {},
+                    })
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
@@ -246,7 +257,11 @@ class TaskManager:
                 task.status = TaskStatus.cancelled
             else:
                 task.status = TaskStatus.completed
-                task.result = {"products_saved": products_saved, "reviews_saved": reviews_saved}
+                task.result = {
+                    "products_saved": products_saved,
+                    "reviews_saved": reviews_saved,
+                    "product_summaries": product_summaries,
+                }
 
         except Exception as e:
             task.status = TaskStatus.failed
@@ -296,6 +311,7 @@ class TaskManager:
 
             products_saved = 0
             reviews_saved = 0
+            product_summaries = []
 
             for i, url in enumerate(urls):
                 if flag.is_set():
@@ -325,6 +341,16 @@ class TaskManager:
 
                     products_saved += 1
                     reviews_saved += rc
+                    product_summaries.append({
+                        "url": url,
+                        "site": product.get("site"),
+                        "sku": product.get("sku"),
+                        "name": product.get("name"),
+                        "site_review_count": product.get("review_count"),
+                        "extracted_review_count": len(reviews),
+                        "saved_review_count": rc,
+                        "scrape_meta": data.get("scrape_meta") or product.get("scrape_meta") or {},
+                    })
                     task.progress["completed"] = i + 1
 
                 except Exception as e:
@@ -346,7 +372,11 @@ class TaskManager:
                 task.status = TaskStatus.cancelled
             else:
                 task.status = TaskStatus.completed
-                task.result = {"products_saved": products_saved, "reviews_saved": reviews_saved}
+                task.result = {
+                    "products_saved": products_saved,
+                    "reviews_saved": reviews_saved,
+                    "product_summaries": product_summaries,
+                }
 
         except Exception as e:
             task.status = TaskStatus.failed

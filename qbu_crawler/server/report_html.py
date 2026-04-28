@@ -90,6 +90,8 @@ def _render_v3_html_string(snapshot, analytics):
         normalized["_heatmap_data"] = contract["heatmap"]
     if contract.get("action_priorities"):
         normalized.setdefault("report_copy", {})["improvement_priorities"] = contract["action_priorities"]
+    if contract.get("executive_bullets"):
+        normalized.setdefault("report_copy", {})["executive_bullets"] = contract["executive_bullets"][:5]
 
     # F011 §4.2.6 — annotate reviews for panorama filter chrome (idempotent)
     _annotate_reviews(snapshot.get("reviews") or [], snapshot.get("logical_date"))
