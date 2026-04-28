@@ -1,0 +1,131 @@
+{
+  "report_semantics": "bootstrap",
+  "mode": "bootstrap",
+  "logical_date": "2026-04-28",
+  "kpis": {
+    "health_index": 82.5,
+    "own_positive_review_rows": 8,
+    "own_review_rows": 12,
+    "own_negative_review_rate": 0.1667,
+    "own_negative_review_rate_display": "16.7%",
+    "own_product_count": 2,
+    "competitor_product_count": 1,
+    "ingested_review_rows": 3,
+    "attention_product_count": 2,
+    "coverage_rate": 0.72,
+    "translation_completion_rate": 1.0,
+    "historical_backfill_ratio": 0.76,
+    "estimated_date_ratio": 0.15
+  },
+  "data_quality": {
+    "low_coverage_products": [".75 HP Grinder (#12)"]
+  },
+  "self": {
+    "risk_products": [],
+    "product_status": [
+      {"product_name": "Walton's Quick Patty Maker", "status_lamp": "yellow", "primary_concern": "结构设计"},
+      {"product_name": ".75 HP Grinder (#12)", "status_lamp": "red", "primary_concern": "质量稳定性"}
+    ],
+    "top_negative_clusters": [
+      {
+        "label_code": "structure_design",
+        "label_display": "结构设计",
+        "feature_display": "结构设计",
+        "review_count": 1,
+        "severity": "high",
+        "severity_display": "高",
+        "affected_product_count": 1,
+        "affected_products": ["Walton's Quick Patty Maker"],
+        "first_seen": "2026-04-18",
+        "last_seen": "2026-04-18",
+        "example_reviews": [
+          {"id": 101, "rating": 1, "headline_cn": "肉饼尺寸不稳定", "body_cn": "肉饼太大，成型后还要手工修整。", "images": ["https://example.test/review-101.jpg"]}
+        ],
+        "deep_analysis": {
+          "actionable_summary": "复核成型尺寸并验证肉饼成型路径。",
+          "failure_modes": [{"name": "尺寸不匹配"}],
+          "root_causes": [{"name": "模具约束不足"}],
+          "user_workarounds": ["手工修整"]
+        }
+      },
+      {
+        "label_code": "quality_stability",
+        "label_display": "质量稳定性",
+        "feature_display": "质量稳定性",
+        "review_count": 1,
+        "severity": "medium",
+        "severity_display": "中",
+        "affected_product_count": 1,
+        "affected_products": [".75 HP Grinder (#12)"],
+        "first_seen": "2026-04-20",
+        "last_seen": "2026-04-20",
+        "example_reviews": [
+          {"id": 102, "rating": 2, "headline_cn": "开关偶发失灵", "body_cn": "开关用了几次后偶尔无法启动。", "images": []}
+        ],
+        "deep_analysis": {
+          "actionable_summary": "复测开关耐久并回溯对应批次。",
+          "failure_modes": [{"name": "控制开关失效"}],
+          "root_causes": [{"name": "出厂抽检覆盖不足"}],
+          "user_workarounds": ["反复重启"]
+        }
+      }
+    ]
+  },
+  "competitor": {
+    "positive_patterns": [
+      {"summary_cn": "竞品安装步骤清晰", "review_ids": [202], "product_count": 1, "sample_size": 4}
+    ],
+    "negative_opportunities": [
+      {"body_cn": "竞品包装容易破损", "review_ids": [201], "product_count": 1, "sample_size": 3}
+    ],
+    "benchmark_examples": [],
+    "weakness_opportunities": [],
+    "gap_analysis": []
+  },
+  "report_copy": {
+    "hero_headline": "基线样本已建立，优先关注结构设计与开关稳定性。",
+    "executive_bullets": [
+      "本次为监控起点，后续报告再展示对比变化。",
+      "结构设计和质量稳定性已有明确证据链。",
+      "竞品包装短板可转化为自有包装验证机会。"
+    ],
+    "improvement_priorities": [
+      {
+        "label_code": "structure_design",
+        "label_display": "结构设计",
+        "short_title": "复核结构尺寸",
+        "full_action": "复核成型尺寸并验证肉饼成型路径。",
+        "affected_products": ["Walton's Quick Patty Maker"],
+        "affected_products_count": 1,
+        "top_complaint": "肉饼太大，成型后还要手工修整。",
+        "evidence_count": 1,
+        "evidence_review_ids": [101]
+      },
+      {
+        "label_code": "quality_stability",
+        "label_display": "质量稳定性",
+        "short_title": "复测开关耐久",
+        "full_action": "复测开关耐久并回溯对应批次。",
+        "affected_products": [".75 HP Grinder (#12)"],
+        "affected_products_count": 1,
+        "top_complaint": "开关用了几次后偶尔无法启动。",
+        "evidence_count": 1,
+        "evidence_review_ids": [102]
+      }
+    ]
+  },
+  "_heatmap_data": {
+    "x_labels": ["结构设计"],
+    "x_label_codes": ["structure_design"],
+    "y_labels": ["Walton's Quick Patty"],
+    "y_items": [{"product_name": "Walton's Quick Patty Maker", "display_label": "Walton's Quick Patty"}],
+    "z": [[{"score": 0.2, "sample_size": 1, "score_display": "20%", "color_class": "heatmap-red", "tooltip": "差评集中在肉饼尺寸", "top_review_excerpt": "肉饼太大"}]]
+  },
+  "delivery": {
+    "report_generated": true,
+    "email_delivered": true,
+    "workflow_notification_delivered": false,
+    "deadletter_count": 3,
+    "internal_status": "full_sent_local"
+  }
+}

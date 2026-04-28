@@ -332,13 +332,14 @@ class TestV3TemplateRender:
         assert 'id="tab-changes"' in html
         assert 'data-tab="trends"' in html
         assert 'id="tab-trends"' in html
-        # F011 §4.2.4 — bootstrap 模式今日变化区改为单卡 "首日基线已建档"，
+        # F011/P1 — bootstrap 模式今日变化区消费 report_user_contract.bootstrap_digest，
+        # 无 digest 时使用稳定的“监控起点”默认语义。
         # 旧 change-callout kicker ("Monitoring Start" / "Baseline Building") 已删除。
-        assert "首日基线已建档" in html
+        assert "监控起点已建立" in html
 
     # ── F011 §4.2.4 — retired: legacy bootstrap "基线建立期第N天" wording ──
     # The change-callout block (kicker + h3 + bootstrap-meta) has been replaced
-    # by a single info-card "首日基线已建档" notice. Coverage for the new
+    # by a contract-driven "监控起点" notice. Coverage for the new
     # bootstrap branch lives in
     # tests/server/test_attachment_html_today_changes.py::test_today_changes_hidden_in_bootstrap.
 

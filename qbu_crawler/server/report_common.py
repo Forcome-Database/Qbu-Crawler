@@ -1154,13 +1154,21 @@ def normalize_deep_report_analytics(analytics):
         issue_cards.append({
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
             "label_display": cluster.get("label_display", ""),
+            "label_code": cluster.get("label_code", ""),
             "review_count": cluster.get("review_count", 0),
             # F011 §4.2.3.1 v1.2 — spec-aligned alias of review_count used as
             # the primary sort key for issue cards (AC-35).
             "evidence_count": cluster.get("review_count", 0),
+            "evidence_review_ids": [
+                ex.get("id") or ex.get("review_id")
+                for ex in (cluster.get("example_reviews") or [])
+                if ex.get("id") or ex.get("review_id")
+            ],
             "severity": cluster.get("severity", "low"),
             "severity_display": cluster.get("severity_display", ""),
             "affected_product_count": cluster.get("affected_product_count", 0),
+            "affected_products": cluster.get("affected_products") or [],
+            "allowed_products": cluster.get("affected_products") or [],
             "first_seen": cluster.get("first_seen"),
             "last_seen": cluster.get("last_seen"),
             # F011 H5 — frequent_period replaces misleading duration_display
@@ -1206,7 +1214,9 @@ def normalize_deep_report_analytics(analytics):
 
     # ── Top-level alias for V3 template convenience ─────────────────────
     normalized["issue_cards"] = issue_cards
-    normalized.setdefault("report_user_contract", {})["issue_diagnostics"] = issue_cards
+    report_user_contract = normalized.setdefault("report_user_contract", {})
+    if issue_cards or not report_user_contract.get("issue_diagnostics"):
+        report_user_contract["issue_diagnostics"] = issue_cards
 
     # ── Build top_actions from improvement_priorities (LLM) + top_negative_clusters
     top_actions = []
@@ -1229,11 +1239,18 @@ def normalize_deep_report_analytics(analytics):
     normalized["top_actions"] = top_actions
 
     report_user_contract = normalized.setdefault("report_user_contract", {})
-    report_user_contract["action_priorities"] = priorities
+    if priorities or not report_user_contract.get("action_priorities"):
+        report_user_contract["action_priorities"] = priorities
 
     if not normalized["report_copy"]["hero_headline"]:
         normalized["report_copy"]["hero_headline"] = _fallback_hero_headline(normalized)
     if not normalized["report_copy"]["executive_bullets"]:
         normalized["report_copy"]["executive_bullets"] = _fallback_executive_bullets(normalized)
+
+    from qbu_crawler.server.report_contract import build_report_user_contract
+    normalized["report_user_contract"] = build_report_user_contract(
+        snapshot={},
+        analytics=normalized,
+    )
 
     return normalized

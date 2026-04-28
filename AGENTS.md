@@ -232,6 +232,9 @@ uv run python -c "import sqlite3; c=sqlite3.connect('data/products.db'); print(c
 - `fresh_review_count` 基于评论发布时间（`date_published_parsed` / `date_published`）按近 30 天口径计算；价格、评分、库存、评论总数等产品状态趋势基于 `scraped_at`
 - `backfill_dominant` 阈值固定为 `historical_backfill_count / ingested_review_count >= 0.7`
 - 真实生产报告目录以 `C:\Users\User\Desktop\QBU\reports` 为准；旧拷贝路径 `C:\Users\leo\Desktop\pachong` 只用于参考，artifact 解析必须兼容绝对路径失效后的回退查找
+- `report_user_contract` 是 HTML / Excel / 邮件展示层的用户语义契约；用户可见的 KPI、行动建议、问题诊断、竞品启示、bootstrap 摘要和 delivery 状态应优先消费该字段，旧 analytics 字段只作为兼容 fallback
+- `report_common.normalize_deep_report_analytics()` 只能挂载缺少 snapshot 的临时 contract；最终渲染入口必须用真实 snapshot 刷新 `report_user_contract.contract_context`
+- LLM 只允许改写 contract evidence pack 中已锁定的事实，不能自行扩大产品集合、证据评论 ID 或风险口径
 
 ### OpenClaw 定时工作流
 
@@ -340,3 +343,14 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `tests/test_metric_semantics.py` — 时间口径与 `change_digest` 指标语义回归
 - `tests/test_v3_excel.py` — `今日变化` / `趋势数据` / “本次新增”契约回归
 - `tests/test_v3_mode_semantics.py` — bootstrap / incremental 邮件模式语义回归
+
+## 2026-04-28 测试7 P1 报表契约治理增量
+
+- `qbu_crawler/server/report_contract.py` — 独立构建 `report_user_contract.v1`，收口 metric definitions、evidence pack、LLM copy merge、竞品启示、bootstrap digest 和 delivery contract
+- `qbu_crawler/server/report_common.py` — 归一化阶段挂载临时 contract，并保留已有 contract-only 字段
+- `qbu_crawler/server/report_html.py` — HTML 最终渲染前用真实 snapshot 刷新 contract，并同步诊断卡、heatmap、行动建议兼容字段
+- `qbu_crawler/server/report.py` — Excel / 邮件优先消费 contract 的行动建议、竞品启示和 KPI
+- `tests/server/test_report_contract.py` — contract builder、指标定义、证据包、竞品启示、bootstrap digest、delivery 语义回归
+- `tests/server/test_report_contract_llm.py` — LLM evidence-only prompt 和 copy merge 校验回归
+- `tests/server/test_report_contract_renderers.py` — HTML / Excel / 邮件 contract-only 消费回归
+- `tests/server/test_test7_artifact_replay.py` 与 `tests/fixtures/report_replay/` — 测试7脱敏最小 artifact replay 防回归

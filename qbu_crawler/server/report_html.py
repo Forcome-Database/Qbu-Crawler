@@ -15,6 +15,7 @@ from qbu_crawler.server.report_common import (
     normalize_deep_report_analytics,
 )
 from qbu_crawler.server.report_charts import build_chartjs_configs
+from qbu_crawler.server.report_contract import build_report_user_contract
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,21 @@ def _render_v3_html_string(snapshot, analytics):
         (F011 §4.2.4 contract; preferred entry for tests).
     """
     normalized = normalize_deep_report_analytics(analytics)
+    contract = normalized.get("report_user_contract") or {}
+    if (contract.get("contract_context") or {}).get("snapshot_source") != "provided":
+        contract = build_report_user_contract(
+            snapshot=snapshot or {},
+            analytics=normalized,
+            llm_copy=(normalized.get("report_copy") or None),
+        )
+        normalized["report_user_contract"] = contract
+    if contract.get("issue_diagnostics"):
+        normalized["issue_cards"] = contract["issue_diagnostics"]
+        normalized.setdefault("self", {})["issue_cards"] = contract["issue_diagnostics"]
+    if contract.get("heatmap"):
+        normalized["_heatmap_data"] = contract["heatmap"]
+    if contract.get("action_priorities"):
+        normalized.setdefault("report_copy", {})["improvement_priorities"] = contract["action_priorities"]
 
     # F011 §4.2.6 — annotate reviews for panorama filter chrome (idempotent)
     _annotate_reviews(snapshot.get("reviews") or [], snapshot.get("logical_date"))

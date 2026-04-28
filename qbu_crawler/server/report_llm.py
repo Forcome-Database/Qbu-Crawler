@@ -220,6 +220,30 @@ def _assert_numbers_traceable(text: str, known_numbers: set, context_label: str)
 _SENTINEL = object()  # sentinel to distinguish "not passed" from explicit empty list
 
 
+def _build_llm_evidence_payload(analytics: dict) -> dict:
+    contract = (analytics or {}).get("report_user_contract") or {}
+    diagnostics = []
+    for item in contract.get("issue_diagnostics") or []:
+        diagnostics.append({
+            "label_code": item.get("label_code"),
+            "label_display": item.get("label_display"),
+            "allowed_products": item.get("allowed_products") or item.get("affected_products") or [],
+            "affected_products": item.get("affected_products") or [],
+            "evidence_count": item.get("evidence_count") or len(item.get("evidence_review_ids") or []),
+            "evidence_review_ids": item.get("evidence_review_ids") or [],
+            "text_evidence": (item.get("text_evidence") or [])[:3],
+            "image_evidence": (item.get("image_evidence") or [])[:3],
+            "failure_modes": item.get("failure_modes") or [],
+            "root_causes": item.get("root_causes") or [],
+            "user_workarounds": item.get("user_workarounds") or [],
+            "recommended_action": item.get("recommended_action") or item.get("ai_recommendation") or "",
+        })
+    return {
+        "kpis": (analytics or {}).get("kpis") or {},
+        "issue_diagnostics": diagnostics,
+    }
+
+
 def assert_consistency(
     copy: dict,
     kpis: dict,
@@ -333,7 +357,12 @@ def _build_insights_prompt_v3(analytics: dict, snapshot: dict | None = None) -> 
     - TONE_GUARDS_PROMPT
     - 'prompt_version: v3' tag
     """
-    base = _build_insights_prompt(analytics, snapshot=snapshot)
+    evidence_payload = _build_llm_evidence_payload(analytics)
+    base = (
+        "你是产品评论日报分析助手。只能使用下面 evidence_payload 中已经锁定的事实，"
+        "不要引入未列出的产品、评论或问题簇。\n"
+        f"evidence_payload:\n{json.dumps(evidence_payload, ensure_ascii=False, indent=2)}\n"
+    )
     schema_block = (
         "\n\nJSON 输出格式要求 v3（严格遵守）：\n"
         "{\n"

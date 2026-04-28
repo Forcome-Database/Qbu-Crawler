@@ -11,11 +11,12 @@
    ────────────────────────────────────────────────────────── #}
 
 {% set _analytics    = analytics or {} %}
-{% set _kpis         = _analytics.get("kpis", {}) %}
+{% set _contract     = _analytics.get("report_user_contract") or {} %}
+{% set _kpis         = _contract.get("kpis") or _analytics.get("kpis", {}) %}
 {% set _self         = _analytics.get("self", {}) %}
 {% set _report_copy  = _analytics.get("report_copy") or {} %}
 {% set _bullets      = (_report_copy.get("executive_bullets") or [])[:3] %}
-{% set _priorities   = (_report_copy.get("improvement_priorities") or [])[:3] %}
+{% set _priorities   = (_contract.get("action_priorities") or _report_copy.get("improvement_priorities") or [])[:3] %}
 {% set _hero         = _report_copy.get("hero_headline") or "" %}
 {% set _product_status = _self.get("product_status") or [] %}
 

@@ -1,0 +1,57 @@
+{
+  "logical_date": "2026-04-28",
+  "run_id": 7,
+  "snapshot_at": "2026-04-28T11:56:26+08:00",
+  "products": [
+    {"name": "Walton's Quick Patty Maker", "sku": "WQPM", "ownership": "own", "site": "test", "rating": 3.8, "review_count": 120},
+    {"name": ".75 HP Grinder (#12)", "sku": "G-12", "ownership": "own", "site": "test", "rating": 4.1, "review_count": 80},
+    {"name": "Comp Sealer", "sku": "C-1", "ownership": "competitor", "site": "test", "rating": 3.6, "review_count": 60}
+  ],
+  "reviews": [
+    {
+      "id": 101,
+      "product_name": "Walton's Quick Patty Maker",
+      "product_sku": "WQPM",
+      "ownership": "own",
+      "rating": 1,
+      "headline_cn": "肉饼尺寸不稳定",
+      "body_cn": "肉饼太大，成型后还要手工修整。",
+      "date_published": "2026-04-18",
+      "date_published_parsed": "2026-04-18",
+      "images": ["https://example.test/review-101.jpg"],
+      "analysis_labels": "[{\"code\":\"structure_design\",\"polarity\":\"negative\"}]",
+      "impact_category": "functional",
+      "failure_mode": "dimension_mismatch"
+    },
+    {
+      "id": 102,
+      "product_name": ".75 HP Grinder (#12)",
+      "product_sku": "G-12",
+      "ownership": "own",
+      "rating": 2,
+      "headline_cn": "开关偶发失灵",
+      "body_cn": "开关用了几次后偶尔无法启动。",
+      "date_published": "2026-04-20",
+      "date_published_parsed": "2026-04-20",
+      "images": [],
+      "analysis_labels": "[{\"code\":\"quality_stability\",\"polarity\":\"negative\"}]",
+      "impact_category": "durability",
+      "failure_mode": "control_electrical"
+    },
+    {
+      "id": 201,
+      "product_name": "Comp Sealer",
+      "product_sku": "C-1",
+      "ownership": "competitor",
+      "rating": 1,
+      "headline_cn": "包装破损",
+      "body_cn": "运输到家时外盒破损，配件散落。",
+      "date_published": "2026-04-19",
+      "date_published_parsed": "2026-04-19",
+      "images": [],
+      "analysis_labels": "[{\"code\":\"packaging\",\"polarity\":\"negative\"}]",
+      "impact_category": "delivery",
+      "failure_mode": "packaging_damage"
+    }
+  ]
+}

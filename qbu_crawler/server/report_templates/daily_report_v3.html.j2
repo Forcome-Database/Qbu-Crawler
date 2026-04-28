@@ -33,6 +33,7 @@
   {% set competitor_review_rows = analytics.kpis.competitor_review_rows or 0 %}
   {% set window_ingested_reviews = change_summary.get("ingested_review_count", analytics.kpis.get("ingested_review_rows", 0)) %}
   {% set recent_review_rows = analytics.kpis.get("recently_published_count", change_summary.fresh_review_count or 0) %}
+  {% set report_contract = analytics.report_user_contract or {} %}
 
   <header class="kpi-bar">
     <div class="kpi-bar-inner">
@@ -50,7 +51,7 @@
     <button data-tab="overview" class="tab-btn tab-active" role="tab">总览</button>
     <button data-tab="changes" class="tab-btn" role="tab">今日变化</button>
     <button data-tab="trends" class="tab-btn" role="tab">变化趋势</button>
-    <button data-tab="issues" class="tab-btn" role="tab">问题诊断 <span class="tab-badge">{{ (analytics.issue_cards or []) | length }}</span></button>
+    <button data-tab="issues" class="tab-btn" role="tab">问题诊断 <span class="tab-badge">{{ (report_contract.get("issue_diagnostics") or analytics.issue_cards or []) | length }}</span></button>
     <button data-tab="products" class="tab-btn" role="tab">产品排行 <span class="tab-badge">{{ analytics.kpis.own_product_count or 0 }}</span></button>
     <button data-tab="competitive" class="tab-btn" role="tab">竞品启示</button>
     <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ (snapshot.reviews or []) | length }}</span></button>
@@ -126,7 +127,7 @@
       </div>
 
       {# F011 §4.2.2 (H14) — 现在该做什么：short_title 作主显，full_action 折叠 #}
-      {% set _priorities = (analytics.report_copy or {}).get("improvement_priorities") or [] %}
+      {% set _priorities = report_contract.get("action_priorities") or (analytics.report_copy or {}).get("improvement_priorities") or [] %}
       {% if _priorities %}
       <section class="recommendations">
         <h2>现在该做什么</h2>
@@ -165,8 +166,32 @@
 
       {# F011 §4.2.4 — bootstrap 单卡 / mature 三层金字塔 #}
       {% if analytics.report_semantics == "bootstrap" or change_digest.view_state == "bootstrap" %}
+      {% set bd = (analytics.report_user_contract or {}).get("bootstrap_digest") or {} %}
+      {% set bs = bd.baseline_summary or {} %}
+      {% set dq = bd.data_quality or {} %}
+      {% set bs_product_count = bs.get("product_count") %}
+      {% set bs_review_count = bs.get("review_count") %}
+      {% set bs_coverage_rate = bs.get("coverage_rate") %}
+      {% set bs_translation_rate = bs.get("translation_completion_rate") %}
       <div class="info-card bootstrap-notice">
-        ℹ 首日基线已建档，对比信号将从下一日起出现
+        <strong>{{ bs.headline or "监控起点已建立" }}</strong>
+        <div>当前截面：{{ bs_product_count if bs_product_count is not none else 0 }} 款产品 / {{ bs_review_count if bs_review_count is not none else 0 }} 条评论</div>
+        {% if bs_coverage_rate is not none or bs_translation_rate is not none %}
+        <div>
+          {% if bs_coverage_rate is not none %}覆盖率：{{ "%.0f"|format(bs_coverage_rate * 100) }}%{% endif %}
+          {% if bs_translation_rate is not none %}{% if bs_coverage_rate is not none %} · {% endif %}翻译完成率：{{ "%.0f"|format(bs_translation_rate * 100) }}%{% endif %}
+        </div>
+        {% endif %}
+        {% if dq.low_coverage_products %}
+        <div>低覆盖产品：{{ dq.low_coverage_products | join("、") }}</div>
+        {% endif %}
+        {% if bd.immediate_attention %}
+        <ul>
+          {% for item in bd.immediate_attention[:3] %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
       </div>
       {% else %}
       {% set ia = change_digest.immediate_attention or {} %}
@@ -282,14 +307,15 @@
 
     <section id="tab-issues" class="tab-panel" role="tabpanel">
       <h2 class="section-title">自有产品问题诊断</h2>
+      {% set _issue_cards = report_contract.get("issue_diagnostics") or analytics.issue_cards or [] %}
       {# F011 §4.2.3.1 v1.2 — Top 3 default-expanded; remaining wrapped in <details> #}
-      <p class="section-sub">Top 3 默认展开 · 共 {{ (analytics.issue_cards or []) | length }} 张诊断卡</p>
-      {% if not analytics.issue_cards %}
+      <p class="section-sub">Top 3 默认展开 · 共 {{ _issue_cards | length }} 张诊断卡</p>
+      {% if not _issue_cards %}
       <div class="empty-state">未发现明确问题簇。</div>
       {% endif %}
 
-      {% set _expanded_cards = (analytics.issue_cards or []) | selectattr("default_expanded", "equalto", true) | list %}
-      {% set _folded_cards = (analytics.issue_cards or []) | selectattr("default_expanded", "equalto", false) | list %}
+      {% set _expanded_cards = _issue_cards | selectattr("default_expanded", "equalto", true) | list %}
+      {% set _folded_cards = _issue_cards | selectattr("default_expanded", "equalto", false) | list %}
 
       {% for card in _expanded_cards %}
       {% set idx = loop.index %}

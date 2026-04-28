@@ -1118,10 +1118,14 @@ def _generate_analytical_excel(
     # Sheet 4: 竞品启示 (F011 §4.3.2 — 5 cols, top-3 + top-3)
     # ─────────────────────────────────────────────────────────────────────
     ws_comp = wb.create_sheet("竞品启示")
-    comp_headers = ["类型", "主题", "证据数", "典型评论(中文)", "涉及产品"]
+    comp_headers = [
+        "类型", "主题", "证据数", "典型评论(中文)", "涉及产品",
+        "对自有产品启发", "验证动作", "证据ID", "样本数", "涉及产品数",
+    ]
     _write_headers(ws_comp, comp_headers)
 
     competitor = analytics.get("competitor") or {}
+    contract_competitor = (analytics.get("report_user_contract") or {}).get("competitor_insights") or {}
 
     def _theme_topic(item):
         # benchmark_examples / negative_opportunities expose label_codes
@@ -1141,44 +1145,81 @@ def _generate_analytical_excel(
     def _theme_product(item):
         return _safe_text(item.get("product_name") or item.get("product_sku"))
 
-    raw_benchmark_items = competitor.get("benchmark_examples") or []
-    if isinstance(raw_benchmark_items, dict):
-        benchmark_items = []
-        for category, label in (
-            ("product_design", "可借鉴·产品形态"),
-            ("marketing_message", "可借鉴·营销话术"),
-            ("service_model", "可借鉴·服务模式"),
-        ):
-            for item in (raw_benchmark_items.get(category) or [])[:1]:
-                row = dict(item)
-                row["_excel_type"] = label
-                benchmark_items.append(row)
+    contract_rows = []
+    benchmark_items = []
+    negative_items = []
+    for section, label in (
+        ("learn_from_competitors", "可借鉴"),
+        ("avoid_competitor_failures", "短板"),
+        ("validation_hypotheses", "验证假设"),
+    ):
+        for item in (contract_competitor.get(section) or [])[:3]:
+            row = dict(item)
+            row["_excel_type"] = label
+            contract_rows.append(row)
+
+    if contract_rows:
+        for item in contract_rows:
+            ws_comp.append([
+                item.get("_excel_type") or "—",
+                _safe_text(item.get("summary_cn")) or "—",
+                int(item.get("sample_size") or len(item.get("evidence_review_ids") or []) or 0),
+                _safe_text(item.get("summary_cn")) or "—",
+                "、".join(str(pid) for pid in (item.get("products") or item.get("affected_products") or []) if pid) or "—",
+                _safe_text(item.get("self_product_implication")) or "—",
+                _safe_text(item.get("suggested_validation")) or "—",
+                "、".join(str(rid) for rid in (item.get("evidence_review_ids") or []) if rid) or "—",
+                int(item.get("sample_size") or 0),
+                int(item.get("product_count") or 0),
+            ])
     else:
-        benchmark_items = raw_benchmark_items[:3]
-    negative_items = (competitor.get("negative_opportunities") or [])[:3]
+        raw_benchmark_items = competitor.get("benchmark_examples") or []
+        if isinstance(raw_benchmark_items, dict):
+            for category, label in (
+                ("product_design", "可借鉴·产品形态"),
+                ("marketing_message", "可借鉴·营销话术"),
+                ("service_model", "可借鉴·服务模式"),
+            ):
+                for item in (raw_benchmark_items.get(category) or [])[:1]:
+                    row = dict(item)
+                    row["_excel_type"] = label
+                    benchmark_items.append(row)
+        else:
+            benchmark_items = raw_benchmark_items[:3]
+        negative_items = (competitor.get("negative_opportunities") or [])[:3]
 
-    for item in benchmark_items:
-        codes = item.get("label_codes") or []
-        ws_comp.append([
-            item.get("_excel_type") or "可借鉴",
-            _theme_topic(item) or "—",
-            len(codes) if codes else 1,
-            _theme_example(item) or "—",
-            _theme_product(item) or "—",
-        ])
+        for item in benchmark_items:
+            codes = item.get("label_codes") or []
+            ws_comp.append([
+                item.get("_excel_type") or "可借鉴",
+                _theme_topic(item) or "—",
+                len(codes) if codes else 1,
+                _theme_example(item) or "—",
+                _theme_product(item) or "—",
+                "—",
+                "—",
+                "—",
+                len(codes) if codes else 1,
+                1 if _theme_product(item) else 0,
+            ])
 
-    for item in negative_items:
-        codes = item.get("label_codes") or []
-        ws_comp.append([
-            "短板",
-            _theme_topic(item) or "—",
-            len(codes) if codes else 1,
-            _theme_example(item) or "—",
-            _theme_product(item) or "—",
-        ])
+        for item in negative_items:
+            codes = item.get("label_codes") or []
+            ws_comp.append([
+                "短板",
+                _theme_topic(item) or "—",
+                len(codes) if codes else 1,
+                _theme_example(item) or "—",
+                _theme_product(item) or "—",
+                "—",
+                "—",
+                "—",
+                len(codes) if codes else 1,
+                1 if _theme_product(item) else 0,
+            ])
 
-    if not benchmark_items and not negative_items:
-        ws_comp.append(["—", "—", 0, "无竞品评论数据", "—"])
+    if not contract_rows and not benchmark_items and not negative_items:
+        ws_comp.append(["—", "—", 0, "无竞品评论数据", "—", "—", "—", "—", 0, 0])
 
     _auto_widths(ws_comp)
 
