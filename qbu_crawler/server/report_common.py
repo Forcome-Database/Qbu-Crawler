@@ -53,8 +53,8 @@ METRIC_TOOLTIPS = {
     # KPI cards (P1)
     "健康指数": "贝叶斯 NPS 代理：(promoters − detractors) / own_reviews × 100 线性映射到 0-100；自有评论 < 30 时按样本量向先验 50 收缩，避免小样本极端值",
     "差评率": "自有产品 ≤{threshold}星评论数 ÷ 自有评论总数",
-    "自有评论": "累计入库的自有产品评论行数，包含历史补采；本次入库请看“今日变化/本次入库评论”。",
-    "累计自有评论": "累计入库的自有产品评论行数，包含历史补采；本次入库请看“今日变化/本次入库评论”。",
+    "自有评论": "当前基线样本中的自有产品评论行数；近30天样本用于判断新近反馈。",
+    "累计自有评论": "当前基线样本中的自有产品评论行数；近30天样本用于判断新近反馈。",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
     "总体竞品差距指数": "跨维度平均的竞品差距指数：各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
     "样本覆盖率": "实际入库评论数 ÷ 站点展示总评论数。受 MAX_REVIEWS 上限和翻页限制影响，部分产品覆盖率 <100% 属正常",
@@ -478,8 +478,8 @@ def _humanize_bullets(normalized):
     if ingested > 0 and recently_published < ingested * 0.5:
         backfill_count = ingested - recently_published
         bullets.append(
-            f"注：本期 {ingested} 条评论中有 {backfill_count} 条为历史补采"
-            f"（发布于 30 天前），数据含历史积累"
+            f"注：本期基线样本 {ingested} 条，其中 {recently_published} 条为近30天样本，"
+            f"{backfill_count} 条来自历史评论池"
         )
 
     # Bullet 1: highest-risk product — negative rate and delta
@@ -704,7 +704,7 @@ def _fallback_executive_bullets(normalized):
         products = normalized["kpis"].get("product_count", 0)
         if is_boot:
             bullets.append(
-                f"当前纳入分析产品 {products} 个，本次入库评论 {ingested} 条，"
+                f"当前纳入分析产品 {products} 个，基线样本评论 {ingested} 条，"
                 f"用于建立监控基线。"
             )
         else:
@@ -712,8 +712,8 @@ def _fallback_executive_bullets(normalized):
             fresh = digest_summary.get("fresh_review_count", 0)
             backfill = digest_summary.get("historical_backfill_count", 0)
             bullets.append(
-                f"当前纳入分析产品 {products} 个，本次入库评论 {ingested} 条"
-                f"（近30天业务新增 {fresh}，历史补采 {backfill}）。"
+                f"当前纳入分析产品 {products} 个，基线样本评论 {ingested} 条"
+                f"（近30天样本 {fresh}，历史评论池 {backfill}）。"
             )
     return bullets[:3]
 
@@ -858,12 +858,24 @@ def normalize_deep_report_analytics(analytics):
         positive_themes.append(theme)
     normalized["competitor"]["top_positive_themes"] = positive_themes
 
-    benchmark_examples = []
-    for item in normalized["competitor"]["benchmark_examples"]:
-        example = dict(item)
-        example["label_display_list"] = _join_label_codes(example.get("label_codes") or [])
-        example["summary_text"] = _summary_text(example)
-        benchmark_examples.append(example)
+    raw_benchmarks = normalized["competitor"]["benchmark_examples"]
+    if isinstance(raw_benchmarks, dict):
+        benchmark_examples = {}
+        for category, items in raw_benchmarks.items():
+            normalized_items = []
+            for item in items or []:
+                example = dict(item)
+                example["label_display_list"] = _join_label_codes(example.get("label_codes") or [])
+                example["summary_text"] = _summary_text(example)
+                normalized_items.append(example)
+            benchmark_examples[category] = normalized_items
+    else:
+        benchmark_examples = []
+        for item in raw_benchmarks or []:
+            example = dict(item)
+            example["label_display_list"] = _join_label_codes(example.get("label_codes") or [])
+            example["summary_text"] = _summary_text(example)
+            benchmark_examples.append(example)
     normalized["competitor"]["benchmark_examples"] = benchmark_examples
 
     opportunities = []
@@ -981,10 +993,22 @@ def normalize_deep_report_analytics(analytics):
         normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
             normalized.get("competitor", {}).get("gap_analysis") or []
         )
+    risk_products_for_counts = normalized.get("self", {}).get("risk_products", [])
     normalized["kpis"]["high_risk_count"] = sum(
-        1 for p in normalized.get("self", {}).get("risk_products", [])
+        1 for p in risk_products_for_counts
         if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
     )
+    normalized["kpis"]["attention_product_count"] = sum(
+        1 for p in risk_products_for_counts
+        if p.get("status_lamp") in ("yellow", "red")
+    )
+    kpi_semantics = normalized.setdefault("report_user_contract", {}).setdefault("kpi_semantics", {})
+    kpi_semantics.update({
+        "high_risk_count": normalized["kpis"]["high_risk_count"],
+        "attention_product_count": normalized["kpis"]["attention_product_count"],
+        "risk_threshold": config.HIGH_RISK_THRESHOLD,
+        "attention_rule": "red + yellow status_lamp",
+    })
 
     # ── Build kpi_cards for template ─────────────────────────────────────
     kpis = normalized["kpis"]
@@ -1059,7 +1083,7 @@ def normalize_deep_report_analytics(analytics):
     normalized["review_scope_cards"] = [
         {"label": "累计自有评论", "value": kpis.get("own_review_rows", 0)},
         {"label": "累计竞品评论", "value": kpis.get("competitor_review_rows", 0)},
-        {"label": "本次入库评论", "value": change_summary.get("ingested_review_count", kpis.get("ingested_review_rows", 0))},
+        {"label": "基线样本评论", "value": change_summary.get("ingested_review_count", kpis.get("ingested_review_rows", 0))},
         {"label": "近30天评论", "value": recently_published or 0},
     ]
 
@@ -1087,9 +1111,16 @@ def normalize_deep_report_analytics(analytics):
     # ── Build issue_cards from top_negative_clusters ─────────────────────
     report_priorities = (normalized.get("report_copy") or {}).get("improvement_priorities") or []
     # Match by label_code for semantic alignment; fall back to rank-based for legacy data
-    priority_by_label = {p["label_code"]: p.get("action", "") for p in report_priorities if p.get("label_code")}
+    priority_by_label = {
+        p["label_code"]: (p.get("full_action") or p.get("action") or "")
+        for p in report_priorities
+        if p.get("label_code")
+    }
     if not priority_by_label:
-        priority_by_label = {p.get("rank", i + 1): p.get("action", "") for i, p in enumerate(report_priorities)}
+        priority_by_label = {
+            p.get("rank", i + 1): (p.get("full_action") or p.get("action") or "")
+            for i, p in enumerate(report_priorities)
+        }
         _label_key = False
     else:
         _label_key = True
@@ -1115,6 +1146,11 @@ def normalize_deep_report_analytics(analytics):
                                             "evidence_id": f"I{len(image_evidence)+1}"})
         translated_rate = cluster.get("translated_rate", 1.0)
         lookup_key = cluster.get("label_code", "") if _label_key else (i + 1)
+        deep_analysis = cluster.get("deep_analysis") or {}
+        ai_recommendation = (
+            priority_by_label.get(lookup_key, "")
+            or deep_analysis.get("actionable_summary", "")
+        )
         issue_cards.append({
             "feature_display": cluster.get("feature_display") or cluster.get("label_display", ""),
             "label_display": cluster.get("label_display", ""),
@@ -1132,7 +1168,11 @@ def normalize_deep_report_analytics(analytics):
             "image_review_count": cluster.get("image_review_count", 0),
             "example_reviews": cluster.get("example_reviews") or [],
             "image_evidence": image_evidence,
-            "recommendation": priority_by_label.get(lookup_key, ""),
+            "ai_recommendation": ai_recommendation,
+            "recommendation": ai_recommendation,
+            "failure_modes": deep_analysis.get("failure_modes") or [],
+            "root_causes": deep_analysis.get("root_causes") or [],
+            "user_workarounds": deep_analysis.get("user_workarounds") or [],
             "translated_rate_display": f"{translated_rate * 100:.0f}%",
             "translation_warning": translated_rate < 0.5,
         })
@@ -1166,6 +1206,7 @@ def normalize_deep_report_analytics(analytics):
 
     # ── Top-level alias for V3 template convenience ─────────────────────
     normalized["issue_cards"] = issue_cards
+    normalized.setdefault("report_user_contract", {})["issue_diagnostics"] = issue_cards
 
     # ── Build top_actions from improvement_priorities (LLM) + top_negative_clusters
     top_actions = []
@@ -1179,13 +1220,16 @@ def normalize_deep_report_analytics(analytics):
         cluster = clusters_by_code.get(p.get("label_code", ""))
         top_actions.append({
             "rank": i + 1,
-            "title": (p.get("action") or "")[:80],
-            "evidence_summary": f"{cluster['review_count']}条投诉" if cluster else "",
+            "title": (p.get("short_title") or p.get("action") or p.get("full_action") or "")[:80],
+            "evidence_summary": f"{cluster.get('review_count', 0)}条投诉" if cluster else "",
             "affected_products": (cluster.get("affected_products") or []) if cluster else [],
-            "recommendation": p.get("action", ""),
+            "recommendation": p.get("full_action") or p.get("action", ""),
             "linked_cluster": p.get("label_code", ""),
         })
     normalized["top_actions"] = top_actions
+
+    report_user_contract = normalized.setdefault("report_user_contract", {})
+    report_user_contract["action_priorities"] = priorities
 
     if not normalized["report_copy"]["hero_headline"]:
         normalized["report_copy"]["hero_headline"] = _fallback_hero_headline(normalized)

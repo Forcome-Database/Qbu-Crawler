@@ -1285,7 +1285,19 @@ def _recommendations(top_negative_clusters):
 
 
 def _benchmark_examples(labeled_reviews):
-    items = []
+    grouped = {
+        "product_design": [],
+        "marketing_message": [],
+        "service_model": [],
+    }
+
+    def _category(codes):
+        if any(code in {"service_fulfillment", "easy_to_clean"} for code in codes):
+            return "service_model"
+        if any(code in {"good_value", "good_packaging"} for code in codes):
+            return "marketing_message"
+        return "product_design"
+
     for item in labeled_reviews:
         review = item["review"]
         if review.get("ownership") != "competitor":
@@ -1293,8 +1305,10 @@ def _benchmark_examples(labeled_reviews):
         positive_labels = [label["label_code"] for label in item["labels"] if label["label_polarity"] == "positive"]
         if not positive_labels:
             continue
-        items.append(
+        category = _category(positive_labels)
+        grouped[category].append(
             {
+                "review_id": review.get("id"),
                 "product_name": review.get("product_name"),
                 "product_sku": review.get("product_sku"),
                 "author": review.get("author"),
@@ -1306,8 +1320,10 @@ def _benchmark_examples(labeled_reviews):
                 "label_codes": positive_labels,
             }
         )
-    items.sort(key=lambda item: (-(item["rating"] or 0), len(item["label_codes"]) * -1, item["product_sku"] or ""))
-    return items[:5]
+    for key, items in grouped.items():
+        items.sort(key=lambda item: (-(item["rating"] or 0), len(item["label_codes"]) * -1, item["product_sku"] or ""))
+        grouped[key] = items[:3]
+    return grouped
 
 
 # ── F011 §4.2.7 v1.2 — weakness opportunities (scoped) ──────────────────
@@ -1402,7 +1418,9 @@ def _negative_opportunities(labeled_reviews):
                 "product_sku": review.get("product_sku"),
                 "rating": review.get("rating"),
                 "headline": review.get("headline"),
+                "headline_cn": review.get("headline_cn"),
                 "body": review.get("body"),
+                "body_cn": review.get("body_cn"),
                 "label_codes": negative_labels,
             }
         )
@@ -1776,6 +1794,7 @@ def _build_heatmap_data_v12(labeled_reviews, products):
         bucket_codes.append(other_codes)
 
     y_labels: list[str] = []
+    y_items: list[dict] = []
     z: list[list[dict]] = []
 
     for p in own_products:
@@ -1808,6 +1827,7 @@ def _build_heatmap_data_v12(labeled_reviews, products):
             short_name = short_name[:25].rsplit(" ", 1)[0]
 
         y_labels.append(short_name)
+        y_items.append({"product_name": pname, "display_label": short_name})
         z.append(row)
 
     if len(y_labels) < 2:
@@ -1817,6 +1837,7 @@ def _build_heatmap_data_v12(labeled_reviews, products):
         "x_labels": x_labels,
         "x_label_codes": x_label_codes,
         "y_labels": y_labels,
+        "y_items": y_items,
         "z": z,
         "aggregated_labels": other_codes,
     }
@@ -1855,20 +1876,41 @@ def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
     """F011 §4.2.6.2 v1.2 — derive cell dict from reviews matched to a cell."""
     sample_size = len(cell_reviews)
 
+    def _sentiment_bucket(review: dict) -> str:
+        sentiment = (review.get("sentiment") or "").lower()
+        if sentiment in {"positive", "mixed", "negative", "neutral"}:
+            return sentiment
+        try:
+            rating = float(review.get("rating") or 0)
+        except (TypeError, ValueError):
+            rating = 0.0
+        if rating >= 4:
+            return "positive"
+        if rating <= 2 and rating > 0:
+            return "negative"
+        return "neutral"
+
     if sample_size < HEATMAP_MIN_SAMPLE:
         return {
             "score": None,
             "sample_size": sample_size,
+            "positive_count": 0,
+            "mixed_count": 0,
+            "negative_count": 0,
+            "neutral_count": sample_size,
             "color_class": "gray",
             "top_review_id": None,
             "top_review_excerpt": ("样本不足" if sample_size > 0 else "无样本"),
+            "tooltip": ("样本不足" if sample_size > 0 else "无样本"),
         }
 
-    # Positive classification: prefer explicit `sentiment` if present, else
-    # rating-based fallback (rating >= 4 → positive).
-    positive_count = sum(1 for r in cell_reviews if _classify_review_positive(r))
+    buckets = [_sentiment_bucket(r) for r in cell_reviews]
+    positive_count = sum(1 for b in buckets if b == "positive")
+    mixed_count = sum(1 for b in buckets if b == "mixed")
+    negative_count = sum(1 for b in buckets if b == "negative")
+    neutral_count = sum(1 for b in buckets if b == "neutral")
 
-    score = positive_count / sample_size
+    score = (positive_count + 0.5 * mixed_count) / sample_size
 
     if score > 0.7:
         color = "green"
@@ -1877,24 +1919,55 @@ def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
     else:
         color = "red"
 
-    # Top review: highest rating, tie-break by longest body
     def _body_len(r: dict) -> int:
         return len(r.get("body_translated") or r.get("body_cn") or r.get("body") or "")
 
-    top_r = max(
-        cell_reviews,
-        key=lambda r: (float(r.get("rating") or 0), _body_len(r)),
-    )
+    def _rating(r: dict) -> float:
+        try:
+            return float(r.get("rating") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _pick_review(preferred_bucket: str) -> dict | None:
+        candidates = [
+            review for review, bucket in zip(cell_reviews, buckets)
+            if bucket == preferred_bucket
+        ]
+        if not candidates:
+            return None
+        if preferred_bucket == "negative":
+            return min(candidates, key=lambda r: (_rating(r), -_body_len(r)))
+        return max(candidates, key=lambda r: (_rating(r), _body_len(r)))
+
+    if color == "red":
+        top_r = _pick_review("negative")
+    elif color == "yellow":
+        top_r = _pick_review("mixed") or _pick_review("negative") or _pick_review("positive")
+    else:
+        top_r = _pick_review("positive") or _pick_review("mixed")
+    if top_r is None:
+        top_r = max(cell_reviews, key=lambda r: (_rating(r), _body_len(r)))
+
     body = (top_r.get("body_translated") or top_r.get("body_cn")
             or top_r.get("body") or "")
     excerpt = body[:HEATMAP_TOP_REVIEW_EXCERPT_LEN]
+    tooltip = (
+        f"体验健康度 {score * 100:.0f}%："
+        f"正向 {positive_count}，混合 {mixed_count}，"
+        f"负向 {negative_count}，中性 {neutral_count}，样本 {sample_size}"
+    )
 
     return {
         "score": round(score, 3),
         "sample_size": sample_size,
+        "positive_count": positive_count,
+        "mixed_count": mixed_count,
+        "negative_count": negative_count,
+        "neutral_count": neutral_count,
         "color_class": color,
         "top_review_id": top_r.get("id"),
         "top_review_excerpt": excerpt,
+        "tooltip": tooltip,
     }
 
 
@@ -3454,21 +3527,118 @@ def build_fallback_priorities(
     Strategy:
     1. Walk top-3 risk products; for each, take its top label and build a row.
     2. If still under `max_items`, append rows from `issue_clusters` (top labels).
-    3. All rows include short_title (≤20 chars), full_action (≥80 chars stub),
-       evidence_count, evidence_review_ids ([]), affected_products[], affected_products_count.
+    3. Prefer concrete review evidence from issue clusters. Rows without review
+       IDs are explicitly marked evidence_insufficient instead of pretending to
+       be fully AI-supported recommendations.
 
     Each row is shaped to match LLM_INSIGHTS_SCHEMA_V3.improvement_priorities[].
     """
     issue_clusters = issue_clusters or []
     priorities: list[dict] = []
+    seen_codes: set[str] = set()
 
-    fallback_full_action = (
-        "请查看附件 HTML 中的详细问题诊断卡（issue cluster cards）以了解症状、"
-        "受影响产品、典型反馈与改进建议。本条目由规则降级生成（LLM 输出失败或为空），"
-        "字段完整度低于 LLM 版本。"
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    action_templates = {
+        "structure_design": (
+            "针对{display}反馈，先围绕{products}复核尺寸、适配件、进出料路径和调节结构；"
+            "结合典型原话“{complaint}”，安排样品复测并列出可验证的结构改良项。"
+            "若问题集中在单一 SKU，优先做小批量结构验证；若跨 SKU 出现，则纳入下一轮设计评审。"
+        ),
+        "quality_stability": (
+            "针对{display}反馈，优先对{products}做故障复现、批次追踪和耐久测试；"
+            "结合典型原话“{complaint}”，检查开关、电机、齿轮和关键连接件的失效路径。"
+            "短期先建立客服回访清单，中期把高频失效模式转成出厂抽检项。"
+        ),
+        "service_fulfillment": (
+            "针对{display}反馈，先复盘{products}在发货、换货、客服响应和承诺兑现上的断点；"
+            "结合典型原话“{complaint}”，把订单状态、补发时效和客服话术拆成可追踪指标。"
+            "短期优先处理未闭环投诉，中期建立异常订单升级机制。"
+        ),
+        "material_finish": (
+            "针对{display}反馈，优先检查{products}的材料厚度、表面处理、毛刺、清洁残留和包装保护；"
+            "结合典型原话“{complaint}”，把用户可感知的做工问题转成来料、装配和终检清单。"
+            "若图片证据集中出现，应追加批次抽样和供应商复核。"
+        ),
+        "assembly_installation": (
+            "针对{display}反馈，先验证{products}的安装步骤、转接件兼容性、说明书和首次使用引导；"
+            "结合典型原话“{complaint}”，找出用户卡住的位置并补充图示或预装方案。"
+            "短期更新客服排障脚本，中期把高频装配问题纳入包装内说明。"
+        ),
+    }
+    default_template = (
+        "针对{display}反馈，先围绕{products}抽取典型评论和图片证据，确认用户抱怨是否集中在同一使用场景；"
+        "结合典型原话“{complaint}”，安排产品、客服和质检共同复盘。"
+        "短期先验证最高频症状，中期把复盘结论转成可追踪的改良项。"
+    )
+    insufficient_template = (
+        "证据不足：当前仅能确认{display}在{products}上存在聚合信号，但缺少可直接追溯的典型评论 ID。"
+        "请先回到评论原文补齐证据，再决定是否进入正式改良排期；在证据补齐前，只建议做样品复核、客服回访和数据补采。"
     )
 
-    seen_codes: set[str] = set()
+    def _display_for(code: str, value: str | None = None) -> str:
+        return value or _LABEL_DISPLAY.get(code) or code
+
+    def _review_id(review: dict):
+        return review.get("id") or review.get("review_id")
+
+    def _review_text(review: dict) -> str:
+        headline = review.get("headline_cn") or review.get("headline") or ""
+        body = review.get("body_cn") or review.get("body_translated") or review.get("body") or ""
+        if headline and body:
+            return f"{headline}：{body}"
+        return headline or body
+
+    def _build_action(code: str, display: str, products: list[str], complaint: str, source: str) -> str:
+        product_text = "、".join(products[:3]) if products else "相关产品"
+        complaint_text = complaint or "暂无可展示的典型原话"
+        if source == "evidence_insufficient":
+            return insufficient_template.format(
+                display=display,
+                products=product_text,
+                complaint=complaint_text,
+            )
+        template = action_templates.get(code, default_template)
+        return template.format(
+            display=display,
+            products=product_text,
+            complaint=complaint_text,
+        )
+
+    def _make_priority(
+        *,
+        code: str,
+        display: str,
+        evidence_count: int,
+        affected_products: list[str],
+        example_reviews: list[dict] | None = None,
+    ) -> dict:
+        examples = example_reviews or []
+        evidence_review_ids = []
+        for review in examples:
+            rid = _review_id(review)
+            if rid is not None and rid not in evidence_review_ids:
+                evidence_review_ids.append(rid)
+        top_complaint = ""
+        for review in examples:
+            text = _review_text(review)
+            if text:
+                top_complaint = text[:200]
+                break
+        source = "rule_fallback" if evidence_review_ids else "evidence_insufficient"
+        short_title = display if len(display) <= 20 else display[:20]
+        return {
+            "label_code": code,
+            "label_display": display,
+            "short_title": short_title,
+            "full_action": _build_action(code, display, affected_products, top_complaint, source),
+            "top_complaint": top_complaint,
+            "source": source,
+            "evidence_count": int(evidence_count or len(evidence_review_ids) or 0),
+            "evidence_review_ids": evidence_review_ids,
+            "affected_products": list(affected_products[:3]),
+            "affected_products_count": len(affected_products),
+        }
 
     for p in (risk_products or [])[:3]:
         labels = p.get("top_labels") or []
@@ -3480,23 +3650,15 @@ def build_fallback_priorities(
             continue
         seen_codes.add(code)
 
-        display = label.get("display") or label.get("label_display") or code
+        display = _display_for(code, label.get("display") or label.get("label_display"))
         product_name = p.get("product_name") or p.get("name") or "(未知产品)"
-        short_title = f"{display}：{product_name}"
-        if len(short_title) > 20:
-            # Trim trailing chars to stay within 20 (UI guarantee)
-            short_title = short_title[:20]
-
-        priorities.append({
-            "label_code": code,
-            "label_display": display,
-            "short_title": short_title,
-            "full_action": fallback_full_action,
-            "evidence_count": int(label.get("count") or 0),
-            "evidence_review_ids": [],
-            "affected_products": [product_name],
-            "affected_products_count": 1,
-        })
+        priorities.append(_make_priority(
+            code=code,
+            display=display,
+            evidence_count=int(label.get("count") or 0),
+            affected_products=[product_name],
+            example_reviews=label.get("example_reviews") or p.get("example_reviews") or [],
+        ))
 
     for cluster in issue_clusters:
         if len(priorities) >= max_items:
@@ -3506,20 +3668,15 @@ def build_fallback_priorities(
             continue
         seen_codes.add(code)
 
-        display = cluster.get("label_display") or code
+        display = _display_for(code, cluster.get("label_display"))
         sample_products = cluster.get("affected_products") or cluster.get("products") or []
-        short_title = display if len(display) <= 20 else display[:20]
-
-        priorities.append({
-            "label_code": code,
-            "label_display": display,
-            "short_title": short_title,
-            "full_action": fallback_full_action,
-            "evidence_count": int(cluster.get("review_count") or 0),
-            "evidence_review_ids": [],
-            "affected_products": list(sample_products[:3]),
-            "affected_products_count": len(sample_products),
-        })
+        priorities.append(_make_priority(
+            code=code,
+            display=display,
+            evidence_count=int(cluster.get("review_count") or 0),
+            affected_products=list(sample_products),
+            example_reviews=cluster.get("example_reviews") or [],
+        ))
 
     return priorities[:max_items]
 

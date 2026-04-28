@@ -72,6 +72,7 @@
 
 {# ── 需关注产品计数（v1.1 / I2：黄+红灯产品数，非硬编码 risk_score≥25）
        Jinja 的 {% set %} 在 for 循环内是局部作用域，必须用 namespace 跨循环聚合 ── #}
+{% set _attention_count_from_kpi = _kpis.get("attention_product_count") %}
 {% set _ns = namespace(count=0, first="") %}
 {% for ps in _product_status %}
   {% if ps.get("status_lamp") in ("yellow", "red") %}
@@ -79,7 +80,7 @@
     {% if not _ns.first %}{% set _ns.first = ps.get("product_name") or "" %}{% endif %}
   {% endif %}
 {% endfor %}
-{% set _attention_count = _ns.count %}
+{% set _attention_count = _attention_count_from_kpi if _attention_count_from_kpi is not none else _ns.count %}
 {% set _attention_first = _ns.first %}
 {% if _attention_count == 0 %}
   {% set _attention_lamp = "green" %}

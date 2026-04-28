@@ -1343,7 +1343,7 @@ def test_build_change_digest_bootstrap_keeps_summary_and_warning_contract():
     assert digest["summary"]["ingested_review_count"] == 2
     assert digest["summary"]["baseline_day_index"] == 2
     assert digest["summary"]["baseline_display_state"] == "building"
-    assert digest["summary"]["window_meaning"] == "基线建立期第2天，本次入库用于补足基线，不按新增口径解释"
+    assert digest["summary"]["window_meaning"] == "基线建立期第2天，当前样本用于建立基线，不按新增口径解释"
     assert set(digest["warnings"]) == {
         "translation_incomplete",
         "estimated_dates",
@@ -1857,11 +1857,13 @@ def test_email_full_in_production_pipeline_renders_health_index(tmp_path, monkey
     html_path = tmp_path / "workflow-run-202-full-report.html"
     html_path.write_text("<html></html>", encoding="utf-8")
 
-    monkeypatch.setattr(
-        report,
-        "generate_excel",
-        lambda products, reviews, report_date=None, output_path=None, analytics=None: str(excel_path),
-    )
+    captured = {}
+
+    def spy_generate_excel(products, reviews, report_date=None, output_path=None, analytics=None):
+        captured["excel_contract"] = (analytics or {}).get("report_user_contract")
+        return str(excel_path)
+
+    monkeypatch.setattr(report, "generate_excel", spy_generate_excel)
     monkeypatch.setattr(report_snapshot.report_analytics, "sync_review_labels", lambda snapshot: {})
 
     # Build raw analytics with kpi inputs that normalize_deep_report_analytics
@@ -1907,8 +1909,6 @@ def test_email_full_in_production_pipeline_renders_health_index(tmp_path, monkey
     monkeypatch.setattr(report_snapshot.report_html, "render_v3_html",
                         lambda snapshot, analytics, output_path=None: str(html_path))
 
-    # Capture the analytics object that render_email_full receives.
-    captured = {}
     real_render_email_full = report.render_email_full
 
     def spy_render(snap, ana):
@@ -1953,3 +1953,65 @@ def test_email_full_in_production_pipeline_renders_health_index(tmp_path, monkey
     )
     # own_negative_review_rate_display is also normalize-only.
     assert "own_negative_review_rate_display" in kpis_received
+    assert isinstance(captured.get("excel_contract"), dict)
+
+
+def test_merge_post_normalize_mutations_refreshes_report_user_contract():
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+    from qbu_crawler.server.report_snapshot import _merge_post_normalize_mutations
+
+    analytics = {
+        "mode": "baseline",
+        "kpis": {
+            "ingested_review_rows": 2,
+            "own_review_rows": 2,
+            "own_product_count": 1,
+        },
+        "self": {
+            "risk_products": [],
+            "recommendations": [],
+            "top_negative_clusters": [{
+                "label_code": "quality_stability",
+                "label_display": "质量稳定性",
+                "feature_display": "质量稳定性",
+                "review_count": 2,
+                "severity": "high",
+                "affected_product_count": 1,
+                "example_reviews": [{"id": 301, "body_cn": "开关坏了"}],
+            }],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+        "report_copy": {"hero_headline": "", "executive_bullets": [], "improvement_priorities": []},
+    }
+    normalized = normalize_deep_report_analytics(analytics)
+    raw = dict(analytics)
+    raw["report_copy"] = {
+        "hero_headline": "关注开关质量",
+        "executive_bullets": [],
+        "improvement_priorities": [{
+            "label_code": "quality_stability",
+            "short_title": "复核开关耐久",
+            "full_action": "加强出厂耐久测试，并对开关失效评论对应批次进行复测和客服回访。",
+            "evidence_count": 2,
+            "evidence_review_ids": [301],
+            "affected_products": ["Product A"],
+        }],
+    }
+    raw["self"] = {
+        **raw["self"],
+        "top_negative_clusters": [{
+            **raw["self"]["top_negative_clusters"][0],
+            "deep_analysis": {
+                "failure_modes": [{"name": "开关失效"}],
+                "root_causes": [{"name": "抽检不足"}],
+                "user_workarounds": ["反复重启"],
+            },
+        }],
+    }
+
+    _merge_post_normalize_mutations(normalized, raw)
+
+    contract = normalized["report_user_contract"]
+    assert contract["action_priorities"][0]["full_action"].startswith("加强出厂耐久测试")
+    assert contract["issue_diagnostics"][0]["ai_recommendation"].startswith("加强出厂耐久测试")
+    assert contract["issue_diagnostics"][0]["failure_modes"] == [{"name": "开关失效"}]

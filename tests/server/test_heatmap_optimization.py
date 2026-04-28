@@ -377,6 +377,86 @@ def test_heatmap_html_emits_label_codes_for_drilldown():
     assert 'data-label-code=""' in html
 
 
+def test_panorama_rows_do_not_use_star_rating_data_attribute():
+    snapshot = _snapshot(
+        products=_OWN_PRODUCTS[:1],
+        reviews=[
+            {
+                "id": 1,
+                "ownership": "own",
+                "product_name": "Own Product 1",
+                "product_sku": "OWN-1",
+                "rating": 5,
+                "headline": "Great",
+                "body": "Works well",
+                "analysis_labels": '[{"code":"quality_stability"}]',
+            }
+        ],
+    )
+    analytics = _base_analytics({"x_labels": [], "x_label_codes": [], "y_labels": [], "z": []})
+
+    html = render_attachment_html(snapshot, analytics)
+
+    row_start = html.index('id="review-1"')
+    row_end = html.index(">", row_start)
+    row_tag = html[row_start:row_end]
+    assert "data-rating=" not in row_tag
+    assert 'data-rating-value="5"' in row_tag
+    assert '<span class="star-rating" data-rating="5">' in html
+
+
+def test_heatmap_drilldown_has_product_filter_contract():
+    heatmap_data = {
+        "x_labels": ["质量稳定性"],
+        "x_label_codes": ["quality_stability"],
+        "y_labels": ["Product 1"],
+        "z": [[{"score": 0.8, "sample_size": 5, "color_class": "green",
+                 "top_review_id": 100, "top_review_excerpt": "ok"}]],
+        "aggregated_labels": [],
+    }
+    snapshot = _snapshot(products=_OWN_PRODUCTS[:1])
+    analytics = _base_analytics(
+        heatmap_data,
+        label_options=[{"code": "quality_stability", "display": "质量稳定性"}],
+    )
+
+    html = render_attachment_html(snapshot, analytics)
+
+    assert 'select name="product"' in html
+    assert "product: prodEl ? prodEl.value : ''" in html
+    assert "if (f.product && d.product !== f.product) return false;" in html
+    assert "productSelect.value = product" in html
+
+
+def test_heatmap_cell_uses_full_product_name_for_drilldown_and_short_label_for_display():
+    heatmap_data = {
+        "x_labels": ["结构设计"],
+        "x_label_codes": ["structure_design"],
+        "y_labels": ["Walton's Quick Patty"],
+        "y_items": [{
+            "product_name": "Walton's Quick Patty Maker",
+            "display_label": "Walton's Quick Patty",
+        }],
+        "z": [[{"score": 0.8, "sample_size": 5, "color_class": "green",
+                 "top_review_id": 100, "top_review_excerpt": "ok"}]],
+        "aggregated_labels": [],
+    }
+    snapshot = _snapshot(products=[{
+        "sku": "WQP",
+        "name": "Walton's Quick Patty Maker",
+        "ownership": "own",
+    }])
+    analytics = _base_analytics(heatmap_data)
+
+    html = render_attachment_html(snapshot, analytics)
+
+    assert "Walton&#39;s Quick Patty</th>" in html or "Walton's Quick Patty</th>" in html
+    assert (
+        'data-product="Walton&#39;s Quick Patty Maker"' in html
+        or 'data-product="Walton\'s Quick Patty Maker"' in html
+    )
+
+
 # ──────────────────────────────────────────────────────────
 # §4.2.6.2 — Step 6: Sentiment-vs-rating classification (I-2 regression)
 # ──────────────────────────────────────────────────────────
@@ -418,3 +498,24 @@ def test_heatmap_classifies_positive_using_rating_when_sentiment_absent():
 
     classifications = [_classify_review_positive(r) for r in cell_reviews]
     assert classifications == [True, True, False, False, False]
+
+
+def test_heatmap_cell_scores_mixed_as_half_weight_and_explains_counts():
+    from qbu_crawler.server.report_analytics import _build_heatmap_cell
+
+    cell = _build_heatmap_cell([
+        {"id": 1, "rating": 5, "sentiment": "positive", "body_cn": "稳定好用"},
+        {"id": 2, "rating": 5, "sentiment": "mixed", "body_cn": "有小问题但还可以"},
+        {"id": 3, "rating": 1, "sentiment": "negative", "body_cn": "完全不能用"},
+    ])
+
+    assert cell["positive_count"] == 1
+    assert cell["mixed_count"] == 1
+    assert cell["negative_count"] == 1
+    assert cell["neutral_count"] == 0
+    assert cell["score"] == pytest.approx(0.5)
+    assert cell["color_class"] == "yellow"
+    assert "正向 1" in cell["tooltip"]
+    assert "混合 1" in cell["tooltip"]
+    assert "负向 1" in cell["tooltip"]
+    assert cell["top_review_id"] == 2

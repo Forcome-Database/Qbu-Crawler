@@ -532,6 +532,15 @@ class WorkflowWorker:
     def process_once(self, now: str | None = None) -> bool:
         now = now or config.now_shanghai().isoformat()
         changed = self._reconcile_stale_tasks(now) > 0
+        try:
+            from qbu_crawler.server.notifier import reconcile_full_sent_deadletters
+            conn = models.get_conn()
+            try:
+                changed = reconcile_full_sent_deadletters(conn) > 0 or changed
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("WorkflowWorker: full_sent deadletter reconcile failed")
 
         for run in models.list_workflow_runs(statuses=list(self._ACTIVE_STATUSES)):
             if self._advance_run(run["id"], now):

@@ -69,3 +69,88 @@ def test_short_title_truncated_when_too_long():
     }]
     out = build_fallback_priorities(risk_products, [])
     assert len(out[0]["short_title"]) <= 20
+
+
+def test_fallback_priorities_are_user_readable_without_engineering_copy():
+    risk_products = [{
+        "product_name": ".5 HP Dual Grind Grinder (#8)",
+        "top_labels": [{"code": "service_fulfillment", "count": 4}],
+    }]
+
+    out = build_fallback_priorities(risk_products, [])
+
+    item = out[0]
+    assert item["label_display"] == "售后与履约"
+    assert item["short_title"] == "售后与履约"
+    assert "service_fulfillment" not in item["short_title"]
+    assert "规则降级" not in item["full_action"]
+    assert "LLM" not in item["full_action"]
+    assert "附件 HTML" not in item["full_action"]
+
+
+def test_fallback_priorities_are_distinct_by_label():
+    issue_clusters = [
+        {
+            "label_code": "structure_design",
+            "label_display": "结构设计",
+            "review_count": 3,
+            "affected_products": ["Product A"],
+            "example_reviews": [{"id": 1, "body_cn": "出料口尺寸不合适"}],
+        },
+        {
+            "label_code": "service_fulfillment",
+            "label_display": "售后与履约",
+            "review_count": 2,
+            "affected_products": ["Product B"],
+            "example_reviews": [{"id": 2, "body_cn": "发货迟迟没有回应"}],
+        },
+        {
+            "label_code": "material_finish",
+            "label_display": "材料与做工",
+            "review_count": 4,
+            "affected_products": ["Product C"],
+            "example_reviews": [{"id": 3, "body_cn": "表面有明显毛刺"}],
+        },
+    ]
+
+    out = build_fallback_priorities([], issue_clusters)
+
+    actions = [item["full_action"] for item in out]
+    assert len(set(actions)) == len(actions)
+
+
+def test_fallback_priorities_bind_evidence_and_top_complaint():
+    issue_clusters = [{
+        "label_code": "quality_stability",
+        "label_display": "质量稳定性",
+        "review_count": 2,
+        "affected_products": ["Product A"],
+        "example_reviews": [
+            {"id": 101, "headline_cn": "开关失效", "body_cn": "用了两次开关就坏了"},
+            {"review_id": 102, "body_cn": "电机发热后停机"},
+        ],
+    }]
+
+    out = build_fallback_priorities([], issue_clusters)
+
+    item = out[0]
+    assert item["source"] == "rule_fallback"
+    assert item["evidence_review_ids"] == [101, 102]
+    assert item["top_complaint"] == "开关失效：用了两次开关就坏了"
+    assert item["affected_products"] == ["Product A"]
+
+
+def test_fallback_priority_without_review_evidence_is_marked_insufficient():
+    issue_clusters = [{
+        "label_code": "assembly_installation",
+        "label_display": "安装装配",
+        "review_count": 2,
+        "affected_products": ["Product A"],
+    }]
+
+    out = build_fallback_priorities([], issue_clusters)
+
+    item = out[0]
+    assert item["source"] == "evidence_insufficient"
+    assert item["evidence_review_ids"] == []
+    assert "证据不足" in item["full_action"]

@@ -9,6 +9,7 @@ Covers:
 """
 from __future__ import annotations
 
+from pathlib import Path
 import re
 
 from qbu_crawler.server.report_html import render_attachment_html
@@ -209,6 +210,63 @@ def test_improvement_section_absent_when_priorities_empty():
     analytics = _base_analytics(improvement_priorities=[])
     html = render_attachment_html(_base_snapshot(), analytics)
     assert "现在该做什么" not in html
+
+
+def test_issue_card_renders_image_evidence_and_deep_analysis():
+    cluster = {
+        "label_code": "quality_stability",
+        "label_display": "质量稳定性",
+        "feature_display": "质量稳定性",
+        "review_count": 2,
+        "severity": "high",
+        "severity_display": "高",
+        "affected_product_count": 1,
+        "example_reviews": [{
+            "id": 301,
+            "rating": 1,
+            "headline_cn": "开关失效",
+            "body_cn": "用了两次开关就坏了",
+            "images": ["https://example.com/review-img.jpg"],
+        }],
+        "deep_analysis": {
+            "actionable_summary": "优先复核开关耐久与批次质量。",
+            "failure_modes": [{"name": "开关失效", "frequency": 2}],
+            "root_causes": [{"name": "出厂抽检不足"}],
+            "user_workarounds": ["用户反复重启设备"],
+        },
+    }
+    priorities = [{
+        "label_code": "quality_stability",
+        "short_title": "复核开关耐久",
+        "full_action": "加强出厂耐久测试，并对开关失效评论对应批次进行复测和客服回访。",
+        "evidence_count": 2,
+        "evidence_review_ids": [301],
+        "affected_products": ["Product A"],
+    }]
+    analytics = _base_analytics(
+        top_negative_clusters=[cluster],
+        improvement_priorities=priorities,
+    )
+
+    html = render_attachment_html(_base_snapshot(), analytics)
+
+    assert "issue-image-evidence" in html
+    assert "https://example.com/review-img.jpg" in html
+    assert "加强出厂耐久测试" in html
+    assert "失效模式" in html
+    assert "开关失效" in html
+    assert "可能根因" in html
+    assert "出厂抽检不足" in html
+
+
+def test_issue_image_evidence_has_bounded_css():
+    css_path = Path("qbu_crawler/server/report_templates/daily_report_v3.css")
+    css = css_path.read_text(encoding="utf-8")
+
+    assert ".issue-image-evidence" in css
+    assert ".issue-image-evidence img" in css
+    assert "object-fit: cover" in css
+    assert "max-height" in css
 
 
 # ──────────────────────────────────────────────────────────

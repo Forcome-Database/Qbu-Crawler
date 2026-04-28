@@ -1002,7 +1002,11 @@ def _generate_analytical_excel(
         "用户原话(典型)", "改良方向", "证据数",
     ]
     _write_headers(ws_reco, reco_headers)
-    priorities = (analytics.get("report_copy") or {}).get("improvement_priorities") or []
+    priorities = (
+        ((analytics.get("report_user_contract") or {}).get("action_priorities"))
+        or (analytics.get("report_copy") or {}).get("improvement_priorities")
+        or []
+    )
     for idx, rec in enumerate(priorities[:5], start=1):
         affected = rec.get("affected_products") or []
         ws_reco.append([
@@ -1137,13 +1141,26 @@ def _generate_analytical_excel(
     def _theme_product(item):
         return _safe_text(item.get("product_name") or item.get("product_sku"))
 
-    benchmark_items = (competitor.get("benchmark_examples") or [])[:3]
+    raw_benchmark_items = competitor.get("benchmark_examples") or []
+    if isinstance(raw_benchmark_items, dict):
+        benchmark_items = []
+        for category, label in (
+            ("product_design", "可借鉴·产品形态"),
+            ("marketing_message", "可借鉴·营销话术"),
+            ("service_model", "可借鉴·服务模式"),
+        ):
+            for item in (raw_benchmark_items.get(category) or [])[:1]:
+                row = dict(item)
+                row["_excel_type"] = label
+                benchmark_items.append(row)
+    else:
+        benchmark_items = raw_benchmark_items[:3]
     negative_items = (competitor.get("negative_opportunities") or [])[:3]
 
     for item in benchmark_items:
         codes = item.get("label_codes") or []
         ws_comp.append([
-            "可借鉴",
+            item.get("_excel_type") or "可借鉴",
             _theme_topic(item) or "—",
             len(codes) if codes else 1,
             _theme_example(item) or "—",

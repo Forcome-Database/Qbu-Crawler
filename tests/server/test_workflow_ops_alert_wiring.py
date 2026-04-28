@@ -189,3 +189,47 @@ def test_workflow_calls_downgrade_after_full_sent_with_deadletter(tmp_path, monk
         f"Expected report_phase to downgrade to 'full_sent_local' after "
         f"deadletter detection; got {phase!r}."
     )
+
+
+def test_process_once_reconciles_completed_full_sent_deadletter(tmp_path, monkeypatch):
+    """主循环必须扫描 completed/full_sent，否则终态 run 的 deadletter 永远不会降级。"""
+    from qbu_crawler import config, models
+    from qbu_crawler.server import workflows
+
+    db = tmp_path / "downgrade-loop.db"
+    monkeypatch.setattr(config, "DB_PATH", str(db))
+    monkeypatch.setattr(models, "DB_PATH", str(db))
+    models.init_db()
+
+    conn = models.get_conn()
+    try:
+        run_id = _seed_workflow_run(
+            conn, status="completed", report_phase="full_sent",
+            trigger_key="dl-loop:1",
+        )
+        conn.execute(
+            """
+            INSERT INTO notification_outbox (
+                kind, channel, target, payload, dedupe_key, payload_hash, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "workflow_full_report",
+                "dingtalk",
+                "ops",
+                f'{{"run_id": {run_id}, "msg": "boom"}}',
+                f"workflow:{run_id}:full-report",
+                "hash",
+                "deadletter",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    worker = workflows.WorkflowWorker(interval=999)
+
+    changed = worker.process_once("2026-04-27T04:00:00")
+
+    assert changed is True
+    assert models.get_workflow_run(run_id)["report_phase"] == "full_sent_local"

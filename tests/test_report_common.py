@@ -115,6 +115,12 @@ def test_issue_cards_complete_fields():
                     "first_seen": "2026-01-01",
                     "last_seen": "2026-04-01",
                     "image_review_count": 1,
+                    "deep_analysis": {
+                        "actionable_summary": "优先复核开关耐久与批次质量。",
+                        "failure_modes": [{"name": "开关失效", "frequency": 2}],
+                        "root_causes": [{"name": "出厂抽检不足"}],
+                        "user_workarounds": ["用户反复重启设备"],
+                    },
                     "example_reviews": [
                         {"product_name": "P", "rating": 1, "headline": "bad",
                          "headline_cn": "差", "body": "broke", "body_cn": "坏了",
@@ -129,7 +135,7 @@ def test_issue_cards_complete_fields():
         "appendix": {"image_reviews": []},
         "report_copy": {
             "improvement_priorities": [
-                {"label_code": "quality_stability", "action": "加强出厂耐久测试", "evidence_count": 3}
+                {"label_code": "quality_stability", "full_action": "加强出厂耐久测试", "evidence_count": 3}
             ]
         },
     }
@@ -146,6 +152,10 @@ def test_issue_cards_complete_fields():
     assert card["image_evidence"][0]["evidence_id"] == "I1"
     assert card["image_evidence"][0]["data_uri"] is None  # data_uri is None pre-render (render_report_html converts it)
     assert card["recommendation"] == "加强出厂耐久测试"
+    assert card["ai_recommendation"] == "加强出厂耐久测试"
+    assert card["failure_modes"] == [{"name": "开关失效", "frequency": 2}]
+    assert card["root_causes"] == [{"name": "出厂抽检不足"}]
+    assert card["user_workarounds"] == ["用户反复重启设备"]
 
 
 def test_humanize_bullets_backfill_notice_survives_truncation():
@@ -169,7 +179,7 @@ def test_humanize_bullets_backfill_notice_survives_truncation():
     }
     bullets = _humanize_bullets(normalized)
     assert len(bullets) <= 3
-    assert any("历史补采" in b for b in bullets), f"Backfill notice missing from: {bullets}"
+    assert any("历史评论池" in b for b in bullets), f"Backfill notice missing from: {bullets}"
 
 
 # ---------------------------------------------------------------------------
@@ -599,11 +609,11 @@ def test_normalize_labels_cumulative_and_window_review_metrics():
     scope = {card["label"]: card["value"] for card in result["review_scope_cards"]}
     assert scope["累计自有评论"] == 450
     assert scope["累计竞品评论"] == 143
-    assert scope["本次入库评论"] == 32
+    assert scope["基线样本评论"] == 32
     assert scope["近30天评论"] == 1
 
     own_card = next(card for card in result["kpi_cards"] if card["label"] == "累计自有评论")
-    assert "累计入库" in own_card["tooltip"]
+    assert "基线样本" in own_card["tooltip"]
     assert "本期采集窗口" not in own_card["tooltip"]
 
 
@@ -965,6 +975,37 @@ def test_kpi_cards_value_class_high_risk_products():
     result2 = normalize_deep_report_analytics(analytics2)
     risk_card2 = [c for c in result2["kpi_cards"] if c["label"] == "高风险产品"][0]
     assert risk_card2["value_class"] == ""
+
+
+def test_normalize_separates_high_risk_and_attention_product_counts():
+    from qbu_crawler import config as _config
+
+    analytics = {
+        "kpis": {
+            "ingested_review_rows": 10,
+            "negative_review_rows": 5,
+            "translated_count": 10,
+            "own_product_count": 3,
+            "own_review_rows": 10,
+            "own_negative_review_rate": 0.1,
+        },
+        "self": {
+            "risk_products": [
+                {"risk_score": _config.HIGH_RISK_THRESHOLD, "status_lamp": "red"},
+                {"risk_score": _config.HIGH_RISK_THRESHOLD - 1, "status_lamp": "yellow"},
+                {"risk_score": 0, "status_lamp": "green"},
+            ],
+            "top_negative_clusters": [],
+            "recommendations": [],
+        },
+        "competitor": {"top_positive_themes": [], "benchmark_examples": [], "negative_opportunities": []},
+    }
+
+    result = normalize_deep_report_analytics(analytics)
+
+    assert result["kpis"]["high_risk_count"] == 1
+    assert result["kpis"]["attention_product_count"] == 2
+    assert result["report_user_contract"]["kpi_semantics"]["attention_product_count"] == 2
 
 
 def test_alert_level_ignores_competitor_negative_delta():
@@ -1737,8 +1778,8 @@ def test_fallback_executive_bullets_incremental_cites_change_digest_fields():
     }
     bullets = _fallback_executive_bullets(normalized)
     merged = "\n".join(bullets)
-    assert "本次入库评论" in merged or "本次入库" in merged
-    assert "近30天业务新增" in merged or "近 30 天业务新增" in merged
+    assert "基线样本评论" in merged
+    assert "近30天样本" in merged or "近 30 天样本" in merged
 
 
 def test_fallback_hero_headline_bootstrap_falls_back_to_baseline_when_no_risk():

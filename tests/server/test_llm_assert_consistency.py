@@ -55,6 +55,59 @@ def test_unknown_product_in_affected_raises():
         assert_consistency(copy, KPIS, risk_products=RISK_PRODUCTS, reviews=REVIEWS)
 
 
+def test_issue_cluster_product_not_in_risk_products_passes():
+    copy = {
+        "hero_headline": "健康指数 96.2",
+        "improvement_priorities": [{
+            "label_code": "structure_design",
+            "short_title": "优化进料结构",
+            "full_action": (
+                "针对结构设计问题，结合用户反馈逐项复核关键尺寸、适配方式和使用路径，"
+                "优先验证最常被提到的卡点并形成改良清单。"
+            ),
+            "evidence_count": 1,
+            "evidence_review_ids": [1],
+            "affected_products": ["Walton's #22 Meat Grinder"],
+        }],
+    }
+    assert_consistency(
+        copy,
+        KPIS,
+        risk_products=RISK_PRODUCTS,
+        reviews=REVIEWS,
+        allowed_products_by_label={
+            "structure_design": {"Walton's #22 Meat Grinder"},
+        },
+    )
+
+
+def test_unknown_product_outside_allowed_products_still_raises():
+    copy = {
+        "hero_headline": "健康指数 96.2",
+        "improvement_priorities": [{
+            "label_code": "structure_design",
+            "short_title": "优化进料结构",
+            "full_action": (
+                "针对结构设计问题，结合用户反馈逐项复核关键尺寸、适配方式和使用路径，"
+                "优先验证最常被提到的卡点并形成改良清单。"
+            ),
+            "evidence_count": 1,
+            "evidence_review_ids": [1],
+            "affected_products": ["Unknown Product"],
+        }],
+    }
+    with pytest.raises(AssertionError, match=r"affected_products"):
+        assert_consistency(
+            copy,
+            KPIS,
+            risk_products=RISK_PRODUCTS,
+            reviews=REVIEWS,
+            allowed_products_by_label={
+                "structure_design": {"Walton's #22 Meat Grinder"},
+            },
+        )
+
+
 def test_bullet_unknown_number_raises():
     copy = {
         "hero_headline": "健康指数 96.2",

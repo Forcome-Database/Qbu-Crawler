@@ -634,7 +634,8 @@
 
   function matchPanoramaFilters(d, f) {
     if (f.ownership && d.ownership !== f.ownership) return false;
-    var rating = parseFloat(d.rating);
+    if (f.product && d.product !== f.product) return false;
+    var rating = parseFloat(d.ratingValue);
     if (f.rating === 'low' && !(rating <= 2)) return false;
     if (f.rating === 'mid' && rating !== 3) return false;
     if (f.rating === 'high' && !(rating >= 4)) return false;
@@ -647,12 +648,14 @@
   function applyPanoramaFilters() {
     var ownEl = document.querySelector('.panorama-filters [name=ownership]');
     var rateEl = document.querySelector('.panorama-filters [name=rating]');
+    var prodEl = document.querySelector('.panorama-filters [name=product]');
     var imgEl = document.querySelector('.panorama-filters [name=has_images]');
     var recEl = document.querySelector('.panorama-filters [name=recent]');
     var labEl = document.querySelector('.panorama-filters [name=label]');
     var filters = {
       ownership: ownEl ? ownEl.value : '',
       rating: rateEl ? rateEl.value : '',
+      product: prodEl ? prodEl.value : '',
       has_images: imgEl ? imgEl.checked : false,
       recent: recEl ? recEl.checked : false,
       label: labEl ? labEl.value : '',
@@ -693,10 +696,14 @@
         // Apply label filter via the panorama label select (uses code, not display name)
         var labelCode = cell.dataset.labelCode || '';
         var labelSelect = document.querySelector('.panorama-filters select[name=label]');
+        var productSelect = document.querySelector('.panorama-filters select[name=product]');
+        if (productSelect && product) {
+          productSelect.value = product;
+        }
         if (labelSelect && labelCode) {
           labelSelect.value = labelCode;
-          labelSelect.dispatchEvent(new Event('change'));
         }
+        applyPanoramaFilters();
 
         // Highlight the top review row briefly
         var reviewId = cell.dataset.reviewId;

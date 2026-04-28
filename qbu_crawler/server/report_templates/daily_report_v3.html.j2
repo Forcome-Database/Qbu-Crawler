@@ -89,7 +89,7 @@
       <div class="review-scope-grid">
         <div class="review-scope-item"><span>累计自有评论</span><strong>{{ own_review_rows }}</strong></div>
         <div class="review-scope-item"><span>累计竞品评论</span><strong>{{ competitor_review_rows }}</strong></div>
-        <div class="review-scope-item"><span>本次入库评论</span><strong>{{ window_ingested_reviews or 0 }}</strong></div>
+        <div class="review-scope-item"><span>基线样本评论</span><strong>{{ window_ingested_reviews or 0 }}</strong></div>
         <div class="review-scope-item"><span>近30天评论</span><strong>{{ recent_review_rows or 0 }}</strong></div>
       </div>
 
@@ -319,8 +319,37 @@
             <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
           </blockquote>
           {% endfor %}
-          {% if card.recommendation %}
-          <div class="ai-box ai-box-suggest"><p>{{ card.recommendation }}</p></div>
+          {% if card.image_evidence %}
+          <div class="issue-image-evidence">
+            {% for image in card.image_evidence %}
+            <figure>
+              <img src="{{ image.data_uri or image.url }}" alt="{{ image.evidence_id or '评论图片证据' }}">
+              <figcaption>{{ image.evidence_id }}</figcaption>
+            </figure>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if card.ai_recommendation or card.recommendation %}
+          <div class="ai-box ai-box-suggest"><p>{{ card.ai_recommendation or card.recommendation }}</p></div>
+          {% endif %}
+          {% if card.failure_modes or card.root_causes or card.user_workarounds %}
+          <div class="issue-deep-analysis">
+            {% if card.failure_modes %}
+            <div><strong>失效模式</strong>
+              <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            {% if card.root_causes %}
+            <div><strong>可能根因</strong>
+              <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            {% if card.user_workarounds %}
+            <div><strong>用户应对</strong>
+              <ul>{% for item in card.user_workarounds[:3] %}<li>{{ item }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+          </div>
           {% endif %}
         </div>
       </div>
@@ -354,11 +383,40 @@
                 <span>{{ review.author or "" }}</span>
                 <span>{{ review.date_published or "" }}</span>
               </div>
-              <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
-            </blockquote>
-            {% endfor %}
-            {% if card.recommendation %}
-            <div class="ai-box ai-box-suggest"><p>{{ card.recommendation }}</p></div>
+            <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
+          </blockquote>
+          {% endfor %}
+            {% if card.image_evidence %}
+            <div class="issue-image-evidence">
+              {% for image in card.image_evidence %}
+              <figure>
+                <img src="{{ image.data_uri or image.url }}" alt="{{ image.evidence_id or '评论图片证据' }}">
+                <figcaption>{{ image.evidence_id }}</figcaption>
+              </figure>
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% if card.ai_recommendation or card.recommendation %}
+            <div class="ai-box ai-box-suggest"><p>{{ card.ai_recommendation or card.recommendation }}</p></div>
+            {% endif %}
+            {% if card.failure_modes or card.root_causes or card.user_workarounds %}
+            <div class="issue-deep-analysis">
+              {% if card.failure_modes %}
+              <div><strong>失效模式</strong>
+                <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+              </div>
+              {% endif %}
+              {% if card.root_causes %}
+              <div><strong>可能根因</strong>
+                <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item }}</li>{% endfor %}</ul>
+              </div>
+              {% endif %}
+              {% if card.user_workarounds %}
+              <div><strong>用户应对</strong>
+                <ul>{% for item in card.user_workarounds[:3] %}<li>{{ item }}</li>{% endfor %}</ul>
+              </div>
+              {% endif %}
+            </div>
             {% endif %}
           </div>
         </div>
@@ -449,12 +507,31 @@
       </div>
       {% endif %}
 
-      {# Block 2: 我们能借鉴竞品什么 — flat list rendering #}
-      {# TODO: F011 v1.3 — split benchmark_examples into product_design / marketing_message / service_model categories #}
       {% set _benchmarks = (analytics.competitor or {}).get("benchmark_examples") or [] %}
       {% if _benchmarks %}
       <div class="competitor-block benchmark-card">
         <h3>✨ 我们能借鉴竞品什么</h3>
+        {% if _benchmarks is mapping %}
+        {% set _bench_groups = [
+          ("product_design", "产品形态"),
+          ("marketing_message", "营销话术"),
+          ("service_model", "服务模式")
+        ] %}
+        {% for key, title in _bench_groups %}
+          {% set _items = _benchmarks.get(key) or [] %}
+          {% if _items %}
+          <h4>{{ title }}</h4>
+          <ul>
+            {% for item in _items[:3] %}
+            <li>
+              <strong>{{ item.product_name or item.product_sku or "未命名" }}</strong>:
+              {{ item.body_cn or item.headline_cn or item.body or item.headline or "" }}
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        {% endfor %}
+        {% else %}
         <ul>
           {% for item in _benchmarks[:5] %}
           <li>
@@ -463,6 +540,7 @@
           </li>
           {% endfor %}
         </ul>
+        {% endif %}
       </div>
       {% endif %}
 
@@ -548,22 +626,25 @@
               </tr>
             </thead>
             <tbody>
+              {% set y_items = analytics._heatmap_data.y_items or [] %}
               {% for y in analytics._heatmap_data.y_labels %}
+              {% set y_item = y_items[loop.index0] if y_items else {} %}
+              {% set y_display = y_item.display_label or y %}
+              {% set y_product = y_item.product_name or y %}
               <tr>
-                <th>{{ y }}</th>
+                <th>{{ y_display }}</th>
                 {% set row = analytics._heatmap_data.z[loop.index0] %}
-                {% set y_label = y %}
                 {% for cell in row %}
                   {# Bind cell_idx explicitly before any inner loop can shadow loop.index0. #}
                   {% set cell_idx = loop.index0 %}
                   {% set x_label = analytics._heatmap_data.x_labels[cell_idx] %}
                   {% set x_code = (analytics._heatmap_data.x_label_codes[cell_idx] if analytics._heatmap_data.x_label_codes else '') %}
                   <td class="heatmap-cell {{ cell.color_class }}"
-                      data-product="{{ y_label }}"
+                      data-product="{{ y_product }}"
                       data-label="{{ x_label }}"
                       data-label-code="{{ x_code }}"
                       data-review-id="{{ cell.top_review_id or '' }}"
-                      title="{{ y_label }} × {{ x_label }} ({{ cell.sample_size }} 条)&#10;{{ cell.top_review_excerpt }}">
+                      title="{{ y_display }} × {{ x_label }} ({{ cell.sample_size }} 条)&#10;{{ cell.tooltip or cell.top_review_excerpt }}">
                     {% if cell.score is not none %}{{ '%.0f%%' | format(cell.score * 100) }}{% else %}—{% endif %}
                   </td>
                 {% endfor %}
@@ -592,6 +673,12 @@
           <option value="mid">3 星</option>
           <option value="high">≥4 星</option>
         </select>
+        <select name="product" aria-label="产品">
+          <option value="">全部产品</option>
+          {% for p in snapshot.products or [] %}
+          <option value="{{ p.name or p.sku }}">{{ p.name or p.sku }}</option>
+          {% endfor %}
+        </select>
         <label class="checkbox-label"><input type="checkbox" name="has_images"> 仅含图</label>
         <label class="checkbox-label"><input type="checkbox" name="recent"> 近 30 天</label>
         <select name="label" aria-label="标签">
@@ -619,13 +706,14 @@
             <tr id="review-{{ r.id }}"
                 data-review-id="{{ r.id }}"
                 data-ownership="{{ r.ownership or '' }}"
-                data-rating="{{ r.rating or 0 }}"
+                data-rating-value="{{ r.rating or 0 }}"
+                data-product="{{ r.product_name or '' }}"
                 data-has-images="{{ '1' if r.images else '0' }}"
                 data-recent="{{ '1' if r.is_recent else '0' }}"
                 data-labels="{{ (r.label_codes or []) | join(',') }}">
               <td>{{ '自有' if r.ownership == 'own' else '竞品' if r.ownership == 'competitor' else '' }}</td>
               <td>{{ r.product_name or '' }}</td>
-              <td>{{ r.rating or '' }}</td>
+              <td><span class="star-rating" data-rating="{{ r.rating or 0 }}"></span></td>
               <td>{{ r.headline_cn or r.headline or '' }}</td>
               <td class="review-body">{{ (r.body_cn or r.body_translated or r.body or '') | truncate(200) }}</td>
               <td>{{ r.date_published or '' }}</td>

@@ -7,6 +7,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from qbu_crawler.server.report_charts import build_chartjs_configs
+from qbu_crawler.server.report_html import _annotate_reviews
 
 
 def _template():
@@ -15,6 +16,18 @@ def _template():
     )
     env = Environment(loader=FileSystemLoader(template_dir), autoescape=False)
     return env.get_template("daily_report_v3.html.j2")
+
+
+def test_annotate_reviews_uses_date_published_parsed_for_recent_filter():
+    reviews = [{
+        "date_published": "2 weeks ago",
+        "date_published_parsed": "2026-04-20",
+        "analysis_labels": "[]",
+    }]
+
+    _annotate_reviews(reviews, "2026-04-28")
+
+    assert reviews[0]["is_recent"] is True
 
 
 def _empty_trend_dimension(status="accumulating", message="Accumulating"):
@@ -341,7 +354,7 @@ class TestV3TemplateRender:
             {
                 "label": "累计自有评论",
                 "value": 450,
-                "tooltip": "累计入库的自有产品评论行数，包含历史补采",
+                "tooltip": "当前基线样本中的自有产品评论行数",
                 "value_class": "",
                 "delta_display": "",
                 "delta_class": "",
@@ -352,7 +365,7 @@ class TestV3TemplateRender:
 
         assert "累计自有评论" in html
         assert "累计竞品评论" in html
-        assert "本次入库评论" in html
+        assert "基线样本评论" in html
         assert "近30天评论" in html
         assert "累计评论" in html
         assert "本期采集窗口内入库的自有产品评论行数" not in html
@@ -430,7 +443,7 @@ class TestV3TemplateRender:
 
 # ── F011 §4.1.3 — removed legacy email_full.html.j2 fallback-wording tests ──
 # These tests previously asserted on the bootstrap/incremental change_digest
-# banner and "本次入库 / 历史补采 / 基线建立期第N天 / 监控起点" wording.
+# banner and "基线样本 / 历史评论池 / 基线建立期第N天 / 监控起点" wording.
 # F011 §4.1 redesigns the email body around 4 KPI lamps + Hero + Top 3 +
 # product_status; §4.1.3 explicitly removes the change_digest banner from the
 # email. New email-template coverage lives in

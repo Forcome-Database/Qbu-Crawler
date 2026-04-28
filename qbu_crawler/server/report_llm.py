@@ -156,7 +156,10 @@ def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> se
     # All numeric kpi values
     for val in kpis.values():
         try:
-            known.add(round(float(val), 2))
+            numeric = float(val)
+            known.add(round(numeric, 2))
+            if 0 < abs(numeric) <= 1:
+                known.add(round(numeric * 100, 2))
         except (TypeError, ValueError):
             pass
 
@@ -164,7 +167,10 @@ def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> se
     for product in risk_products:
         for val in product.values():
             try:
-                known.add(round(float(val), 2))
+                numeric = float(val)
+                known.add(round(numeric, 2))
+                if 0 < abs(numeric) <= 1:
+                    known.add(round(numeric * 100, 2))
             except (TypeError, ValueError):
                 pass
 
@@ -185,6 +191,8 @@ def _assert_numbers_traceable(text: str, known_numbers: set, context_label: str)
     Numbers < 2 are skipped (treated as ordinals like "Top 1", "Top 2").
     """
     for m in NUMBER_RE.finditer(text):
+        if m.start() > 0 and text[m.start() - 1] == "#":
+            continue
         try:
             num = float(m.group(1))
         except ValueError:
@@ -212,7 +220,15 @@ def _assert_numbers_traceable(text: str, known_numbers: set, context_label: str)
 _SENTINEL = object()  # sentinel to distinguish "not passed" from explicit empty list
 
 
-def assert_consistency(copy: dict, kpis: dict, *, risk_products=_SENTINEL, reviews=_SENTINEL) -> None:
+def assert_consistency(
+    copy: dict,
+    kpis: dict,
+    *,
+    risk_products=_SENTINEL,
+    reviews=_SENTINEL,
+    allowed_products_by_label=None,
+    all_product_names=None,
+) -> None:
     """Full numeric + structural assertion for LLM copy.
 
     Checks:
@@ -222,7 +238,9 @@ def assert_consistency(copy: dict, kpis: dict, *, risk_products=_SENTINEL, revie
        **Only activated when risk_products or reviews are explicitly passed.**
     3. improvement_priorities[].evidence_count >= 1
     4. improvement_priorities[].evidence_review_ids must all be IDs present in reviews
-    5. improvement_priorities[].affected_products must all be product names in risk_products
+    5. improvement_priorities[].affected_products must all be product names
+       in the matching label's allowed product set, or all known products, or
+       risk_products as a legacy fallback.
 
     Backward compatible: callers passing only (copy, kpis) skip bullet traceability
     and priority structure checks (Task 2.6 behavior is preserved).
@@ -260,6 +278,18 @@ def assert_consistency(copy: dict, kpis: dict, *, risk_products=_SENTINEL, revie
         for p in _risk_products
         if (p.get("product_name") or "").strip()
     }
+    allowed_by_label = {}
+    for code, names in (allowed_products_by_label or {}).items():
+        allowed_by_label[code] = {
+            (name or "").strip()
+            for name in (names or [])
+            if (name or "").strip()
+        }
+    all_known_products = {
+        (name or "").strip()
+        for name in (all_product_names or [])
+        if (name or "").strip()
+    }
 
     for i, priority in enumerate(copy.get("improvement_priorities") or []):
         if not isinstance(priority, dict):
@@ -282,14 +312,16 @@ def assert_consistency(copy: dict, kpis: dict, *, risk_products=_SENTINEL, revie
                         f"未知 review id: {rid}"
                     )
 
-        # 5. affected_products must all be in risk_products
-        if _risk_products:  # only check if risk_products were provided
+        # 5. affected_products must be in the best available product scope.
+        label_code = priority.get("label_code")
+        allowed_product_names = allowed_by_label.get(label_code) or all_known_products or valid_product_names
+        if allowed_product_names:
             for product_name in priority.get("affected_products") or []:
-                if (product_name or "").strip() not in valid_product_names:
+                if (product_name or "").strip() not in allowed_product_names:
                     raise AssertionError(
                         f"improvement_priorities[{i}].affected_products 包含"
                         f"未知产品名: {product_name!r}，"
-                        f"应在 risk_products 中: {sorted(valid_product_names)}"
+                        f"应在允许产品集合中: {sorted(allowed_product_names)}"
                     )
 
 
@@ -321,7 +353,11 @@ def _build_insights_prompt_v3(analytics: dict, snapshot: dict | None = None) -> 
         '  "competitive_insight": "..."\n'
         "}\n"
     )
-    return f"{base}\n{schema_block}\n{TONE_GUARDS_PROMPT}\n[prompt_version: v3]"
+    product_scope_guard = (
+        "\n重要：improvement_priorities[].affected_products 必须来自对应 label_code "
+        "在「主要问题」中列出的涉及产品；不要只限于高风险产品，也不要编造未出现的产品名。\n"
+    )
+    return f"{base}\n{schema_block}\n{product_scope_guard}\n{TONE_GUARDS_PROMPT}\n[prompt_version: v3]"
 
 
 def generate_report_insights_with_validation(
@@ -358,7 +394,34 @@ def generate_report_insights_with_validation(
                 or analytics.get("reviews")
                 or []
             )
-            assert_consistency(copy, kpis, risk_products=risk_products, reviews=reviews_for_check)
+            allowed_products_by_label = {}
+            all_product_names = set()
+            for product in risk_products:
+                name = (product.get("product_name") or product.get("name") or "").strip()
+                if name:
+                    all_product_names.add(name)
+            for cluster in (analytics.get("self") or {}).get("top_negative_clusters") or []:
+                code = cluster.get("label_code")
+                names = {
+                    (name or "").strip()
+                    for name in (cluster.get("affected_products") or cluster.get("products") or [])
+                    if (name or "").strip()
+                }
+                if code and names:
+                    allowed_products_by_label[code] = names
+                    all_product_names.update(names)
+            for product in (snapshot or {}).get("products") or []:
+                name = (product.get("product_name") or product.get("name") or "").strip()
+                if name:
+                    all_product_names.add(name)
+            assert_consistency(
+                copy,
+                kpis,
+                risk_products=risk_products,
+                reviews=reviews_for_check,
+                allowed_products_by_label=allowed_products_by_label,
+                all_product_names=all_product_names,
+            )
             copy["_prompt_version"] = "v3"
             return copy
         except (SchemaError, ToneGuardError, AssertionError) as e:
@@ -901,6 +964,12 @@ def _build_insights_prompt(analytics, snapshot=None):
 
     # Benchmark examples for competitive takeaway
     benchmarks = analytics.get("competitor", {}).get("benchmark_examples", [])
+    if isinstance(benchmarks, dict):
+        benchmarks = [
+            item
+            for key in ("product_design", "marketing_message", "service_model")
+            for item in (benchmarks.get(key) or [])
+        ]
     bench_lines = []
     for b in benchmarks[:2]:
         name = b.get("product_name", "")

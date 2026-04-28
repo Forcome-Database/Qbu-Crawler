@@ -363,3 +363,19 @@ def downgrade_report_phase_on_deadletter(conn, run_id: int) -> bool:
     )
     conn.commit()
     return result.rowcount > 0
+
+
+def reconcile_full_sent_deadletters(conn, *, limit: int = 50) -> int:
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT id FROM workflow_runs "
+        "WHERE report_phase='full_sent' "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        run_id = row["id"] if hasattr(row, "keys") else row[0]
+        if downgrade_report_phase_on_deadletter(conn, run_id):
+            changed += 1
+    return changed

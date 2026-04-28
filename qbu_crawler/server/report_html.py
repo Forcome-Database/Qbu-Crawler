@@ -37,7 +37,9 @@ def _annotate_reviews(reviews, logical_date_str):
     for r in reviews or []:
         # is_recent
         try:
-            d = date.fromisoformat((r.get("date_published") or "")[:10])
+            d = date.fromisoformat(
+                (r.get("date_published_parsed") or r.get("date_published") or "")[:10]
+            )
             r["is_recent"] = d >= cutoff
         except (ValueError, TypeError):
             r["is_recent"] = False

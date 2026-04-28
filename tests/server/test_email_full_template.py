@@ -169,6 +169,21 @@ def test_kpi_4_uses_lamp_count_not_hardcoded_25():
     )
 
 
+def test_kpi_4_prefers_attention_count_from_kpis():
+    """邮件必须消费统一 KPI，不能在模板里重新算出另一个关注数。"""
+    analytics = _mock_analytics(
+        product_status=[
+            {"product_name": "A", "status_lamp": "green", "primary_concern": ""},
+            {"product_name": "B", "status_lamp": "green", "primary_concern": ""},
+        ],
+    )
+    analytics["kpis"]["attention_product_count"] = 2
+
+    html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
+
+    assert "需关注产品 2" in html
+
+
 def test_kpi_4_zero_when_product_status_missing():
     """product_status 缺失时不能崩溃，需关注数为 0."""
     html = render_email_full(
@@ -184,9 +199,16 @@ def test_kpi_4_zero_when_product_status_missing():
 # ──────────────────────────────────────────────────────────
 def test_email_full_no_engineering_signals():
     """删除内部信号：覆盖率 / 本次入库 / estimated_dates / backfill_dominant."""
-    html = render_email_full(snapshot=_mock_snapshot(), analytics=_mock_analytics())
+    analytics = _mock_analytics(
+        bullets=[
+            "基线样本 594 条，其中近30天样本 5 条。",
+            "自有产品差评率 3.8%。",
+        ]
+    )
+    html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
     assert "覆盖率" not in html
     assert "本次入库" not in html
+    assert "历史补采" not in html
     assert "estimated_dates" not in html
     assert "backfill_dominant" not in html
 

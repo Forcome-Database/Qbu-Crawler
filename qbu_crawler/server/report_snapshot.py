@@ -52,6 +52,16 @@ def _record_artifact_safe(
         )
 
 
+def _attach_ingested_counts(products: list[dict], reviews: list[dict]) -> None:
+    counts: dict[str, int] = {}
+    for review in reviews or []:
+        sku = review.get("product_sku") or review.get("sku")
+        if sku:
+            counts[sku] = counts.get(sku, 0) + 1
+    for product in products or []:
+        product["ingested_count"] = counts.get(product.get("sku"), 0)
+
+
 def get_email_recipients() -> list[str]:
     """Unified email recipient loader.
 
@@ -460,7 +470,7 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
     if report_semantics == "bootstrap" and baseline_display_state == "initial":
         window_meaning = "首次建档，当前结果用于建立监控基线"
     elif report_semantics == "bootstrap":
-        window_meaning = f"基线建立期第{baseline_day_index}天，本次入库用于补足基线，不按新增口径解释"
+        window_meaning = f"基线建立期第{baseline_day_index}天，当前样本用于建立基线，不按新增口径解释"
     else:
         window_meaning = "增量监控期，本区块聚焦本次运行变化"
 
@@ -595,7 +605,7 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
         },
         "backfill_dominant": {
             "enabled": backfill_ratio >= BACKFILL_DOMINANT_RATIO,
-            "message": f"本次入库以历史补采为主，占比 {backfill_ratio:.0%}" if backfill_ratio >= BACKFILL_DOMINANT_RATIO else "",
+            "message": f"当前基线样本以历史评论池为主，占比 {backfill_ratio:.0%}" if backfill_ratio >= BACKFILL_DOMINANT_RATIO else "",
         },
     }
 
@@ -842,6 +852,7 @@ def freeze_report_snapshot(run_id: int, now: str | None = None) -> dict:
         return models.get_workflow_run(run_id) or run
 
     products, reviews = report.query_report_data(run["data_since"], until=run["data_until"])
+    _attach_ingested_counts(products, reviews)
     for item in reviews:
         item.setdefault("headline_cn", "")
         item.setdefault("body_cn", "")
@@ -1330,6 +1341,11 @@ def _merge_post_normalize_mutations(normalized: dict, raw: dict) -> None:
         if match and "deep_analysis" in match:
             nc["deep_analysis"] = match["deep_analysis"]
 
+    from qbu_crawler.server.report_common import normalize_deep_report_analytics
+    refreshed = normalize_deep_report_analytics(normalized)
+    normalized.clear()
+    normalized.update(refreshed)
+
 
 def generate_full_report_from_snapshot(
     snapshot: dict,
@@ -1473,7 +1489,7 @@ def generate_full_report_from_snapshot(
             _excel_reviews,
             report_date=report_date,
             output_path=output_path,
-            analytics=analytics,
+            analytics=pre_normalized,
         )
         _record_artifact_safe(
             snapshot.get("run_id"),

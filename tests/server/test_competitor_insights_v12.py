@@ -2,19 +2,21 @@
 
 Covers:
   - AC-36: ``competitor.weakness_opportunities`` produced when thresholds met
+  - AC-36: ``competitor.benchmark_examples`` split into product / marketing / service groups
   - §4.2.7.3: 雷达图维度聚合到 Top 6-8
   - §4.2.7.4: ``benchmark_takeaways`` 不再展示在附件 HTML
   - §4.2.6/§4.2.7: 竞品评分两极分化迁移到 "竞品启示" section
 
-Out of scope (deferred to v1.3, see commit body):
-  - ``benchmark_examples`` 三类 schema (product_design / marketing_message / service_model)
+Out of scope:
   - LLM-enhanced ``_generate_advantage_direction``
 """
 from __future__ import annotations
 
 from qbu_crawler.server.report_analytics import (
+    _benchmark_examples,
     _build_weakness_opportunities,
     _compute_chart_data,
+    _negative_opportunities,
 )
 from qbu_crawler.server.report_html import render_attachment_html
 
@@ -343,3 +345,68 @@ def test_weakness_opportunities_block_renders_when_present():
     assert "竞品弱点" in html
     assert "安装装配" in html
     assert "我方 安装装配 差异化" in html
+
+
+def test_benchmark_examples_split_into_three_categories():
+    labeled_reviews = [
+        _mk_item("competitor", "Comp A", "C1", [_mk_label("solid_build", polarity="positive")]),
+        _mk_item("competitor", "Comp B", "C2", [_mk_label("good_value", polarity="positive")]),
+        _mk_item("competitor", "Comp C", "C3", [_mk_label("service_fulfillment", polarity="positive")]),
+    ]
+    for i, item in enumerate(labeled_reviews):
+        item["review"].update({
+            "id": i + 1,
+            "rating": 5,
+            "headline_cn": f"样例{i}",
+            "body_cn": f"评论{i}",
+        })
+
+    benchmarks = _benchmark_examples(labeled_reviews)
+
+    assert set(benchmarks) == {"product_design", "marketing_message", "service_model"}
+    assert benchmarks["product_design"]
+    assert benchmarks["marketing_message"]
+    assert benchmarks["service_model"]
+
+
+def test_benchmark_examples_three_categories_render():
+    snapshot = _base_snapshot()
+    competitor = {
+        "top_positive_themes": [],
+        "benchmark_examples": {
+            "product_design": [{"label_codes": ["solid_build"], "body_cn": "做工扎实", "product_name": "Comp A"}],
+            "marketing_message": [{"label_codes": ["good_value"], "body_cn": "性价比高", "product_name": "Comp B"}],
+            "service_model": [{"label_codes": ["service_fulfillment"], "body_cn": "售后好", "product_name": "Comp C"}],
+        },
+        "negative_opportunities": [],
+        "weakness_opportunities": [],
+        "gap_analysis": [],
+    }
+    analytics = _analytics_with(competitor=competitor)
+
+    html = render_attachment_html(snapshot, analytics)
+
+    assert "产品形态" in html
+    assert "营销话术" in html
+    assert "服务模式" in html
+
+
+def test_negative_opportunities_preserve_translated_fields():
+    item = _mk_item(
+        "competitor",
+        "Comp Grinder",
+        "C1",
+        [_mk_label("quality_stability", polarity="negative")],
+    )
+    item["review"].update({
+        "rating": 1,
+        "headline": "Motor noise",
+        "body": "The motor started buzzing after three days.",
+        "headline_cn": "电机异响",
+        "body_cn": "三天就开始嗡嗡响。",
+    })
+
+    opportunities = _negative_opportunities([item])
+
+    assert opportunities[0]["headline_cn"] == "电机异响"
+    assert opportunities[0]["body_cn"] == "三天就开始嗡嗡响。"
