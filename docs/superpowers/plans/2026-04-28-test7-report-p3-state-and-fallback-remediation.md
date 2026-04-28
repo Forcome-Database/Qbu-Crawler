@@ -261,7 +261,29 @@ def test_derive_workflow_notification_status_deadletter_wins():
     assert status["delivery_last_error"] == "401"
 ```
 
-- [ ] **Step 2.4: 实现 `report_status.py`**
+- [ ] **Step 2.4: 写失败测试：`full_sent_local` 是 deadletter 正确降级态**
+
+```python
+from qbu_crawler.server.report_contract import validate_report_user_contract
+
+
+def test_validate_contract_allows_full_sent_local_deadletter_downgrade():
+    warnings = validate_report_user_contract({
+        "delivery": {
+            "workflow_notification_delivered": False,
+            "deadletter_count": 2,
+            "internal_status": "full_sent_local",
+        },
+        "executive_slots": [],
+        "executive_bullets": [],
+        "action_priorities": [],
+        "issue_diagnostics": [],
+    })
+
+    assert not any("delivery conflict" in item for item in warnings)
+```
+
+- [ ] **Step 2.5: 实现 `report_status.py`**
 
 函数：
 - `derive_email_delivery_status(full_report_email: dict | None, payload: dict | None) -> str`
@@ -270,7 +292,7 @@ def test_derive_workflow_notification_status_deadletter_wins():
 
 不要发送邮件，不要访问网络，只做 DB 状态推导与写入。
 
-- [ ] **Step 2.5: 跑状态同步测试**
+- [ ] **Step 2.6: 跑状态同步测试**
 
 Run:
 
@@ -348,7 +370,52 @@ db_status = {
 - `email_delivered = email_delivery_status == "sent"`。
 - `workflow_notification_delivered = workflow_notification_status == "sent"`。
 
-- [ ] **Step 3.6: 跑 workflow/manifest 测试**
+- [ ] **Step 3.6: 写失败测试：manifest 兼容普通 sqlite connection 和 sent 状态**
+
+```python
+def test_report_manifest_accepts_plain_sqlite_connection_and_sent_status(tmp_path):
+    db = tmp_path / "manifest.db"
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE workflow_runs (
+            id INTEGER PRIMARY KEY,
+            logical_date TEXT,
+            status TEXT,
+            report_phase TEXT
+        );
+        CREATE TABLE report_artifacts (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER,
+            artifact_type TEXT,
+            path TEXT,
+            bytes INTEGER,
+            hash TEXT,
+            template_version TEXT
+        );
+        CREATE TABLE notification_outbox (
+            id INTEGER PRIMARY KEY,
+            kind TEXT,
+            status TEXT,
+            payload TEXT
+        );
+        INSERT INTO workflow_runs VALUES (1, '2026-04-28', 'completed', 'full_sent');
+        INSERT INTO report_artifacts (run_id, artifact_type, path, bytes, hash, template_version)
+        VALUES (1, 'html_attachment', 'r.html', 10, 'abc', 'v');
+    """)
+    conn.execute(
+        "INSERT INTO notification_outbox (kind, status, payload) VALUES ('workflow_full_report', 'sent', ?)",
+        (json.dumps({"run_id": 1, "email_status": "success"}),),
+    )
+    conn.commit()
+
+    manifest = build_report_manifest(conn, run_id=1)
+
+    assert manifest["logical_date"] == "2026-04-28"
+    assert manifest["delivery"]["workflow_notification_delivered"] is True
+    assert manifest["delivery"]["deadletter_count"] == 0
+```
+
+- [ ] **Step 3.7: 跑 workflow/manifest 测试**
 
 Run:
 
