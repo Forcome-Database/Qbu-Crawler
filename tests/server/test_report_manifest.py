@@ -120,3 +120,96 @@ def test_update_analytics_delivery_from_db_rewrites_contract(tmp_path):
     assert delivery["workflow_notification_delivered"] is False
     assert delivery["deadletter_count"] == 1
     assert data["report_manifest"]["delivery"]["internal_status"] == "full_sent_local"
+
+
+def test_report_manifest_accepts_plain_sqlite_connection_and_sent_status():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE workflow_runs (
+            id INTEGER PRIMARY KEY,
+            logical_date TEXT,
+            status TEXT,
+            report_phase TEXT
+        );
+        CREATE TABLE report_artifacts (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER,
+            artifact_type TEXT,
+            path TEXT,
+            bytes INTEGER,
+            hash TEXT,
+            template_version TEXT
+        );
+        CREATE TABLE notification_outbox (
+            id INTEGER PRIMARY KEY,
+            kind TEXT,
+            status TEXT,
+            payload TEXT
+        );
+        INSERT INTO workflow_runs VALUES (1, '2026-04-28', 'completed', 'full_sent');
+        INSERT INTO report_artifacts (run_id, artifact_type, path, bytes, hash, template_version)
+        VALUES (1, 'html_attachment', 'r.html', 10, 'abc', 'v');
+    """)
+    conn.execute(
+        "INSERT INTO notification_outbox (kind, status, payload) VALUES ('workflow_full_report', 'sent', ?)",
+        (json.dumps({"run_id": 1, "email_status": "success"}),),
+    )
+    conn.commit()
+
+    manifest = build_report_manifest(conn, run_id=1)
+
+    assert manifest["logical_date"] == "2026-04-28"
+    assert manifest["delivery"]["workflow_notification_delivered"] is True
+    assert manifest["delivery"]["deadletter_count"] == 0
+
+
+def test_report_manifest_prefers_db_status_columns():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE workflow_runs (
+            id INTEGER PRIMARY KEY,
+            logical_date TEXT,
+            status TEXT,
+            report_phase TEXT,
+            report_generation_status TEXT,
+            email_delivery_status TEXT,
+            workflow_notification_status TEXT,
+            delivery_last_error TEXT,
+            delivery_checked_at TEXT
+        );
+        CREATE TABLE report_artifacts (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER,
+            artifact_type TEXT,
+            path TEXT,
+            bytes INTEGER,
+            hash TEXT,
+            template_version TEXT
+        );
+        CREATE TABLE notification_outbox (
+            id INTEGER PRIMARY KEY,
+            kind TEXT,
+            status TEXT,
+            payload TEXT
+        );
+        INSERT INTO workflow_runs VALUES (
+            1, '2026-04-28', 'completed', 'full_sent_local',
+            'generated', 'sent', 'deadletter', 'bridge returned HTTP 401', NULL
+        );
+        INSERT INTO report_artifacts (run_id, artifact_type, path, bytes, hash, template_version)
+        VALUES (1, 'html_attachment', 'r.html', 10, 'abc', 'v');
+    """)
+    conn.execute(
+        "INSERT INTO notification_outbox (kind, status, payload) VALUES ('workflow_full_report', 'sent', ?)",
+        (json.dumps({"run_id": 1, "email_status": "success"}),),
+    )
+
+    manifest = build_report_manifest(conn, run_id=1)
+
+    delivery = manifest["delivery"]
+    assert delivery["report_generated"] is True
+    assert delivery["email_delivered"] is True
+    assert delivery["workflow_notification_delivered"] is False
+    assert delivery["db_status"]["workflow_notification_status"] == "deadletter"
+    assert delivery["last_errors"] == ["bridge returned HTTP 401"]

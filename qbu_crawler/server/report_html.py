@@ -77,10 +77,11 @@ def _render_v3_html_string(snapshot, analytics):
     normalized = normalize_deep_report_analytics(analytics)
     contract = normalized.get("report_user_contract") or {}
     if (contract.get("contract_context") or {}).get("snapshot_source") != "provided":
+        llm_copy = None if contract.get("contract_source") == "legacy_adapter" else (normalized.get("report_copy") or None)
         contract = build_report_user_contract(
             snapshot=snapshot or {},
             analytics=normalized,
-            llm_copy=(normalized.get("report_copy") or None),
+            llm_copy=llm_copy,
         )
         normalized["report_user_contract"] = contract
     if contract.get("issue_diagnostics"):

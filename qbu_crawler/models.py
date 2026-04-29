@@ -360,6 +360,9 @@ def init_db():
     _mig0010.up(conn)
     from qbu_crawler.server.migrations import migration_0011_failure_mode_enum_backfill as _mig0011
     _mig0011.up(conn)
+    from qbu_crawler.server.migrations import migration_0012_report_status_columns as _mig0012
+    _mig0012.up(conn)
+    _mig0012.backfill(conn)
 
     # Backfill date_published_parsed for existing reviews
     _backfill_date_published_parsed(conn)
@@ -733,6 +736,47 @@ def update_workflow_run(run_id: int, **fields) -> dict:
         if "updated_at" not in updates:
             assignments += ", updated_at = ?"
             params.append(now_shanghai().isoformat())
+        params.append(run_id)
+        cursor = conn.execute(
+            f"UPDATE workflow_runs SET {assignments} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise ValueError(f"Workflow run {run_id} not found")
+        row = conn.execute(
+            "SELECT * FROM workflow_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def update_workflow_report_status(run_id: int, **fields) -> dict:
+    allowed = {
+        "report_generation_status",
+        "email_delivery_status",
+        "workflow_notification_status",
+        "delivery_last_error",
+        "delivery_checked_at",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        row = get_workflow_run(run_id)
+        if row is None:
+            raise ValueError(f"Workflow run {run_id} not found")
+        return row
+
+    conn = get_conn()
+    try:
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        params = list(updates.values())
+        if "delivery_checked_at" not in updates:
+            assignments += ", delivery_checked_at = ?"
+            params.append(now_shanghai().isoformat())
+        assignments += ", updated_at = ?"
+        params.append(now_shanghai().isoformat())
         params.append(run_id)
         cursor = conn.execute(
             f"UPDATE workflow_runs SET {assignments} WHERE id = ?",

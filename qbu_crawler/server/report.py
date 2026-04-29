@@ -618,9 +618,8 @@ def render_email_full(snapshot, analytics):
                         own_negative_review_rate, own_negative_review_rate_display,
                         own_product_count, competitor_product_count,
                         ingested_review_rows}
-      - analytics.report_copy.{hero_headline, executive_bullets[],
-                                improvement_priorities[].{label_display,
-                                  short_title, affected_products_count}}
+      - analytics.report_user_contract.action_priorities[]
+      - analytics.report_copy.{hero_headline, executive_bullets[]}
       - analytics.self.product_status[].{product_name, status_lamp,
                                           primary_concern}  (Task 3.4)
 
@@ -636,19 +635,17 @@ def render_email_full(snapshot, analytics):
         autoescape=select_autoescape(["html", "j2"]),
     )
 
-    # F011 §4.1 — the new template consumes raw analytics fields only:
-    # kpis (health_index, own_*_review_rows, own_negative_review_rate,
-    # own_/competitor_product_count, ingested_review_rows), report_copy
-    # (hero_headline / executive_bullets / improvement_priorities), and
-    # self.product_status. We deliberately do NOT call
-    # normalize_deep_report_analytics here so the upstream caller stays the
-    # single source of truth for KPIs (avoids double-shrinkage on
-    # health_index and surprising overrides for callers that pre-compute
-    # values). `analytics` is passed through verbatim.
+    email_analytics = dict(analytics or {})
+    if not email_analytics.get("report_user_contract"):
+        from qbu_crawler.server.report_contract import build_report_user_contract
+        email_analytics["report_user_contract"] = build_report_user_contract(
+            snapshot=snapshot or {},
+            analytics=email_analytics,
+        )
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         logical_date=snapshot.get("logical_date", "") if snapshot else "",
-        analytics=analytics or {},
+        analytics=email_analytics,
     )
 
 
@@ -817,7 +814,7 @@ def _generate_analytical_excel(
     Sheets (in order):
       1. 核心数据   — per-product summary with status lamp + dual-denominator
                       negative rate (H10) + 主要问题 from product_status
-      2. 现在该做什么 — improvement_priorities (LLM/fallback) with short_title +
+      2. 现在该做什么 — report_user_contract.action_priorities with short_title +
                       affected_products + full_action + evidence_count
       3. 评论原文   — raw reviews with normalized impact_category enum (H12) and
                       failure_mode 9-class enum (H19), distinct from labels
@@ -826,6 +823,7 @@ def _generate_analytical_excel(
     """
     if analytics is None:
         return _legacy_generate_excel(products, reviews, report_date=report_date)
+    analytics = normalize_deep_report_analytics(analytics)
 
     if report_date is None:
         report_date = config.now_shanghai()
@@ -1004,7 +1002,6 @@ def _generate_analytical_excel(
     _write_headers(ws_reco, reco_headers)
     priorities = (
         ((analytics.get("report_user_contract") or {}).get("action_priorities"))
-        or (analytics.get("report_copy") or {}).get("improvement_priorities")
         or []
     )
     for idx, rec in enumerate(priorities[:5], start=1):

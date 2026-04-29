@@ -357,4 +357,15 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `tests/server/test_report_contract_llm.py` — LLM evidence-only prompt 和 copy merge 校验回归
 - `tests/server/test_report_contract_renderers.py` — HTML / Excel / 邮件 contract-only 消费回归
 - `tests/server/test_test7_artifact_replay.py` 与 `tests/fixtures/report_replay/` — 测试7脱敏最小 artifact replay 防回归
+
+## 2026-04-29 测试7 P3 状态模型与 fallback 收口增量
+
+- `qbu_crawler/server/migrations/migration_0012_report_status_columns.py` — 为 `workflow_runs` 增加报告生成、业务邮件送达、workflow 通知送达三类状态字段，并支持历史 backfill
+- `qbu_crawler/server/report_status.py` — 统一从 full report 邮件结果、notification outbox 和 artifact 状态推导并同步 DB 状态
+- `workflow_runs.report_generation_status` — 只表达本地报告产物是否生成：`unknown/pending/generated/failed/skipped`
+- `workflow_runs.email_delivery_status` — 只表达业务日报邮件是否送达：`unknown/pending/sent/failed/skipped`
+- `workflow_runs.workflow_notification_status` — 只表达 workflow 外部通知是否送达：`unknown/pending/sent/deadletter/partial/skipped`
+- `workflow_runs.report_phase` 只表达报告阶段；`full_sent_local + workflow_notification_status=deadletter` 是正确降级态，不表示业务日报失败
+- `report_manifest.delivery.db_status` 是内部审计状态来源；用户业务 HTML / Excel / 邮件不得展示 deadletter、低覆盖 SKU、估算日期占比等运维诊断
+- `REPORT_CONTRACT_STRICT_MODE` 默认开启；旧 analytics 字段只能经 `report_user_contract` adapter 转换后被 renderer 消费
 - `tests/server/test_run_log.py` 与 `tests/server/test_report_manifest.py` — 测试9 run log 与 P2 manifest/delivery 回写防回归
