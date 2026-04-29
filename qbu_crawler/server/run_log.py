@@ -67,8 +67,10 @@ def build_quality_log_lines(snapshot, quality, task_rows=None):
         if not sku or sku not in low_skus:
             continue
         site_total = int(product.get("review_count") or 0)
+        ratings_only = int(product.get("ratings_only_count") or 0)
+        text_total = max(0, site_total - ratings_only)
         ingested = int(product.get("ingested_count") or 0)
-        coverage = (ingested / site_total) if site_total else 1.0
+        scrape_completeness = (ingested / text_total) if text_total else 1.0
         task_summary = task_by_sku.get(sku) or {}
         extraction = (task_summary.get("scrape_meta") or {}).get("review_extraction") or {}
         stop_reason = extraction.get("stop_reason") or "unknown"
@@ -77,7 +79,8 @@ def build_quality_log_lines(snapshot, quality, task_rows=None):
             "low_coverage_product "
             f"sku={sku} site={product.get('site') or ''} "
             f"name={product.get('name') or product.get('product_name') or ''} "
-            f"ingested={ingested} site_total={site_total} coverage={coverage * 100:.1f}% "
+            f"ingested={ingested} site_total={site_total} ratings_only={ratings_only} "
+            f"text_total={text_total} scrape_completeness={scrape_completeness * 100:.1f}% "
             f"extracted={task_summary.get('extracted_review_count', 'n/a')} "
             f"saved={task_summary.get('saved_review_count', 'n/a')} "
             f"stop_reason={stop_reason} pages_seen={pages_seen if pages_seen is not None else 'n/a'}"

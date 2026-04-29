@@ -126,7 +126,11 @@ def init_db():
             review_count INTEGER,
             rating REAL,
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            ownership TEXT NOT NULL DEFAULT 'competitor'
+            ownership TEXT NOT NULL DEFAULT 'competitor',
+            -- BV 把 ratings-only（仅星级、无文字内容）评论也算进 review_count，
+            -- 但 scraper 不可能抓到没文字的评论。该字段记录 ratings-only 数量，
+            -- 真实文字评论数 = review_count - ratings_only_count，用于纠正覆盖率指标。
+            ratings_only_count INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS product_snapshots (
@@ -137,6 +141,7 @@ def init_db():
             review_count INTEGER,
             rating REAL,
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ratings_only_count INTEGER DEFAULT 0,
             FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
         );
 
@@ -285,6 +290,8 @@ def init_db():
         "ALTER TABLE review_analysis ADD COLUMN impact_category TEXT",
         "ALTER TABLE review_analysis ADD COLUMN failure_mode TEXT",
         "ALTER TABLE workflow_runs ADD COLUMN scrape_quality TEXT",
+        "ALTER TABLE products ADD COLUMN ratings_only_count INTEGER DEFAULT 0",
+        "ALTER TABLE product_snapshots ADD COLUMN ratings_only_count INTEGER DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -412,9 +419,12 @@ def _decode_json_fields(row: sqlite3.Row | None, fields: tuple[str, ...] = ()) -
 def save_product(data: dict) -> int:
     conn = get_conn()
     now = _NOW_SHANGHAI
+    # ratings_only_count 默认 0：旧 scraper 不返回该字段时落 0，等同"全部都是文字评论"语义
+    data = dict(data)
+    data.setdefault("ratings_only_count", 0)
     cursor = conn.execute(f"""
-        INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, ownership, scraped_at)
-        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, {now})
+        INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, ownership, ratings_only_count, scraped_at)
+        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, :ratings_only_count, {now})
         ON CONFLICT(url) DO UPDATE SET
             site = excluded.site,
             name = excluded.name,
@@ -424,6 +434,7 @@ def save_product(data: dict) -> int:
             review_count = excluded.review_count,
             rating = excluded.rating,
             ownership = excluded.ownership,
+            ratings_only_count = excluded.ratings_only_count,
             scraped_at = {now}
     """, data)
     product_id = cursor.lastrowid
@@ -439,10 +450,11 @@ def save_snapshot(product_id: int, data: dict):
     """保存产品快照（价格/库存/评分/评论数变化历史）"""
     conn = get_conn()
     conn.execute(f"""
-        INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, scraped_at)
-        VALUES (?, ?, ?, ?, ?, {_NOW_SHANGHAI})
+        INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, ratings_only_count, scraped_at)
+        VALUES (?, ?, ?, ?, ?, ?, {_NOW_SHANGHAI})
     """, (product_id, data.get("price"), data.get("stock_status"),
-          data.get("review_count"), data.get("rating")))
+          data.get("review_count"), data.get("rating"),
+          int(data.get("ratings_only_count") or 0)))
     conn.commit()
     conn.close()
 
@@ -1974,6 +1986,7 @@ def save_review_analysis(
     analyzed_at: str | None = None,
     impact_category: str | None = None,      # NEW
     failure_mode: str | None = None,          # NEW
+    failure_mode_raw: str | None = None,
 ) -> None:
     """UPSERT a review analysis row. Conflicts on (review_id, prompt_version) update all fields.
 
@@ -1988,8 +2001,8 @@ def save_review_analysis(
             INSERT INTO review_analysis
                 (review_id, sentiment, sentiment_score, labels, features,
                  insight_cn, insight_en, llm_model, prompt_version, token_usage, analyzed_at,
-                 impact_category, failure_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 impact_category, failure_mode, failure_mode_raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(review_id, prompt_version) DO UPDATE SET
                 sentiment       = excluded.sentiment,
                 sentiment_score = excluded.sentiment_score,
@@ -2001,7 +2014,8 @@ def save_review_analysis(
                 token_usage     = excluded.token_usage,
                 analyzed_at     = excluded.analyzed_at,
                 impact_category = excluded.impact_category,
-                failure_mode    = excluded.failure_mode
+                failure_mode    = excluded.failure_mode,
+                failure_mode_raw = excluded.failure_mode_raw
             """,
             (
                 review_id,
@@ -2017,6 +2031,7 @@ def save_review_analysis(
                 ts,
                 impact_category,    # NEW
                 failure_mode,       # NEW
+                failure_mode_raw,
             ),
         )
         conn.commit()

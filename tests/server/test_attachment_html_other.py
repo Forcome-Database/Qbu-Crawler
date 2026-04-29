@@ -135,6 +135,26 @@ def test_product_status_returns_all_own_products_including_healthy():
         assert name in html, f"product {name} missing from rendered html"
 
 
+def test_product_status_without_risk_factors_displays_dash_not_zero_score():
+    """测试13回归：健康/无数据产品没有风险因子时，风险分展示为 —，避免把 0.0 误读成有效评分。"""
+    product_status = [
+        {"product_name": "Green Product", "product_sku": "G1",
+         "status_lamp": "green", "status_label": "健康",
+         "primary_concern": "", "risk_score": 0.0,
+         "risk_factors": None, "near_high_risk": False},
+        {"product_name": "Gray Product", "product_sku": "X1",
+         "status_lamp": "gray", "status_label": "无数据",
+         "primary_concern": "", "risk_score": 0.0,
+         "risk_factors": None, "near_high_risk": False},
+    ]
+    html = render_attachment_html(_base_snapshot(), _base_analytics(product_status=product_status))
+
+    assert "Green Product" in html
+    assert "Gray Product" in html
+    assert ">0.0</span>" not in html
+    assert ">—</span>" in html
+
+
 def test_product_status_lamp_thresholds():
     """F011 §4.2.3 — _product_status() data-builder lamp threshold rules:
         🔴 red:    risk_score >= HIGH_RISK_THRESHOLD (35)

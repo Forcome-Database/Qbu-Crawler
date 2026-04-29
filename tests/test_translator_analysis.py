@@ -100,6 +100,8 @@ def _full_llm_response(index=0):
             "features": ["做工精良", "易于使用", "性价比高"],
             "insight_cn": "用户对产品质量和易用性非常满意",
             "insight_en": "User is very satisfied with product quality and ease of use",
+            "impact_category": "durability",
+            "failure_mode": "无齿轮问题",
         }
     ]
 
@@ -159,7 +161,9 @@ class TestAnalyzeAndTranslateBatch:
         assert analysis["sentiment"] == "positive"
         assert analysis["sentiment_score"] == 0.9
         assert analysis["llm_model"] == "test-model"
-        assert analysis["prompt_version"] == "v2"
+        assert analysis["prompt_version"] == "v3"
+        assert analysis["failure_mode"] == "none"
+        assert analysis["failure_mode_raw"] == "无齿轮问题"
 
         labels = json.loads(analysis["labels"])
         assert len(labels) == 2
@@ -289,4 +293,4 @@ class TestAnalyzeAndTranslateBatch:
 
     def test_prompt_version_attribute(self):
         """TranslationWorker should have _prompt_version class attribute."""
-        assert TranslationWorker._prompt_version == "v2"
+        assert TranslationWorker._prompt_version == "v3"

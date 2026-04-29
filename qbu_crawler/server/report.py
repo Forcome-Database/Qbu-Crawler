@@ -94,10 +94,10 @@ def query_report_data(since: datetime) -> tuple[list[dict], list[dict]]:
 
     conn = models.get_conn()
     try:
+        product_columns = _product_select_columns(conn)
         product_rows = conn.execute(
-            """
-            SELECT url, name, sku, price, stock_status, rating, review_count,
-                   scraped_at, site, ownership
+            f"""
+            SELECT {product_columns}
             FROM products
             WHERE scraped_at >= ?
             ORDER BY scraped_at DESC
@@ -635,13 +635,30 @@ def render_email_full(snapshot, analytics):
         autoescape=select_autoescape(["html", "j2"]),
     )
 
-    email_analytics = dict(analytics or {})
-    if not email_analytics.get("report_user_contract"):
-        from qbu_crawler.server.report_contract import build_report_user_contract
+    from qbu_crawler.server.report_contract import build_report_user_contract
+
+    email_source = dict(analytics or {})
+    input_contract = email_source.get("report_user_contract") or {}
+    if not email_source.get("kpis") and input_contract.get("kpis"):
+        email_source["kpis"] = dict(input_contract.get("kpis") or {})
+    input_report_copy = email_source.get("report_copy") or {}
+    input_kpis = dict(email_source.get("kpis") or {})
+
+    email_analytics = normalize_deep_report_analytics(email_source)
+    if "health_index" in input_kpis:
+        email_analytics.setdefault("kpis", {})["health_index"] = input_kpis["health_index"]
+    if "hero_headline" in input_report_copy:
+        email_analytics.setdefault("report_copy", {})["hero_headline"] = input_report_copy.get("hero_headline") or ""
+    if "executive_bullets" in input_report_copy:
+        email_analytics.setdefault("report_copy", {})["executive_bullets"] = input_report_copy.get("executive_bullets") or []
+    contract = email_analytics.get("report_user_contract") or {}
+    if (contract.get("contract_context") or {}).get("snapshot_source") != "provided":
         email_analytics["report_user_contract"] = build_report_user_contract(
             snapshot=snapshot or {},
             analytics=email_analytics,
         )
+    if "health_index" in input_kpis:
+        email_analytics.setdefault("report_user_contract", {}).setdefault("kpis", {})["health_index"] = input_kpis["health_index"]
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         logical_date=snapshot.get("logical_date", "") if snapshot else "",
@@ -944,19 +961,29 @@ def _generate_analytical_excel(
     # ─────────────────────────────────────────────────────────────────────
     ws_core = wb.active
     ws_core.title = "核心数据"
+    # 列设计：业务侧（站点评分/总评论数/差评数/差评率_站点/样本覆盖率）+ 运维侧（仅评分数/文字评论数/采集完整率）
+    # 命名严格区分，避免读者把"覆盖率"歧义化
     core_headers = [
         "产品名称", "SKU", "站点", "归属", "售价", "库存状态",
-        "站点评分", "站点评论数", "采集评论数", "覆盖率",
+        "站点评分", "站点评论数", "仅评分数", "文字评论数",
+        "采集评论数", "覆盖率", "采集完整率",
         "差评数", "差评率(站点分母)", "差评率(采集分母)",
         "状态灯", "主要问题",
     ]
     _write_headers(ws_core, core_headers)
+    from qbu_crawler.server.report_common import text_review_count
     for product in products:
         sku = product.get("sku") or ""
         site_count = int(product.get("review_count") or 0)
+        ratings_only = int(product.get("ratings_only_count") or 0)
+        text_count = text_review_count(product)  # = site_count - ratings_only
         ingested = review_counts_by_sku.get(sku, 0)
         negatives = negative_counts_by_sku.get(sku, 0)
-        coverage = (ingested / site_count) if site_count > 0 else None
+        # 业务口径：文本样本占比 = ingested / 站点总反馈（含 ratings-only），反映分析代表性
+        text_sample_share = (ingested / site_count) if site_count > 0 else None
+        # 运维口径：采集完整率 = ingested / 文字评论数，反映 scraper 健康，应 ≈ 100%
+        scrape_completeness = (ingested / text_count) if text_count > 0 else None
+        # 差评率分母维持原义（站点 / 采集），不引入 ratings-only 修正以免破坏既有横向对比
         rate_site = (negatives / site_count) if site_count > 0 else None
         rate_ingested = (negatives / ingested) if ingested > 0 else None
 
@@ -981,8 +1008,11 @@ def _generate_analytical_excel(
             _xl_display(product.get("stock_status"), _STOCK_DISPLAY),
             product.get("rating"),
             site_count,
+            ratings_only,
+            text_count,
             ingested,
-            round(coverage, 4) if coverage is not None else "—",
+            round(text_sample_share, 4) if text_sample_share is not None else "—",
+            round(scrape_completeness, 4) if scrape_completeness is not None else "—",
             negatives,
             round(rate_site, 4) if rate_site is not None else "—",
             round(rate_ingested, 4) if rate_ingested is not None else "—",
@@ -1238,6 +1268,17 @@ def _report_ts(value: datetime | str) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _product_select_columns(conn, alias=None):
+    prefix = f"{alias}." if alias else ""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(products)").fetchall()}
+    ratings_only = f"{prefix}ratings_only_count" if "ratings_only_count" in columns else "0 AS ratings_only_count"
+    return (
+        f"{prefix}url, {prefix}name, {prefix}sku, {prefix}price, {prefix}stock_status, "
+        f"{prefix}rating, {prefix}review_count, {ratings_only}, "
+        f"{prefix}scraped_at, {prefix}site, {prefix}ownership"
+    )
+
+
 def query_report_data(
     since: datetime | str,
     until: datetime | str | None = None,
@@ -1251,10 +1292,10 @@ def query_report_data(
 
     conn = models.get_conn()
     try:
+        product_columns = _product_select_columns(conn)
         product_rows = conn.execute(
-            """
-            SELECT url, name, sku, price, stock_status, rating, review_count,
-                   scraped_at, site, ownership
+            f"""
+            SELECT {product_columns}
             FROM products
             WHERE scraped_at >= ?
               AND scraped_at < ?
@@ -1326,10 +1367,10 @@ def query_cumulative_data() -> tuple[list[dict], list[dict]]:
     """
     conn = models.get_conn()
     try:
+        product_columns = _product_select_columns(conn)
         product_rows = conn.execute(
-            """
-            SELECT url, name, sku, price, stock_status, rating, review_count,
-                   scraped_at, site, ownership
+            f"""
+            SELECT {product_columns}
             FROM products
             ORDER BY scraped_at DESC
             """
@@ -1396,11 +1437,11 @@ def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
         review_where = f"WHERE {' AND '.join(review_clauses)}" if review_clauses else ""
 
         if models._scope_has_review_constraints(scope):  # noqa: SLF001
+            product_columns = _product_select_columns(conn, alias="p")
             product_rows = conn.execute(
                 f"""
                 SELECT DISTINCT
-                       p.url, p.name, p.sku, p.price, p.stock_status, p.rating, p.review_count,
-                       p.scraped_at, p.site, p.ownership
+                       {product_columns}
                 FROM reviews r
                 JOIN products p ON r.product_id = p.id
                 {review_where}
@@ -1411,10 +1452,10 @@ def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
         else:
             product_clauses, product_params = models._scope_product_clauses(scope, alias="p")  # noqa: SLF001
             product_where = f"WHERE {' AND '.join(product_clauses)}" if product_clauses else ""
+            product_columns = _product_select_columns(conn)
             product_rows = conn.execute(
                 f"""
-                SELECT url, name, sku, price, stock_status, rating, review_count,
-                       scraped_at, site, ownership
+                SELECT {product_columns}
                 FROM products p
                 {product_where}
                 ORDER BY p.scraped_at DESC, p.id DESC

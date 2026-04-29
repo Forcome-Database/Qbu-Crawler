@@ -486,9 +486,7 @@
                 {%- endif -%}
               </td>
               <td class="risk-detail hover-only">
-                <span class="risk-score" data-tooltip='{{ (p.risk_factors or {}) | tojson }}'>
-                  {{ "%.1f"|format(p.risk_score or 0) }}
-                </span>
+                <span class="risk-score" data-tooltip='{% if p.risk_factors %}{{ p.risk_factors | tojson }}{% elif p.status_lamp == "gray" %}未采集到评论{% else %}无负向风险因子{% endif %}'>{% if p.risk_factors %}{{ "%.1f"|format(p.risk_score or 0) }}{% else %}—{% endif %}</span>
               </td>
             </tr>
             {% endfor %}
@@ -636,6 +634,7 @@
           <span class="legend-item"><span class="legend-cell yellow"></span>中性（40%–70%）</span>
           <span class="legend-item"><span class="legend-cell red"></span>负面（&lt;40%）</span>
           <span class="legend-item"><span class="legend-cell gray"></span>样本不足（&lt;3）</span>
+          <span class="legend-item">混合=正负并存，按 0.5 权重计入健康度</span>
         </div>
         <div class="heatmap-container">
           <table class="heatmap-table heatmap-table-v12">

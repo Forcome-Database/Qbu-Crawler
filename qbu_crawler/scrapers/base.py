@@ -1155,6 +1155,54 @@ class BaseScraper:
         except (ValueError, TypeError):
             return None
 
+    # ── 异步注入式 promo 弹窗清理 ──
+    # 站点（如 basspro）会在产品页加载几秒后，由第三方 SaaS（Listrak/Bronto/Privy/
+    # Klaviyo 等）异步注入一个 lightbox iframe + 全屏 overlay 做 newsletter 订阅或
+    # exit-intent。这个 iframe 的 sandbox 通常带 `allow-top-navigation`，意味着
+    # 它内部脚本可以触发 parent reload；恰好撞到 DrissionPage 的 tab.run_js
+    # 会抛 ContextLostError ("The page is refreshed.")。
+    # 必须在重 JS 操作之前主动移除，且在 wait 间隙重复（mousemove/scroll 后会再注入）。
+    _PROMO_OVERLAY_JS = """
+        let removed = 0;
+        // 1) lightbox / exit-intent popup iframe
+        document.querySelectorAll(
+            'iframe[id*="lightbox" i], iframe[title*="Email" i], '
+            + 'iframe[title*="Exit Intent" i], iframe[src*="privy" i], '
+            + 'iframe[src*="klaviyo" i], iframe[src*="listrak" i], '
+            + 'iframe[src*="justuno" i], iframe[src*="bronto" i]'
+        ).forEach(f => { try { f.remove(); removed++; } catch(e) {} });
+        // 2) 全屏 fixed overlay（z-index >= 99 + 占据 ≥ 50% 视口 + 命名疑似弹窗）
+        document.querySelectorAll('div').forEach(d => {
+            try {
+                const cs = getComputedStyle(d);
+                const z = parseInt(cs.zIndex || '0', 10);
+                if (cs.position === 'fixed' && z >= 99
+                    && d.offsetWidth  >= window.innerWidth  * 0.5
+                    && d.offsetHeight >= window.innerHeight * 0.5
+                    && /lightbox|popup|overlay|modal|fancybox/i.test(
+                        (d.className || '') + ' ' + (d.id || ''))) {
+                    d.remove(); removed++;
+                }
+            } catch(e) {}
+        });
+        // 3) popup 常把 body 锁成 overflow:hidden，解锁
+        if (document.body) document.body.style.overflow = '';
+        return removed;
+    """
+
+    def _kill_promo_overlays(self, tab, max_attempts: int = 3):
+        """物理移除异步注入的 newsletter / exit-intent / lightbox 弹窗。
+        必须在 tab.run_js 重操作之前调用，且要在 wait 间隙重复。"""
+        for _ in range(max_attempts):
+            try:
+                n = tab.run_js(self._PROMO_OVERLAY_JS)
+                if n and int(n) > 0:
+                    tab.wait(0.5, 1)
+                    continue
+                return
+            except Exception:
+                return
+
     def close(self):
         # DrissionPage 默认 quit() 只发 CDP Browser.close + detach WebSocket，不杀进程；
         # Chrome 后台保持运行机制让进程继续 LISTENING，必须 force=True 走 SystemInfo 路径。

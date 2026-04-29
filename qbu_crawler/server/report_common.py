@@ -9,6 +9,41 @@ from datetime import date, datetime, timedelta
 from qbu_crawler import config
 from qbu_crawler.server import report_analytics
 
+
+# ── 双口径覆盖率辅助 ──
+# BV/Bazaarvoice 的 review_count 包含 ratings-only（仅星级、无文字）评论。
+# 报告里有两个完全不同的覆盖率指标，命名必须严格区分以免业务/运维误读：
+#
+#   text_sample_share = ingested / review_count
+#       业务/分析口径：分析样本占总反馈比，低代表"还有部分用户没写文字、其态度未被分析"
+#       即使 scraper 100% 健康，此值仍可能不到 100%（ratings-only 占比由产品/品类决定）
+#
+#   scrape_completeness = ingested / text_review_count
+#       运维/爬虫口径：爬虫抓全文字评论的健康度
+#       text_review_count = review_count - ratings_only_count 是 scraper 物理上能抓的最大值
+#       稳定状态应 ≈ 100%；明显小于 100% 说明 scraper 漏抓
+#
+# 旧产品记录 / TrustSpot 站点（waltons）无 ratings_only_count 字段时回落到 0，
+# text_review_count == review_count，两个口径数值一致，行为完全向后兼容。
+
+def text_review_count(product: dict) -> int:
+    """物理上 scraper 能抓到的文字评论数 = review_count - ratings_only_count（≥ 0）。"""
+    site = int(product.get("review_count") or 0)
+    ratings_only = int(product.get("ratings_only_count") or 0)
+    return max(0, site - ratings_only)
+
+
+def text_sample_share(ingested: int, product: dict):
+    """业务口径覆盖率：分母含 ratings-only。无评论时返 None。"""
+    site = int(product.get("review_count") or 0)
+    return (ingested / site) if site > 0 else None
+
+
+def scrape_completeness(ingested: int, product: dict):
+    """运维口径覆盖率：分母仅文字评论。无文字评论时返 None。"""
+    text_total = text_review_count(product)
+    return (ingested / text_total) if text_total > 0 else None
+
 # ── Display-name mappings ─────────────────────────────────────────────────────
 
 _LABEL_DISPLAY = {
@@ -57,7 +92,8 @@ METRIC_TOOLTIPS = {
     "累计自有评论": "当前基线样本中的自有产品评论行数；近30天样本用于判断新近反馈。",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
     "总体竞品差距指数": "跨维度平均的竞品差距指数：各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
-    "样本覆盖率": "实际入库评论数 ÷ 站点展示总评论数。受 MAX_REVIEWS 上限和翻页限制影响，部分产品覆盖率 <100% 属正常",
+    "样本覆盖率": "<strong>分析代表性</strong>：实际入库评论数 ÷ 站点总反馈数（含 ratings-only）。低于 100% 不代表 scraper 异常，而是反映「还有部分用户只打了星没写文字、其态度未被 NLP 分析覆盖」；判 scraper 健康看「采集完整率」。",
+    "采集完整率": "<strong>爬虫健康度</strong>：实际入库评论数 ÷ 物理上能抓到的文字评论数（站点总反馈 − 仅评分数）。正常应 ≈ 100%；明显小于 100% 说明 scraper 漏抓、需排查。",
     # Product health matrix (P2)
     "评分": "站点展示的综合评分（历史累积，非本期样本）",
     "差评率_产品": "该产品 ≤{low_rating}星评论数 ÷ 该产品采集评论总数",
@@ -993,15 +1029,21 @@ def normalize_deep_report_analytics(analytics):
         normalized["kpis"]["competitive_gap_index"] = compute_competitive_gap_index(
             normalized.get("competitor", {}).get("gap_analysis") or []
         )
-    risk_products_for_counts = normalized.get("self", {}).get("risk_products", [])
+    self_section = normalized.get("self", {})
+    risk_products_for_counts = self_section.get("risk_products", [])
+    product_status_for_counts = self_section.get("product_status") or []
+    attention_source = product_status_for_counts or risk_products_for_counts
     normalized["kpis"]["high_risk_count"] = sum(
         1 for p in risk_products_for_counts
         if p.get("risk_score", 0) >= config.HIGH_RISK_THRESHOLD
     )
-    normalized["kpis"]["attention_product_count"] = sum(
-        1 for p in risk_products_for_counts
-        if p.get("status_lamp") in ("yellow", "red")
-    )
+    if attention_source:
+        normalized["kpis"]["attention_product_count"] = sum(
+            1 for p in attention_source
+            if p.get("status_lamp") in ("yellow", "red")
+        )
+    else:
+        normalized["kpis"]["attention_product_count"] = normalized["kpis"].get("attention_product_count", 0) or 0
     kpi_semantics = normalized.setdefault("report_user_contract", {}).setdefault("kpi_semantics", {})
     kpi_semantics.update({
         "high_risk_count": normalized["kpis"]["high_risk_count"],
@@ -1063,19 +1105,42 @@ def normalize_deep_report_analytics(analytics):
         },
     ]
 
-    # Coverage rate card
+    # ── 双口径覆盖率指标（命名严格区分，避免业务/运维误读）──
+    # text_sample_share = ingested / review_count（含 ratings-only）→ 业务，反映分析代表性
+    # scrape_completeness = ingested / text_review_count（不含 ratings-only）→ 运维，反映 scraper 健康度
     site_total = kpis.get("site_reported_review_total_current", 0) or 0
+    text_total = kpis.get("text_review_total_current") or 0
+    ratings_only_total = kpis.get("ratings_only_total_current") or 0
     ingested = kpis.get("ingested_review_rows", 0) or 0
-    coverage_rate = ingested / max(site_total, 1) if site_total > 0 else 0
-    kpis["coverage_rate"] = coverage_rate
+
+    # ── 业务口径：文本样本占比（旧 "样本覆盖率"，保留分母不变）──
+    text_sample_share = ingested / max(site_total, 1) if site_total > 0 else 0
+    text_sample_share = min(1.0, text_sample_share)  # 累积场景下钳制到 100%
+    kpis["text_sample_share"] = text_sample_share
+    kpis["coverage_rate"] = text_sample_share  # 兼容别名，老下游读取不破
     kpi_cards.append({
         "label": "样本覆盖率",
-        "value": f"{coverage_rate:.0%}" if site_total > 0 else "—",
+        "value": f"{text_sample_share:.0%}" if site_total > 0 else "—",
         "delta_display": "",
         "delta_class": "delta-flat",
         "tooltip": _resolve_tooltip("样本覆盖率"),
-        "value_class": "severity-medium" if 0 < coverage_rate < 0.5 else "",
+        "value_class": "severity-medium" if 0 < text_sample_share < 0.5 else "",
     })
+
+    # ── 运维口径：采集完整率（新增；只在有 ratings-only 数据时展示，避免和业务口径冗余）──
+    # 旧 snapshot 没有 text_review_total_current（=0）时跳过此卡，行为兼容
+    if text_total > 0 and ratings_only_total > 0:
+        scrape_completeness = ingested / text_total
+        scrape_completeness = min(1.0, scrape_completeness)
+        kpis["scrape_completeness_ratio"] = scrape_completeness
+        kpi_cards.append({
+            "label": "采集完整率",
+            "value": f"{scrape_completeness:.0%}",
+            "delta_display": "",
+            "delta_class": "delta-flat",
+            "tooltip": _resolve_tooltip("采集完整率"),
+            "value_class": "severity-medium" if scrape_completeness < 0.95 else "",
+        })
     change_summary = (normalized.get("change_digest") or {}).get("summary") or {}
     recently_published = kpis.get("recently_published_count")
     if recently_published is None:

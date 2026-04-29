@@ -103,6 +103,7 @@ def test_query_report_data(patch_db, monkeypatch):
     assert products[0]["sku"] == "SKU-001"
     assert products[0]["site"] == "basspro"
     assert products[0]["ownership"] == "own"
+    assert products[0]["ratings_only_count"] == 0
 
     assert len(reviews) == 1
     assert reviews[0]["author"] == "John Doe"
@@ -126,6 +127,29 @@ def test_query_report_data_includes_review_context_fields(patch_db, monkeypatch)
     assert review["product_url"] == "https://example.com/product/1"
     assert review["site"] == "basspro"
     assert review["scraped_at"] is not None
+
+
+def test_query_report_data_includes_ratings_only_count(patch_db, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", patch_db)
+    conn = _get_test_conn(patch_db)
+    scraped_at = config.now_shanghai().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "UPDATE products SET ratings_only_count = 2, scraped_at = ? WHERE sku = 'SKU-001'",
+        (scraped_at,),
+    )
+    conn.commit()
+    conn.close()
+
+    from qbu_crawler.server.report import query_report_data
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    until = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    legacy_products, _ = query_report_data(since)
+    bounded_products, _ = query_report_data(since, until)
+
+    assert legacy_products[0]["ratings_only_count"] == 2
+    assert bounded_products[0]["ratings_only_count"] == 2
 
 
 def test_query_report_data_future_cutoff(patch_db, monkeypatch):
@@ -1185,6 +1209,20 @@ def test_query_cumulative_data_returns_all_products(cumulative_db):
     skus = {p["sku"] for p in products}
     assert "OWN-001" in skus
     assert "COMP-001" in skus
+
+
+def test_query_cumulative_data_includes_ratings_only_count(cumulative_db):
+    from qbu_crawler.server.report import query_cumulative_data
+
+    conn = _get_test_conn(cumulative_db)
+    conn.execute("UPDATE products SET ratings_only_count = 7 WHERE sku = 'OWN-001'")
+    conn.commit()
+    conn.close()
+
+    products, _ = query_cumulative_data()
+    by_sku = {p["sku"]: p for p in products}
+
+    assert by_sku["OWN-001"]["ratings_only_count"] == 7
 
 
 def test_query_cumulative_data_returns_all_reviews(cumulative_db):

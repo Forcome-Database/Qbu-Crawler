@@ -9,6 +9,16 @@ from qbu_crawler.config import (
     BASSPRO_REQUEST_DELAY, BASSPRO_SESSION_REFRESH_EVERY,
 )
 
+# ⚠ 不要在模块顶部 `from DrissionPage.errors import ContextLostError`：
+# 多 site 任务在 MAX_WORKERS 线程池里**并发首次导入**各自 scraper 模块时，
+# basspro 的导入链 (base→DrissionPage→DrissionPage.errors→_functions.settings)
+# 会与其它 site 的导入链 (base→DrissionPage→_functions.settings) 在
+# `_ModuleLock('DrissionPage._functions.settings')` 上发生 lock inversion，
+# 触发 `_DeadlockError: deadlock detected ...` / `KeyError: 'DrissionPage'`，
+# 让 scraper_init 整批失败（生产 2026-04-29 15:00 已复现）。
+# 解决：所有 DrissionPage 的导入推迟到运行时第一次需要时，那时候模块已被
+# base.py 的 `from DrissionPage import Chromium` 完整加载，无锁竞争。
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,18 +154,50 @@ class BassProScraper(BaseScraper):
         raise TimeoutError("basspro product_identity timeout")
 
     def scrape(self, url: str, review_limit: int | None = None) -> dict:
+        """对外入口：捕获 ContextLostError → 等 doc_loaded → 重试一次。
+        触发场景：basspro 异步注入的 Exit Intent newsletter popup iframe 走
+        sandbox `allow-top-navigation`，可触发 parent reload 撞上 tab.run_js。
+
+        ⚠ ContextLostError 在异常处理体内 lazy import（详见模块顶部注释）。"""
+        # 函数内导入：此时 DrissionPage 必已被 base.py 在主流程中完整加载，
+        # 无并发首次导入的 lock inversion 风险。
+        from DrissionPage.errors import ContextLostError
+        try:
+            return self._scrape_impl(url, review_limit)
+        except ContextLostError as e:
+            logger.warning(
+                f"[basspro] ContextLost on {url}: {e}；等 doc_loaded 后重试一次"
+            )
+            try:
+                tab = self.browser.latest_tab
+                tab.wait.doc_loaded(timeout=15)
+                tab.wait(3, 5)
+                self._kill_promo_overlays(tab)
+            except Exception:
+                pass
+            return self._scrape_impl(url, review_limit)
+
+    def _scrape_impl(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_refresh_session()
         self._maybe_restart_browser()
 
         scrape_diagnostics = self._new_scrape_diagnostics()
+        # 兜底持久化：scrape 抛异常时 task_manager 可从 scraper 实例上读到当前 stage
+        self._last_scrape_diagnostics = scrape_diagnostics
         scrape_diagnostics["stage"] = "navigate"
         tab = self._get_page(url)
+        # 主文档落地后立刻清一遍异步注入弹窗（部分 popup 在 doc_loaded 前就到位）
+        self._kill_promo_overlays(tab)
         # eager 模式下 get() 在 DOM 就绪后自动返回
         self._age_gate_checkpoint(tab, scrape_diagnostics, "after_get")
+        # 年龄门 React 关闭后 popup SaaS 才有机会注入，再清一次
+        self._kill_promo_overlays(tab)
         # 等待页面主要内容加载
         scrape_diagnostics["stage"] = "product_identity"
         self._wait_product_identity(tab, timeout=15)
         self._age_gate_checkpoint(tab, scrape_diagnostics, "after_product_identity")
+        # product_identity 成功后的窗口期最容易撞 popup，再清一次
+        self._kill_promo_overlays(tab)
         self._check_url_match(tab, url)
         # 等待 BV 组件加载（容器一定会出现，但 JSON-LD 数据只有有评论时才有）
         scrape_diagnostics["stage"] = "bv_summary"
@@ -241,6 +283,11 @@ class BassProScraper(BaseScraper):
         self._age_gate_checkpoint(tab, scrape_diagnostics, "before_reviews")
         reviews = self._extract_reviews_from_dom(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
+
+        # 5b. 提取 BV 的 "X Ratings-Only Reviews" 数量
+        # BV 把仅评分（无文字内容）的评论也算进 review_count，但它们不通过 Load More 暴露，
+        # scraper 不可能抓到没文字内容的评论。记录这个数让覆盖率统计能修正分母。
+        result["ratings_only_count"] = self._extract_ratings_only_count(tab)
 
         # 6. 库存状态（仅从 JSON-LD offers.availability 判断）
         if product_ld:
@@ -392,6 +439,24 @@ class BassProScraper(BaseScraper):
         """)
         time.sleep(1)
 
+    @staticmethod
+    def _extract_ratings_only_count(tab) -> int:
+        """从 BV reviews 区读 "X Ratings-Only Reviews" 文字，无则返 0。
+        这些评论只有星级、没有 review body，不会出现在 Load More 队列里，
+        也无法被任何 scraper 抓到——必须从 review_count 中扣减才能算真覆盖率。"""
+        try:
+            n = tab.run_js("""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (!c || !c.shadowRoot) return 0;
+                const text = (c.shadowRoot.querySelector('#bv_review_maincontainer')?.textContent
+                             || c.shadowRoot.textContent || '');
+                const m = text.match(/(\\d+)\\s+Ratings[-\\s]?Only\\s+Reviews/i);
+                return m ? parseInt(m[1], 10) : 0;
+            """)
+            return int(n or 0)
+        except Exception:
+            return 0
+
     def _load_all_reviews(self, tab, review_limit: int | None = None):
         """循环点击 LOAD MORE 按钮加载评论。
         受 config.MAX_REVIEWS 限制，防止加载过多评论导致浏览器内存耗尽或 JS 超时。
@@ -408,22 +473,36 @@ class BassProScraper(BaseScraper):
             "shadow_count": 0,
             "load_more_state": None,
         }
+        load_more_js = """
+            const container = document.querySelector('[data-bv-show="reviews"]');
+            if (!container) return JSON.stringify({clicked: false, count: 0, container_seen: false, shadow_seen: false, load_more_state: 'container_missing'});
+            if (!container.shadowRoot) return JSON.stringify({clicked: false, count: 0, container_seen: true, shadow_seen: false, load_more_state: 'shadow_missing'});
+            const shadow = container.shadowRoot;
+            const count = shadow.querySelectorAll('section').length;
+            const btn = shadow.querySelector('button[aria-label*="Load More"]');
+            if (btn) {
+                btn.scrollIntoView({block: 'center'});
+                btn.click();
+                return JSON.stringify({clicked: true, count: count, container_seen: true, shadow_seen: true, load_more_state: 'clicked'});
+            }
+            return JSON.stringify({clicked: false, count: count, container_seen: true, shadow_seen: true, load_more_state: 'missing'});
+        """
         for i in range(max_clicks):
-            result = tab.run_js("""
-                const container = document.querySelector('[data-bv-show="reviews"]');
-                if (!container) return JSON.stringify({clicked: false, count: 0, container_seen: false, shadow_seen: false, load_more_state: 'container_missing'});
-                if (!container.shadowRoot) return JSON.stringify({clicked: false, count: 0, container_seen: true, shadow_seen: false, load_more_state: 'shadow_missing'});
-                const shadow = container.shadowRoot;
-                const count = shadow.querySelectorAll('section').length;
-                const btn = shadow.querySelector('button[aria-label*="Load More"]');
-                if (btn) {
-                    btn.scrollIntoView({block: 'center'});
-                    btn.click();
-                    return JSON.stringify({clicked: true, count: count, container_seen: true, shadow_seen: true, load_more_state: 'clicked'});
-                }
-                return JSON.stringify({clicked: false, count: count, container_seen: true, shadow_seen: true, load_more_state: 'missing'});
-            """)
+            result = tab.run_js(load_more_js)
             data = json.loads(result) if isinstance(result, str) else (result or {})
+
+            # Race 防护：BV 重渲染 Load More 按钮可能慢于上轮等待，第一次 missing
+            # 不要立刻判死刑——再等 1.5s 看按钮是否被注入回来。
+            # 仅当 shadow_seen + count>0（BV 已就绪、有评论）但没找到按钮时重试。
+            if (data.get("load_more_state") == "missing"
+                    and data.get("shadow_seen")
+                    and (data.get("count") or 0) > 0):
+                time.sleep(1.5)
+                result_retry = tab.run_js(load_more_js)
+                data_retry = json.loads(result_retry) if isinstance(result_retry, str) else (result_retry or {})
+                if data_retry.get("clicked"):
+                    logger.info(f"[basspro] Load More race 二次确认成功（首次假阴性）")
+                    data = data_retry
             meta["loaded_section_count"] = int(data.get("count") or 0)
             meta["shadow_count"] = int(data.get("count") or 0)
             meta["bv_container_seen"] = bool(data.get("container_seen"))

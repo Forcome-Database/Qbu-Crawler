@@ -51,20 +51,34 @@ def summarize_scrape_quality(
         return n / total if total > 0 else 0.0
 
     # --- new F011 metrics ---
-    site_total = sum(_safe_int(p, "review_count") for p in products)
-    ingested_total = sum(_safe_int(p, "ingested_count") for p in products)
+    # ⚠ BV 把 ratings-only（仅星级、无文字）评论也算进 review_count，但 scraper
+    # 不可能抓到没文字的评论。"文字评论数" = review_count - ratings_only_count
+    # 才是 scraper 真正能抓的目标值，覆盖率必须用这个分母才不会有 false low_coverage。
+    # 旧 scraper / 旧产品记录无该字段时 ratings_only_count=0，等同于"全部都是文字评论"，
+    # 行为完全向后兼容。
+    def _text_review_count(p: dict) -> int:
+        site = _safe_int(p, "review_count")
+        ratings_only = _safe_int(p, "ratings_only_count")
+        return max(0, site - ratings_only)
 
+    site_total = sum(_text_review_count(p) for p in products)
+    ingested_total = sum(_safe_int(p, "ingested_count") for p in products)
+    ratings_only_total = sum(_safe_int(p, "ratings_only_count") for p in products)
+
+    # zero_scrape：只有"应该有文字评论"的产品才报。
+    # 旧逻辑用 review_count > 0；现改用 text_review_count > 0，
+    # 当 BV 给出 review_count=92 但 92 条全是 ratings-only 时不会再误报零采集。
     zero_scrape_skus = [
         p["sku"] for p in products
-        if (_safe_int(p, "review_count") > 0)
+        if (_text_review_count(p) > 0)
         and (_safe_int(p, "ingested_count") == 0)
     ]
 
     low_coverage_skus = []
     for p in products:
-        site = _safe_int(p, "review_count")
+        text_total = _text_review_count(p)
         ingested = _safe_int(p, "ingested_count")
-        if site > 0 and (ingested / site) < low_coverage_threshold:
+        if text_total > 0 and (ingested / text_total) < low_coverage_threshold:
             low_coverage_skus.append(p["sku"])
 
     completeness = (ingested_total / site_total) if site_total else 1.0
@@ -121,6 +135,8 @@ def summarize_scrape_quality(
         "scrape_completeness_ratio": round(completeness, 4),
         "low_coverage_skus": low_coverage_skus,
         "low_coverage_count": len(low_coverage_skus),
+        # 透明化 ratings-only 修正量，便于运维理解为何 review_count 大于 ingested 仍可能是 100% 覆盖
+        "ratings_only_total": ratings_only_total,
         "expected_url_count": len([url for url in expected_urls if url]),
         "saved_product_count": len([url for url in saved_urls if url]) or total,
         "failed_url_count": len(failed_urls),

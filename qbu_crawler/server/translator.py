@@ -95,7 +95,7 @@ class TranslationWorker:
     # Backoff delays (seconds) for consecutive transient failures
     _BACKOFF_DELAYS = [30, 60, 120, 300]
 
-    _prompt_version = "v2"
+    _prompt_version = "v3"
 
     def __init__(self, interval: int = 60, batch_size: int = 20, concurrency: int = 1):
         self._interval = interval
@@ -344,7 +344,9 @@ class TranslationWorker:
                     impact_category = (item.get("impact_category") or "").strip().lower() or None
                     if impact_category and impact_category not in ("safety", "functional", "durability", "cosmetic", "service"):
                         impact_category = None
-                    failure_mode = (item.get("failure_mode") or "").strip() or None
+                    failure_mode_raw = (item.get("failure_mode") or "").strip() or None
+                    from qbu_crawler.server.migrations.migration_0011_failure_mode_enum_backfill import classify_failure_mode
+                    failure_mode = classify_failure_mode(failure_mode_raw)
 
                     models.save_review_analysis(
                         review_id=review["id"],
@@ -358,6 +360,7 @@ class TranslationWorker:
                         prompt_version=self._prompt_version,
                         impact_category=impact_category,
                         failure_mode=failure_mode,
+                        failure_mode_raw=failure_mode_raw,
                     )
                 except Exception:
                     logger.debug(

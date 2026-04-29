@@ -66,6 +66,10 @@ class WaltonsScraper(BaseScraper):
             "stock_status": "unknown",
             "review_count": 0,
             "rating": None,
+            # TrustSpot 不区分 ratings-only/full review，所有评论都带文字内容。
+            # 落 0 让覆盖率分母 = review_count，与现状一致；同时让所有 scraper 输出
+            # 字段对齐，方便上游做语义统一处理。
+            "ratings_only_count": 0,
         }
 
         # 1. Parse product data from JSON-LD

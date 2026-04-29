@@ -345,6 +345,7 @@ def test_heatmap_html_has_clickable_cells():
 
     # Legend present
     assert "heatmap-legend" in html
+    assert "混合=正负并存" in html
     # color classes present
     assert "heatmap-cell green" in html
     assert "heatmap-cell yellow" in html
@@ -517,5 +518,6 @@ def test_heatmap_cell_scores_mixed_as_half_weight_and_explains_counts():
     assert cell["color_class"] == "yellow"
     assert "正向 1" in cell["tooltip"]
     assert "混合 1" in cell["tooltip"]
+    assert "混合=正负并存" in cell["tooltip"]
     assert "负向 1" in cell["tooltip"]
     assert cell["top_review_id"] == 2

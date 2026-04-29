@@ -255,7 +255,14 @@ class TaskManager:
                         "stage": locals().get("current_stage") or "scrape",
                         "error_type": type(e).__name__,
                         "error_message": str(e),
-                        "diagnostics": getattr(e, "diagnostics", None) or {},
+                        # 兜底：异常未带 diagnostics 时，回落到 scraper 实例上次记录的
+                        # （basspro/_scrape_impl 会在入口把 scrape_diagnostics 赋给
+                        # self._last_scrape_diagnostics，便于下次精确定位卡在哪个 stage）
+                        "diagnostics": (
+                            getattr(e, "diagnostics", None)
+                            or getattr(scraper, "_last_scrape_diagnostics", None)
+                            or {}
+                        ),
                     })
                     # 浏览器可能已不可用（Chrome 死、tab 丢、session 污染），销毁 scraper；
                     # 下次迭代通过 scraper is None 分支重建，避免单点失败连锁拖垮整个任务

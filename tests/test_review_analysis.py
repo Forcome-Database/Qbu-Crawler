@@ -91,6 +91,7 @@ class TestSchema:
             "id", "review_id", "sentiment", "sentiment_score",
             "labels", "features", "insight_cn", "insight_en",
             "llm_model", "prompt_version", "token_usage", "analyzed_at",
+            "failure_mode_raw",
         }
         assert expected <= cols
 

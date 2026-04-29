@@ -762,21 +762,34 @@ def compute_risk_score(product: dict, *, threshold: float = HIGH_RISK_THRESHOLD)
     """
     ingested = int(product.get("ingested_count", 0) or 0)
     site = int(product.get("review_count", 0) or 0)
+    ratings_only = int(product.get("ratings_only_count", 0) or 0)
+    text_total = max(0, site - ratings_only)  # scraper 物理上能抓到的文字评论数
     neg = int(product.get("negative_review_count", 0) or 0)
 
     if ingested == 0:
         return {
             "neg_rate": None,
             "coverage": None,
-            "low_coverage_warning": True,
+            # 业务口径：分析样本占总反馈的比例（含 ratings-only），代表分析覆盖度
+            "text_sample_share": None,
+            # 运维口径：scraper 抓到的文字 / 物理上能抓的文字，代表爬虫健康
+            "scrape_completeness": None,
+            "low_coverage_warning": site > 0,
             "risk_score": None,
             "risk_factors": None,
             "near_high_risk": False,
         }
 
     neg_rate = neg / ingested
-    coverage = (ingested / site) if site > 0 else 1.0
-    low_coverage_warning = (site > 0) and (coverage < LOW_COVERAGE_THRESHOLD)
+    # ⚠ 命名规则（与用户 2026-04 拍板）：
+    # - text_sample_share (= ingested / review_count)：业务侧，反映"文字样本占总反馈比"
+    #   ratings-only 是真实消费者反馈，他们的态度可能与文字写手不同，低占比 = 分析有盲区
+    # - scrape_completeness (= ingested / text_total)：运维侧，反映"爬虫抓全率"
+    #   稳定状态应 ≈ 100%；任何明显小于 1 都是 scraper 异常信号
+    # 风险评分用 text_sample_share 触发 low_coverage_warning，因为分析代表性低 = 风险
+    text_sample_share = (ingested / site) if site > 0 else 1.0
+    scrape_completeness = (ingested / text_total) if text_total > 0 else 1.0
+    low_coverage_warning = (site > 0) and (text_sample_share < LOW_COVERAGE_THRESHOLD)
 
     high_sev = int(product.get("high_severity_count", 0) or 0)
     image_ev = int(product.get("image_evidence_count", 0) or 0)
@@ -808,7 +821,11 @@ def compute_risk_score(product: dict, *, threshold: float = HIGH_RISK_THRESHOLD)
 
     return {
         "neg_rate": neg_rate,
-        "coverage": coverage,
+        # `coverage` 保留为兼容别名 = text_sample_share（业务口径），
+        # 老调用方读到 0.7 时含义和以前一样（ingested / review_count）
+        "coverage": text_sample_share,
+        "text_sample_share": text_sample_share,
+        "scrape_completeness": scrape_completeness,
         "low_coverage_warning": low_coverage_warning,
         "risk_score": score_pct,
         "risk_factors": factors,
@@ -831,11 +848,20 @@ def build_product_overview_rows(products: list) -> list:
     for p in products:
         ingested = int(p.get("ingested_count", 0) or 0)
         site = int(p.get("review_count", 0) or 0)
+        ratings_only = int(p.get("ratings_only_count", 0) or 0)
+        text_total = max(0, site - ratings_only)
         neg = int(p.get("negative_review_count", 0) or 0)
         rows.append({
             "name": p.get("name"),
             "site_count": site,
+            "ratings_only_count": ratings_only,
+            "text_review_count": text_total,
             "ingested_count": ingested,
+            # 业务口径：分析样本占总反馈比例（含 ratings-only）
+            "text_sample_share": (ingested / site) if site > 0 else None,
+            # 运维口径：scraper 抓全文字评论的健康度，正常应 ≈ 1.0
+            "scrape_completeness": (ingested / text_total) if text_total > 0 else None,
+            # 兼容别名：coverage 保留 = text_sample_share（旧业务口径）
             "coverage": (ingested / site) if site > 0 else None,
             "negative_count": neg,
             "negative_rate_ingested": (neg / ingested) if ingested > 0 else None,
@@ -874,10 +900,12 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
 
     sku_to_review_count = {}
     sku_to_rating = {}
+    sku_to_ratings_only = {}  # 用于 coverage 分母扣减
     for p in (snapshot_products or []):
         sku = p.get("sku") or ""
         sku_to_review_count[sku] = p.get("review_count") or 0
         sku_to_rating[sku] = p.get("rating")
+        sku_to_ratings_only[sku] = p.get("ratings_only_count") or 0
 
     # First pass: group ALL own reviews by SKU
     by_sku = {}
@@ -923,6 +951,7 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
         factors = compute_risk_score({
             "ingested_count": all_count,
             "review_count": total_reviews,
+            "ratings_only_count": sku_to_ratings_only.get(sku, 0),
             "negative_review_count": neg_count,
         })
         neg_rate = factors["neg_rate"]
@@ -995,8 +1024,16 @@ def _risk_products(labeled_reviews, snapshot_products=None, logical_date=None):
             "rating_avg": sku_to_rating.get(sku),
             "negative_rate": neg_count / all_count,                              # backward-compat alias (now ingested-based, F011 H6)
             "negative_rate_ingested": neg_count / all_count,                     # F011 H6 explicit
+            # negative_rate_site / coverage_rate 仍用 site_total（业务/分析口径）：
+            # ratings-only 也是消费者反馈，业务侧不应把它从分母里去掉
             "negative_rate_site": (neg_count / total_reviews) if total_reviews > 0 else None,
-            "coverage_rate": ingested / total_reviews if total_reviews else None,  # ingested / site (preserved semantics)
+            "coverage_rate": ingested / total_reviews if total_reviews else None,
+            # 新增运维口径：scraper 抓全文字评论的健康度，正常应 ≈ 1.0
+            "scrape_completeness": (
+                ingested / max(0, total_reviews - sku_to_ratings_only.get(sku, 0))
+                if max(0, total_reviews - sku_to_ratings_only.get(sku, 0)) > 0 else None
+            ),
+            "ratings_only_count": sku_to_ratings_only.get(sku, 0),
             "low_coverage_warning": low_coverage_warning,
             "top_labels": top_labels,
             "top_features_display": _join_label_counts(top_labels),
@@ -1954,7 +1991,8 @@ def _build_heatmap_cell(cell_reviews: list[dict]) -> dict:
     tooltip = (
         f"体验健康度 {score * 100:.0f}%："
         f"正向 {positive_count}，混合 {mixed_count}，"
-        f"负向 {negative_count}，中性 {neutral_count}，样本 {sample_size}"
+        f"负向 {negative_count}，中性 {neutral_count}，样本 {sample_size}；"
+        "混合=正负并存，按 0.5 权重计入健康度"
     )
 
     return {
@@ -3366,12 +3404,16 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
         "metric_semantics": {
             "ingested_review_rows": "reviews 实际入库行数（按 scraped_at 窗口，含历史补采）",
             "recently_published_count": "其中 date_published 在近 30 天内的评论数",
-            "site_reported_review_total_current": "products.review_count 当前站点展示总评论数",
+            "site_reported_review_total_current": "products.review_count 当前站点展示总评论数（含 ratings-only）",
+            "text_review_total_current": "可被 scraper 抓取的文字评论总数 = review_count - ratings_only_count，用于覆盖率分母",
+            "ratings_only_total_current": "BV widget 中仅评分（无文字）的评论数，scraper 无法抓取",
         },
         "kpis": {
             "product_count": len(snapshot.get("products") or []),
             "ingested_review_rows": len(snapshot.get("reviews") or []),
             "site_reported_review_total_current": sum((product.get("review_count") or 0) for product in snapshot.get("products") or []),
+            "text_review_total_current": sum(max(0, (product.get("review_count") or 0) - (product.get("ratings_only_count") or 0)) for product in snapshot.get("products") or []),
+            "ratings_only_total_current": sum((product.get("ratings_only_count") or 0) for product in snapshot.get("products") or []),
             "translated_count": snapshot.get("translated_count", 0),
             "untranslated_count": snapshot.get("untranslated_count", 0),
             "own_product_count": len(own_products),

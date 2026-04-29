@@ -1,9 +1,12 @@
 import json
+import logging
 import time
 from qbu_crawler.scrapers.base import BaseScraper
 from qbu_crawler.config import (
     BV_WAIT_TIMEOUT, BV_POLL_INTERVAL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MeatYourMakerScraper(BaseScraper):
@@ -80,6 +83,11 @@ class MeatYourMakerScraper(BaseScraper):
         reviews = self._extract_all_reviews(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
+        # 6b. 提取 BV 的 "X Ratings-Only Reviews" 数量（与 basspro 同语义）。
+        # mym 的 BV widget 同样会把 ratings-only（仅星级）评论塞进 reviewCount，
+        # 但 scraper 不可能抓到没文字内容的评论。该数据让覆盖率统计能正确扣减分母。
+        result["ratings_only_count"] = self._extract_ratings_only_count(tab)
+
         self._increment_and_delay(tab)
         data = {
             "product": result,
@@ -90,6 +98,23 @@ class MeatYourMakerScraper(BaseScraper):
         }
         self._validate_product(data, url)
         return data
+
+    @staticmethod
+    def _extract_ratings_only_count(tab) -> int:
+        """从 BV reviews shadow root 读 "X Ratings-Only Reviews" 文字，无则返 0。
+        见 BassProScraper._extract_ratings_only_count 的注释，逻辑完全一致。"""
+        try:
+            n = tab.run_js("""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (!c || !c.shadowRoot) return 0;
+                const text = (c.shadowRoot.querySelector('#bv_review_maincontainer')?.textContent
+                             || c.shadowRoot.textContent || '');
+                const m = text.match(/(\\d+)\\s+Ratings[-\\s]?Only\\s+Reviews/i);
+                return m ? parseInt(m[1], 10) : 0;
+            """)
+            return int(n or 0)
+        except Exception:
+            return 0
 
     def _wait_for_bv_data(self, tab):
         """轮询等待 BV 评分摘要数据注入"""
@@ -103,36 +128,159 @@ class MeatYourMakerScraper(BaseScraper):
             time.sleep(BV_POLL_INTERVAL)
 
     def _click_reviews_tab(self, tab):
-        """点击 Reviews toggler 展开评论区（先等待 toggler 渲染）"""
-        # 等待 toggler 元素出现（最多 10 秒）
+        """强制展开 Reviews toggler section。
+
+        ⚠ 通过浏览器实地验证（2026-04-29，1193465）发现，单纯 `el.click()` 是不可靠的：
+        1. SFCC c-toggler 折叠机制：`.c-toggler__content { max-height: 0; overflow: hidden }`，
+           BV widget 被剪到 0 高度，IntersectionObserver 收不到 visible 信号 → BV 永远
+           不 fetch reviews，shadow root 永远不注入 review section。
+        2. click() 行为是 *toggle*：section 起始可能已经处于 expanded 状态（DOM 上带有
+           `c-toggler--expanded` 类），盲 click 会反向把它 collapse 掉
+           （生产 0.4.17 第 13 轮日志：parent_h=95、inner_len=771、sections=0 即此故障）。
+        3. 即便 click 加上了 `c-toggler--expanded` 类，对应站点 CSS 在冷启动会话下也未必
+           及时把 max-height 改成 none，content offsetHeight 仍卡在 0。
+
+        因此改为：直接通过 JS 把 toggler 强制设为展开态——
+        - outer `.c-toggler` 容器加 `c-toggler--expanded` 类
+        - inner `.c-toggler__content` 设 inline style `max-height:none; overflow:visible`
+        这一组改动等价于"用户点击 + CSS 应用完成"，且与站点交互保持幂等：
+        即使 React 后续重设 inline style，我们也只是不会撤销原本应展开的状态。
+
+        匹配 toggler 文本时容忍后缀（如 "Reviews (92)"）以兼容站点未来变化。"""
         deadline = time.time() + 10
         while time.time() < deadline:
-            clicked = tab.run_js("""
+            result = tab.run_js("""
                 const togglers = document.querySelectorAll('.c-toggler__element');
+                let target = null;
                 for (const el of togglers) {
-                    if (el.textContent.trim() === 'Reviews') {
-                        el.click();
-                        return true;
-                    }
+                    const t = (el.textContent || '').trim();
+                    if (t === 'Reviews' || t.startsWith('Reviews')) { target = el; break; }
                 }
-                return false;
+                if (!target) return JSON.stringify({found: false});
+                const outer = target.closest('.c-toggler')
+                              || target.parentElement;
+                const bv = document.querySelector('[data-bv-show="reviews"]');
+                const content = bv ? bv.parentElement : null;
+                if (!outer || !content) return JSON.stringify({found: true, expanded: false, error: 'no_outer_or_content'});
+                outer.classList.add('c-toggler--expanded');
+                content.style.maxHeight = 'none';
+                content.style.overflow = 'visible';
+                return JSON.stringify({
+                    found: true,
+                    expanded: content.offsetHeight > 100,
+                    content_h: content.offsetHeight,
+                });
             """)
-            if clicked:
+            try:
+                data = json.loads(result) if isinstance(result, str) else (result or {})
+            except Exception:
+                data = {}
+            if data.get("expanded"):
                 break
+            # toggler 还没渲染上来；继续等
             time.sleep(0.5)
-        time.sleep(2)
+        # React 重渲染窗口期：让强制设的 inline style 稳定下来
+        time.sleep(1)
 
-    def _wait_for_shadow_root(self, tab, timeout=10):
-        """等待 BV reviews Shadow DOM 加载"""
+    def _wait_for_shadow_root(self, tab, timeout=30):
+        """等待 BV reviews Shadow DOM 加载并真正注入内容。
+
+        ⚠ BV reviews widget 是**视口懒加载 + 网络异步获取**：
+        - shadow root 早早创建（仅 host 出现就建）
+        - 内部 review section 需要 host 进入视口触发 IntersectionObserver
+        - 触发后 BV 还要 fetch reviews API 才能渲染 section
+
+        过去 timeout=10s 在生产冷启动会话下不够：Chrome 刚 attach、cookies 与 BV 缓存
+        都是空，要走 bv-loader.js 下载 → BV API 调用 → 渲染整个链路，叠加代理 / 反爬
+        延迟会超过 10s（生产 2026-04-29 SKU 1193465 失败：no_shadow_root, pages_seen=0）。
+
+        现在改为：
+        1) timeout 默认 30s（覆盖冷启动 + 慢代理）
+        2) 轮询期间每 ~3s 重做 scroll-to-see + 重申"强制展开" inline style，
+           应对 React 重渲染抹掉 max-height 或 host 飘出视口
+        3) 超时时打 diagnostic log，便于后续定位是 host 缺失 / shadow 未建 / 内容未注入
+        """
+        host_selector = 'css:[data-bv-show="reviews"]'
+
+        def scroll_into_view():
+            try:
+                host = tab.ele(host_selector, timeout=2)
+                if host:
+                    host.scroll.to_see(center=True)
+            except Exception:
+                pass
+
+        def reaffirm_expand():
+            """重申"强制展开"：对抗 React 重渲染时把 max-height 抹回 0。"""
+            try:
+                tab.run_js("""
+                    const togglers = document.querySelectorAll('.c-toggler__element');
+                    let target = null;
+                    for (const el of togglers) {
+                        const t = (el.textContent || '').trim();
+                        if (t === 'Reviews' || t.startsWith('Reviews')) { target = el; break; }
+                    }
+                    if (!target) return 0;
+                    const outer = target.closest('.c-toggler') || target.parentElement;
+                    const bv = document.querySelector('[data-bv-show="reviews"]');
+                    const content = bv ? bv.parentElement : null;
+                    if (outer) outer.classList.add('c-toggler--expanded');
+                    if (content) {
+                        content.style.maxHeight = 'none';
+                        content.style.overflow = 'visible';
+                    }
+                    return 1;
+                """)
+            except Exception:
+                pass
+
+        reaffirm_expand()
+        scroll_into_view()
         deadline = time.time() + timeout
+        last_reaffirm_t = time.time()
         while time.time() < deadline:
-            has_shadow = tab.run_js("""
+            populated = tab.run_js("""
                 const c = document.querySelector('[data-bv-show="reviews"]');
-                return c && c.shadowRoot ? 1 : 0;
+                if (!c || !c.shadowRoot) return 0;
+                const sr = c.shadowRoot;
+                // 任一信号：review section、a.next、bv 内容容器
+                if (sr.querySelector('section')) return 1;
+                if (sr.querySelector('a.next')) return 1;
+                if (sr.querySelector('[data-bv-rid]')) return 1;
+                return 0;
             """)
-            if has_shadow:
+            if populated:
                 return True
+            # 每 3s 重申强制展开 + 重新滚 host 进视口，对抗 React 抹回 inline style
+            # 与 IntersectionObserver 一次性触发后失效
+            if time.time() - last_reaffirm_t >= 3:
+                reaffirm_expand()
+                scroll_into_view()
+                last_reaffirm_t = time.time()
             time.sleep(0.5)
+
+        # 超时诊断：抓取当前实际状态便于追踪
+        try:
+            diag = tab.run_js("""
+                const c = document.querySelector('[data-bv-show="reviews"]');
+                if (!c) return JSON.stringify({host: false});
+                const sr = c.shadowRoot;
+                if (!sr) return JSON.stringify({host: true, shadow: false});
+                const rect = c.getBoundingClientRect();
+                return JSON.stringify({
+                    host: true, shadow: true,
+                    sections: sr.querySelectorAll('section').length,
+                    has_a_next: !!sr.querySelector('a.next'),
+                    has_bv_rid: !!sr.querySelector('[data-bv-rid]'),
+                    parent_h: c.parentElement ? c.parentElement.offsetHeight : 0,
+                    rect_top: Math.round(rect.top),
+                    visible: rect.top < window.innerHeight && rect.bottom > 0,
+                    inner_len: (sr.innerHTML || '').length
+                });
+            """)
+            logger.warning(f"[mym] _wait_for_shadow_root timeout after {timeout}s; diag={diag}")
+        except Exception:
+            pass
         return False
 
     def _scroll_review_sections(self, tab):

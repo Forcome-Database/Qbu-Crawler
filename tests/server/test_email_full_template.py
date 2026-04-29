@@ -169,8 +169,8 @@ def test_kpi_4_uses_lamp_count_not_hardcoded_25():
     )
 
 
-def test_kpi_4_prefers_attention_count_from_kpis():
-    """邮件必须消费统一 KPI，不能在模板里重新算出另一个关注数。"""
+def test_kpi_4_refreshes_stale_attention_count_from_product_status():
+    """product_status 是关注产品数事实源，旧 KPI 非 0 也要被刷新。"""
     analytics = _mock_analytics(
         product_status=[
             {"product_name": "A", "status_lamp": "green", "primary_concern": ""},
@@ -181,7 +181,7 @@ def test_kpi_4_prefers_attention_count_from_kpis():
 
     html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
 
-    assert "需关注产品 2" in html
+    assert "需关注产品 0" in html
 
 
 def test_kpi_4_zero_when_product_status_missing():
@@ -192,6 +192,57 @@ def test_kpi_4_zero_when_product_status_missing():
     )
     assert "需关注产品" in html
     assert "0 个" in html or "需关注产品 0" in html
+
+
+def test_email_full_refreshes_stale_attention_count_from_product_status():
+    """测试13回归：旧 contract/kpis 写 0 时，邮件仍要用 product_status 的红黄灯刷新关注数。"""
+    analytics = _mock_analytics(
+        product_status=[
+            {"product_name": "Walton's Quick Patty Maker", "status_lamp": "red", "primary_concern": "结构设计"},
+            {"product_name": ".75 HP Grinder", "status_lamp": "yellow", "primary_concern": "售后履约"},
+            {"product_name": "Healthy", "status_lamp": "green", "primary_concern": ""},
+        ],
+    )
+    analytics["kpis"]["attention_product_count"] = 0
+    analytics["report_user_contract"] = {
+        "schema_version": "report_user_contract.v1",
+        "contract_source": "provided",
+        "contract_context": {"snapshot_source": "missing"},
+        "kpis": dict(analytics["kpis"]),
+        "action_priorities": [],
+    }
+
+    html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
+
+    assert "需关注产品 2 个" in html
+    assert "Walton&#39;s Quick Patty Maker" in html or "Walton's Quick Patty Maker" in html
+
+
+def test_email_full_action_priority_counts_affected_products_when_count_missing():
+    """测试13回归：action_priorities 只有 affected_products 时不能显示“影响 0 款”。"""
+    analytics = _mock_analytics(
+        priorities=[
+            {
+                "label_code": "structure_design",
+                "label_display": "结构设计",
+                "short_title": "复核结构尺寸",
+                "affected_products": ["A", "B", "C", "D"],
+                "evidence_count": 8,
+            },
+        ],
+    )
+    analytics["report_user_contract"] = {
+        "schema_version": "report_user_contract.v1",
+        "contract_source": "provided",
+        "contract_context": {"snapshot_source": "provided"},
+        "kpis": dict(analytics["kpis"]),
+        "action_priorities": analytics["report_copy"]["improvement_priorities"],
+    }
+
+    html = render_email_full(snapshot=_mock_snapshot(), analytics=analytics)
+
+    assert "影响 4 款" in html
+    assert "影响 0 款" not in html
 
 
 # ──────────────────────────────────────────────────────────

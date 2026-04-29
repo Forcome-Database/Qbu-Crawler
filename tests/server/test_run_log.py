@@ -46,6 +46,7 @@ def test_quality_log_lines_include_low_coverage_task_meta():
                 "name": ".5 HP Dual Grind Grinder (#8)",
                 "site": "meatyourmaker",
                 "review_count": 92,
+                "ratings_only_count": 59,
                 "ingested_count": 33,
             }
         ]
@@ -79,7 +80,10 @@ def test_quality_log_lines_include_low_coverage_task_meta():
 
     assert "scrape_completeness_ratio=67.5%" in text
     assert "sku=1193465" in text
-    assert "coverage=35.9%" in text
+    assert "site_total=92" in text
+    assert "ratings_only=59" in text
+    assert "text_total=33" in text
+    assert "scrape_completeness=100.0%" in text
     assert "stop_reason=no_next" in text
     assert "outbox_deadletter_count=1" in text
     assert "estimated_date_ratio=43.9%" in text

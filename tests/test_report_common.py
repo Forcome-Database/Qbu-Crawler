@@ -991,9 +991,13 @@ def test_normalize_separates_high_risk_and_attention_product_counts():
         },
         "self": {
             "risk_products": [
-                {"risk_score": _config.HIGH_RISK_THRESHOLD, "status_lamp": "red"},
-                {"risk_score": _config.HIGH_RISK_THRESHOLD - 1, "status_lamp": "yellow"},
-                {"risk_score": 0, "status_lamp": "green"},
+                {"risk_score": _config.HIGH_RISK_THRESHOLD},
+            ],
+            "product_status": [
+                {"product_name": "A", "risk_score": _config.HIGH_RISK_THRESHOLD, "status_lamp": "red"},
+                {"product_name": "B", "risk_score": _config.HIGH_RISK_THRESHOLD - 1, "status_lamp": "yellow"},
+                {"product_name": "C", "risk_score": 0, "status_lamp": "green"},
+                {"product_name": "D", "risk_score": 0, "status_lamp": "gray"},
             ],
             "top_negative_clusters": [],
             "recommendations": [],
