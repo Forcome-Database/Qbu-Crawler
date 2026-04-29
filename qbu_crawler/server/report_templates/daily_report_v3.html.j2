@@ -127,7 +127,7 @@
       </div>
 
       {# F011 §4.2.2 (H14) — 现在该做什么：short_title 作主显，full_action 折叠 #}
-      {% set _priorities = report_contract.get("action_priorities") or (analytics.report_copy or {}).get("improvement_priorities") or [] %}
+      {% set _priorities = report_contract.get("action_priorities") or [] %}
       {% if _priorities %}
       <section class="recommendations">
         <h2>现在该做什么</h2>

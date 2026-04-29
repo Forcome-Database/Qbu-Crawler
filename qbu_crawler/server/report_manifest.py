@@ -4,8 +4,13 @@ from pathlib import Path
 from qbu_crawler import config
 
 
-def _row_dict(row):
-    return dict(row) if row is not None else None
+def _row_dict(row, columns=None):
+    if row is None:
+        return None
+    if hasattr(row, "keys"):
+        return dict(row)
+    columns = columns or []
+    return dict(zip(columns, row))
 
 
 def _table_exists(conn, table):
@@ -36,13 +41,15 @@ def _decode_payload(value):
 def _artifact_map(conn, run_id):
     if not _table_exists(conn, "report_artifacts"):
         return {}
-    rows = conn.execute(
+    cur = conn.execute(
         "SELECT * FROM report_artifacts WHERE run_id=? ORDER BY id ASC",
         (run_id,),
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    columns = [item[0] for item in cur.description]
     artifacts = {}
     for row in rows:
-        item = _row_dict(row)
+        item = _row_dict(row, columns)
         artifacts[item.get("artifact_type") or f"artifact_{item.get('id')}"] = {
             "path": item.get("path"),
             "hash": item.get("hash"),
@@ -57,12 +64,14 @@ def _artifact_map(conn, run_id):
 def _workflow_notifications(conn, run_id):
     if not _table_exists(conn, "notification_outbox"):
         return []
-    rows = conn.execute(
+    cur = conn.execute(
         "SELECT * FROM notification_outbox ORDER BY id ASC",
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    columns = [item[0] for item in cur.description]
     result = []
     for row in rows:
-        item = _row_dict(row)
+        item = _row_dict(row, columns)
         payload = _decode_payload(item.get("payload"))
         if int(payload.get("run_id") or 0) != int(run_id):
             continue
@@ -81,26 +90,49 @@ def _email_delivered(notifications):
     return False
 
 
+def _db_status(run):
+    run = run or {}
+    return {
+        "report_generation_status": run.get("report_generation_status") or "unknown",
+        "email_delivery_status": run.get("email_delivery_status") or "unknown",
+        "workflow_notification_status": run.get("workflow_notification_status") or "unknown",
+    }
+
+
 def _delivery(run, artifacts, notifications):
     statuses = [item.get("status") for item in notifications]
     deadletters = [item for item in notifications if item.get("status") == "deadletter"]
     pending = [item for item in notifications if item.get("status") in {"pending", "claimed", "failed"}]
-    sent = [item for item in notifications if item.get("status") == "sent"]
-    report_generated = bool(
+    sent = [item for item in notifications if item.get("status") in {"sent", "delivered"}]
+    db_status = _db_status(run)
+    fallback_report_generated = bool(
         artifacts.get("xlsx")
         or artifacts.get("html_attachment")
         or artifacts.get("email_body")
         or (run or {}).get("excel_path")
     )
-    workflow_delivered = bool(notifications) and len(sent) == len(notifications) and not deadletters and not pending
+    if db_status["report_generation_status"] == "unknown":
+        report_generated = fallback_report_generated
+    else:
+        report_generated = db_status["report_generation_status"] == "generated"
+    if db_status["email_delivery_status"] == "unknown":
+        email_delivered = _email_delivered(notifications)
+    else:
+        email_delivered = db_status["email_delivery_status"] == "sent"
+    if db_status["workflow_notification_status"] == "unknown":
+        workflow_delivered = bool(notifications) and len(sent) == len(notifications) and not deadletters and not pending
+    else:
+        workflow_delivered = db_status["workflow_notification_status"] == "sent"
     last_errors = [
         item.get("last_error")
         for item in deadletters
         if item.get("last_error")
     ]
+    if (run or {}).get("delivery_last_error"):
+        last_errors.insert(0, run.get("delivery_last_error"))
     return {
         "report_generated": report_generated,
-        "email_delivered": _email_delivered(notifications),
+        "email_delivered": email_delivered,
         "workflow_notification_delivered": workflow_delivered,
         "deadletter_count": len(deadletters),
         "pending_count": len(pending),
@@ -108,16 +140,19 @@ def _delivery(run, artifacts, notifications):
         "internal_status": (run or {}).get("report_phase") or (run or {}).get("status") or "unknown",
         "last_errors": last_errors[:5],
         "notification_statuses": statuses,
+        "db_status": db_status,
     }
 
 
 def build_report_manifest(conn, run_id):
     run = None
     if _table_exists(conn, "workflow_runs"):
-        run = _row_dict(conn.execute(
+        cur = conn.execute(
             "SELECT * FROM workflow_runs WHERE id=?",
             (run_id,),
-        ).fetchone())
+        )
+        row = cur.fetchone()
+        run = _row_dict(row, [item[0] for item in cur.description])
     artifacts = _artifact_map(conn, run_id)
     notifications = _workflow_notifications(conn, run_id)
     return {

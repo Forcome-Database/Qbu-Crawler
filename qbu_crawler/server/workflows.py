@@ -658,6 +658,10 @@ class WorkflowWorker:
                 )
             _clear_translation_progress(run_id)
             run = freeze_report_snapshot(run_id, now=now)
+            models.update_workflow_report_status(
+                run_id,
+                report_generation_status="pending",
+            )
             try:
                 from qbu_crawler.server.run_log import append_run_log
                 append_run_log(
@@ -774,6 +778,11 @@ class WorkflowWorker:
                         run_id, _report_attempts[run_id], _REPORT_MAX_RETRIES, exc,
                     )
                     return False  # break inner loop, retry after next interval sleep
+                models.update_workflow_report_status(
+                    run_id,
+                    report_generation_status="failed",
+                    delivery_last_error=str(exc),
+                )
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
             except Exception as exc:
@@ -783,6 +792,11 @@ class WorkflowWorker:
                         run_id, _report_attempts[run_id], _REPORT_MAX_RETRIES, exc,
                     )
                     return False  # break inner loop, retry after next interval sleep
+                models.update_workflow_report_status(
+                    run_id,
+                    report_generation_status="failed",
+                    delivery_last_error=str(exc),
+                )
                 self._move_run_to_attention(run, now, str(exc), report_phase="fast_sent")
                 return True
             _clear_report_attempts(run_id)
@@ -833,6 +847,9 @@ class WorkflowWorker:
                 },
                 dedupe_key=f"workflow:{run_id}:full-report",
             )
+            email_delivery_status = "skipped"
+            if should_send_email:
+                email_delivery_status = "sent" if email_ok else "failed"
             models.update_workflow_run(
                 run_id,
                 status="completed",
@@ -842,6 +859,13 @@ class WorkflowWorker:
                 pdf_path=pdf_path,
                 finished_at=now,
                 error=None,
+            )
+            models.update_workflow_report_status(
+                run_id,
+                report_generation_status="generated",
+                email_delivery_status=email_delivery_status,
+                workflow_notification_status="pending",
+                delivery_last_error=(email or {}).get("error"),
             )
             try:
                 from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db

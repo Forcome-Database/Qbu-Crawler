@@ -2,6 +2,8 @@
 
 import copy
 
+from qbu_crawler import config
+
 SCHEMA_VERSION = "report_user_contract.v1"
 
 
@@ -488,6 +490,17 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
     snapshot = snapshot or {}
     analytics = analytics or {}
     existing = analytics.get("report_user_contract") or {}
+    existing_is_provided = bool(existing.get("schema_version") or existing.get("contract_source"))
+    legacy_contract_input = bool(
+        (analytics.get("report_copy") or {}).get("improvement_priorities")
+        or (analytics.get("self") or {}).get("top_negative_clusters")
+        or (analytics.get("issue_cards") or [])
+        or (analytics.get("competitor") or {}).get("negative_opportunities")
+    )
+    contract_source = (
+        existing.get("contract_source")
+        or ("provided" if existing_is_provided else ("legacy_adapter" if legacy_contract_input else "generated"))
+    )
     mode = analytics.get("report_semantics") or analytics.get("mode") or "bootstrap"
     if mode == "baseline":
         mode = "bootstrap"
@@ -500,6 +513,11 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
         or ((analytics.get("report_copy") or {}).get("improvement_priorities"))
         or []
     )
+    if contract_source == "legacy_adapter" and config.REPORT_CONTRACT_STRICT_MODE:
+        action_priorities = [
+            item for item in action_priorities
+            if item.get("evidence_review_ids") or item.get("evidence_count")
+        ]
     executive_slots = existing.get("executive_slots") or _build_executive_slots(
         snapshot,
         analytics,
@@ -509,6 +527,7 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
 
     contract = {
         "schema_version": SCHEMA_VERSION,
+        "contract_source": contract_source,
         "mode": mode,
         "logical_date": snapshot.get("logical_date") or analytics.get("logical_date"),
         "contract_context": _contract_context(snapshot),

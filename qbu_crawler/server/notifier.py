@@ -194,6 +194,7 @@ class NotifierWorker:
                 task_id = (claimed.get("payload") or {}).get("task_id")
                 if task_id:
                     models.mark_task_notified([task_id])
+            _sync_workflow_notification_status(claimed)
             return True
         except NotificationDeliveryError as exc:
             models.mark_notification_failure(
@@ -205,6 +206,7 @@ class NotifierWorker:
                 http_status=exc.http_status,
                 exit_code=exc.exit_code,
             )
+            _sync_workflow_notification_status(claimed)
             return True
         except Exception as exc:
             models.mark_notification_failure(
@@ -214,6 +216,7 @@ class NotifierWorker:
                 retryable=True,
                 max_attempts=self._max_attempts,
             )
+            _sync_workflow_notification_status(claimed)
             return True
 
     def _run(self):
@@ -232,6 +235,24 @@ class NotifierWorker:
 def _plus_seconds(ts: str, seconds: int) -> str:
     dt = datetime.fromisoformat(ts)
     return (dt + timedelta(seconds=seconds)).isoformat()
+
+
+def _sync_workflow_notification_status(notification: dict) -> None:
+    if not str(notification.get("kind") or "").startswith("workflow_"):
+        return
+    payload = notification.get("payload") or {}
+    run_id = payload.get("run_id")
+    if not run_id:
+        return
+    conn = models.get_conn()
+    try:
+        if count_outbox_deadletter(conn, int(run_id)) > 0:
+            downgrade_report_phase_on_deadletter(conn, int(run_id))
+            return
+        from qbu_crawler.server.report_status import sync_workflow_report_status
+        sync_workflow_report_status(conn, int(run_id))
+    finally:
+        conn.close()
 
 
 def _summarize_task_result(result: Any, error: str | None = None) -> str:
@@ -363,12 +384,16 @@ def downgrade_report_phase_on_deadletter(conn, run_id: int) -> bool:
     )
     conn.commit()
     changed = result.rowcount > 0
-    if changed:
-        try:
-            from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db
-            update_analytics_delivery_from_db(conn, run_id)
-        except Exception:
-            logger.exception("downgrade_report_phase_on_deadletter: manifest refresh failed")
+    try:
+        from qbu_crawler.server.report_status import sync_workflow_report_status
+        sync_workflow_report_status(conn, run_id)
+    except Exception:
+        logger.exception("downgrade_report_phase_on_deadletter: status sync failed")
+    try:
+        from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db
+        update_analytics_delivery_from_db(conn, run_id)
+    except Exception:
+        logger.exception("downgrade_report_phase_on_deadletter: manifest refresh failed")
     return changed
 
 

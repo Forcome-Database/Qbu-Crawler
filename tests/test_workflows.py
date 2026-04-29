@@ -996,6 +996,9 @@ class TestWorkflowReconcile:
 
         assert refreshed["status"] == "completed"
         assert refreshed["report_phase"] == "full_sent"
+        assert refreshed["report_generation_status"] == "generated"
+        assert refreshed["email_delivery_status"] == "sent"
+        assert refreshed["workflow_notification_status"] == "pending"
         assert refreshed["snapshot_hash"] == "hash-1"
         # Stage B 修 7: workflows.py wraps artifact paths through _artifact_db_value
         # before persistence. With tmp_path as the path's own parent, the helper
@@ -1437,6 +1440,7 @@ class TestWorkflowReconcile:
 
         assert refreshed["status"] == "needs_attention"
         assert refreshed["report_phase"] == "fast_sent"
+        assert refreshed["report_generation_status"] == "failed"
         assert refreshed["snapshot_path"] == snapshot_path
         assert refreshed["snapshot_hash"] == "hash-fast"
         # workflows.py FullReportGenerationError handler stores exc.* verbatim;

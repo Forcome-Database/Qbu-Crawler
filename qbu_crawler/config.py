@@ -270,6 +270,7 @@ HEALTH_RED = int(os.getenv("REPORT_HEALTH_RED", "45"))
 HEALTH_YELLOW = int(os.getenv("REPORT_HEALTH_YELLOW", "60"))
 HIGH_RISK_THRESHOLD = int(os.getenv("REPORT_HIGH_RISK_THRESHOLD", "35"))
 REPORT_OFFLINE_MODE = os.getenv("REPORT_OFFLINE_MODE", "false").lower() == "true"
+REPORT_CONTRACT_STRICT_MODE = os.getenv("REPORT_CONTRACT_STRICT_MODE", "true").lower() == "true"
 REPORT_HTML_PUBLIC_URL = os.getenv("REPORT_HTML_PUBLIC_URL", "")
 REPORT_DIR = os.getenv("REPORT_DIR", "") or os.path.join(DATA_DIR, "reports")
 SCRAPE_QUALITY_ALERT_RATIO = float(os.getenv("SCRAPE_QUALITY_ALERT_RATIO", "0.10"))
