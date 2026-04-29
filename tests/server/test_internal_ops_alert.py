@@ -26,6 +26,18 @@ def test_zero_scrape_triggers_ops_alert():
     assert severity == "P0"
 
 
+def test_failed_url_triggers_ops_alert():
+    from qbu_crawler.server.notifier import _evaluate_ops_alert_triggers
+
+    triggered, severity = _evaluate_ops_alert_triggers({
+        "failed_url_count": 1,
+        "scrape_completeness_ratio": 1.0,
+    })
+
+    assert triggered is True
+    assert severity == "P1"
+
+
 def test_low_completeness_triggers_p1():
     quality = {"zero_scrape_skus": [], "scrape_completeness_ratio": 0.5}
     triggered, severity = _evaluate_ops_alert_triggers(quality)

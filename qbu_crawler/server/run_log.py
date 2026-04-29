@@ -44,10 +44,23 @@ def build_quality_log_lines(snapshot, quality, task_rows=None):
     task_by_sku = _task_summary_by_sku(task_rows)
     lines = [
         f"scrape_completeness_ratio={_pct(quality.get('scrape_completeness_ratio'))}",
+        f"expected_urls={quality.get('expected_url_count') or 0}",
+        f"saved_products={quality.get('saved_product_count') or len(products)}",
+        f"failed_url_count={quality.get('failed_url_count') or 0}",
+        f"missing_url_count={quality.get('missing_url_count') or 0}",
         f"low_coverage_count={quality.get('low_coverage_count') or len(quality.get('low_coverage_skus') or [])}",
         f"outbox_deadletter_count={quality.get('outbox_deadletter_count') or 0}",
         f"estimated_date_ratio={_pct(quality.get('estimated_date_ratio'))}",
     ]
+    for idx, item in enumerate((quality.get("failed_urls") or [])[:20], start=1):
+        lines.append(f"failed_url[{idx}].url={item.get('url') or ''}")
+        lines.append(f"failed_url[{idx}].site={item.get('site') or ''}")
+        lines.append(f"failed_url[{idx}].stage={item.get('stage') or ''}")
+        lines.append(
+            f"failed_url[{idx}].error={item.get('error_type') or ''}: {item.get('error_message') or ''}"
+        )
+    for idx, url in enumerate((quality.get("missing_urls") or [])[:20], start=1):
+        lines.append(f"missing_url[{idx}]={url}")
     low_skus = {str(sku) for sku in quality.get("low_coverage_skus") or []}
     for product in products:
         sku = str(product.get("sku") or "")
@@ -75,6 +88,9 @@ def build_quality_log_lines(snapshot, quality, task_rows=None):
 def build_ops_log_summary(quality, log_path):
     parts = [
         f"完整率 {_pct(quality.get('scrape_completeness_ratio'))}",
+        f"计划 URL {quality.get('expected_url_count') or 0}",
+        f"入库产品 {quality.get('saved_product_count') or 0}",
+        f"失败 URL {quality.get('failed_url_count') or 0}",
         f"低覆盖 SKU {quality.get('low_coverage_count') or len(quality.get('low_coverage_skus') or [])}",
         f"通知 deadletter {quality.get('outbox_deadletter_count') or 0}",
         f"估算日期 {_pct(quality.get('estimated_date_ratio'))}",

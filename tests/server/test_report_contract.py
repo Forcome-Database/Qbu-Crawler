@@ -48,6 +48,39 @@ def test_renderer_refreshes_contract_with_real_snapshot_context():
     assert refreshed["contract_context"]["review_count"] == 1
 
 
+def test_contract_refresh_rebuilds_bootstrap_digest_from_real_snapshot():
+    analytics = {
+        "report_semantics": "bootstrap",
+        "report_user_contract": {
+            "schema_version": "report_user_contract.v1",
+            "contract_context": {
+                "snapshot_source": "missing",
+                "product_count": 0,
+                "review_count": 0,
+            },
+            "bootstrap_digest": {
+                "baseline_summary": {
+                    "headline": "首日基线已建档，监控起点已建立",
+                    "product_count": 0,
+                    "review_count": 0,
+                },
+                "immediate_attention": [],
+            },
+        },
+    }
+    snapshot = {
+        "logical_date": "2026-04-29",
+        "products": [{"id": i} for i in range(7)],
+        "reviews": [{"id": i} for i in range(565)],
+    }
+
+    refreshed = build_report_user_contract(snapshot=snapshot, analytics=analytics)
+
+    summary = refreshed["bootstrap_digest"]["baseline_summary"]
+    assert summary["product_count"] == 7
+    assert summary["review_count"] == 565
+
+
 def test_missing_snapshot_context_is_marked_as_temporary():
     contract = build_report_user_contract(
         snapshot={},
@@ -166,6 +199,32 @@ def test_competitor_insights_contract_has_three_sections():
     assert item["evidence_review_ids"] == [201]
     assert item["sample_size"] == 8
     assert item["product_count"] == 2
+
+
+def test_competitor_insights_include_products_and_evidence_fields():
+    analytics = {
+        "competitor": {
+            "negative_opportunities": [{
+                "label_code": "packaging",
+                "label_display": "包装",
+                "body_cn": "外箱到货破损，配件散落。",
+                "product_name": "Cabela Mixer",
+                "review_ids": [301, 302],
+                "sample_size": 8,
+            }],
+        },
+    }
+
+    contract = build_report_user_contract(snapshot={"logical_date": "2026-04-28"}, analytics=analytics)
+    item = contract["competitor_insights"]["avoid_competitor_failures"][0]
+
+    assert item["label_code"] == "packaging"
+    assert item["theme"] == "包装"
+    assert item["products"] == ["Cabela Mixer"]
+    assert item["evidence_review_ids"] == [301, 302]
+    assert item["evidence_count"] == 2
+    assert item["competitor_signal"] == "外箱到货破损，配件散落。"
+    assert item["validation_hypothesis"]
 
 
 def test_bootstrap_digest_forbids_incremental_terms():

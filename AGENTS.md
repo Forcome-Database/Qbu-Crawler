@@ -286,6 +286,8 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - **`eager` 加载模式可能阻止第三方脚本初始化**：某些站点（如 SFCC/Demandware 平台）的 BV 脚本在 `eager` 模式下无法初始化，需改用 `normal` 模式。各站点子类可通过覆盖 `_build_options()` 定制
 - **批量滚动可能跳过中间元素的懒加载**：`scrollIntoView` 批量滚动（如每 20 个跳一次）在元素总数少于批大小时，会一步跳到末尾，中间元素一闪而过无法触发懒加载。需要额外做一轮定向滚动，逐个滚动到含懒加载内容但未加载的元素
 - **`Chromium()` 默认共享浏览器进程**：DrissionPage 的 `Chromium()` 默认连接到同一端口（9222）的浏览器进程。多线程并行创建多个 scraper 实例时，所有实例共享同一个浏览器和标签页，导致 `tab.get()` 竞争、数据错位。**必须在 `ChromiumOptions` 中调用 `auto_port()`** 让每个实例使用独立端口和独立浏览器进程
+- **关键页面就绪判断优先用 JS 轮询**：DrissionPage 元素搜索底层可能走 `DOM.performSearch` / `DOM.getSearchResults`，在页面或 CDP 状态异常时会出现返回值缺少 `searchId` 的情况。产品页身份识别这类关键路径应优先用 `tab.run_js()` 查询稳定 DOM 字段，不依赖 `wait.ele_displayed()`。
+- **批量采集完整率必须持久化 expected/saved/failed URL**：不能只看最终入库 snapshot 判断是否漏采。每个 task result 需要记录计划 URL、成功入库 URL、失败 URL 及阶段和错误类型，run log 再基于这些事实输出采集真相。
 
 ## 工作流程规范
 
@@ -369,3 +371,14 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `report_manifest.delivery.db_status` 是内部审计状态来源；用户业务 HTML / Excel / 邮件不得展示 deadletter、低覆盖 SKU、估算日期占比等运维诊断
 - `REPORT_CONTRACT_STRICT_MODE` 默认开启；旧 analytics 字段只能经 `report_user_contract` adapter 转换后被 renderer 消费
 - `tests/server/test_run_log.py` 与 `tests/server/test_report_manifest.py` — 测试9 run log 与 P2 manifest/delivery 回写防回归
+
+## 2026-04-29 测试10 P4 采集真相与报告契约增量
+
+- `qbu_crawler/scrapers/basspro.py` - BassPro 产品身份改用 JS 轮询，补 age gate 多阶段检查和 BV 阶段诊断，规避 `KeyError('searchId')` 造成的静默漏采。
+- `qbu_crawler/server/task_manager.py` 与 `qbu_crawler/models.py` - task result 和 workflow task 查询补齐 `expected_urls`、`saved_urls`、`failed_urls`，让 URL 级采集事实可追踪。
+- `qbu_crawler/server/scrape_quality.py` 与 `qbu_crawler/server/run_log.py` - 采集完整率优先按 expected/saved/failed URL 对账，并把失败 URL、阶段、错误类型和 diagnostics 写入 `data/log-run-<run_id>-<yyyymmdd>.log`。
+- `qbu_crawler/server/notifier.py` 与 `qbu_crawler/server/workflows.py` - 运维异常只进入技术邮件和内部日志，不污染用户业务报告。
+- `qbu_crawler/server/report_contract.py` 与 `qbu_crawler/server/report_snapshot.py` - 最终渲染前用真实 snapshot 刷新 `report_user_contract` 派生字段，保留有效行动建议和证据计数。
+- `qbu_crawler/server/report_llm.py` - LLM 数字校验纳入 contract evidence counts，避免已锁定证据数被误判为幻觉数字。
+- `qbu_crawler/server/report_analytics.py` - `sample_avg_rating` 回到全样本评论均分，`own_avg_rating` 单独表达自有产品评论均分。
+- `tests/server/test_test10_artifact_replay.py` 与 `tests/fixtures/report_replay/test10_minimal/` - 锁住测试10的业务报告和运维日志隔离、防漏采回归。

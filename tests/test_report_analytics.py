@@ -497,8 +497,7 @@ def test_build_report_analytics_includes_own_avg_rating(analytics_db):
     analytics = build_report_analytics(_build_snapshot(run["id"], "2026-03-29"))
 
     assert "own_avg_rating" in analytics["kpis"]
-    # Own Grinder has rating 3.7
-    assert analytics["kpis"]["own_avg_rating"] == 3.7
+    assert analytics["kpis"]["own_avg_rating"] == 1.5
 
 
 def test_build_report_analytics_includes_products_for_charts(analytics_db):
@@ -538,7 +537,7 @@ def test_build_report_analytics_includes_chart_data(analytics_db):
 
 
 def test_sample_avg_rating_computed_from_reviews(analytics_db):
-    """sample_avg_rating should be the mean of own review ratings, not the site rating."""
+    """sample_avg_rating should be the mean of all review ratings, not the site rating."""
     from qbu_crawler.server.report_analytics import build_report_analytics
 
     snapshot = _build_snapshot(1, "2026-04-01")
@@ -550,7 +549,7 @@ def test_sample_avg_rating_computed_from_reviews(analytics_db):
     analytics = build_report_analytics(snapshot)
     sample_avg = analytics["kpis"].get("sample_avg_rating")
     assert sample_avg is not None, "sample_avg_rating should be computed"
-    expected = round(sum(r["rating"] for r in own_reviews) / len(own_reviews), 2)
+    expected = round(sum(r["rating"] for r in snapshot["reviews"]) / len(snapshot["reviews"]), 2)
     assert abs(sample_avg - expected) < 0.01, \
         f"Expected {expected}, got {sample_avg}"
 

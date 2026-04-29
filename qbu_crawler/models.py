@@ -980,7 +980,7 @@ def list_workflow_run_tasks(run_id: int) -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT wrt.*, t.status, t.error, t.result, t.updated_at, t.finished_at, t.system_error_code
+            SELECT wrt.*, t.status, t.error, t.params, t.result, t.updated_at, t.finished_at, t.system_error_code
             FROM workflow_run_tasks wrt
             JOIN tasks t ON t.id = wrt.task_id
             WHERE wrt.run_id = ?
@@ -988,7 +988,7 @@ def list_workflow_run_tasks(run_id: int) -> list[dict]:
             """,
             (run_id,),
         ).fetchall()
-        return [_decode_json_fields(row, ("result",)) for row in rows]
+        return [_decode_json_fields(row, ("params", "result")) for row in rows]
     finally:
         conn.close()
 

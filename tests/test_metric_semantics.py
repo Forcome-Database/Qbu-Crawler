@@ -268,6 +268,9 @@ def test_report_analytics_keeps_ingested_and_site_total_separate(metric_db):
 
     assert analytics["kpis"]["ingested_review_rows"] == 2
     assert analytics["kpis"]["site_reported_review_total_current"] == 10
+    assert analytics["kpis"]["sample_avg_rating"] == 3.5
+    assert analytics["kpis"]["own_avg_rating"] == 2.0
+    assert analytics["kpis"]["competitor_avg_rating"] == 5.0
 
 
 def test_change_digest_counts_fresh_reviews_and_backfill_from_publish_time():

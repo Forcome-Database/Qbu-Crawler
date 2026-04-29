@@ -134,3 +134,11 @@ CHROME_USER_DATA_PATH=/home/你的用户名/.config/google-chrome
 - **导航后校验 URL**：`_check_url_match()` 检测实际 URL 是否匹配预期，及时发现重定向或并行干扰
 - **SKU 文本用中文冒号**：正则需兼容 `SKU：` 和 `SKU:`，且 SKU 可能含字母（正则 `[\w-]+`）
 - **产品 URL 两种格式**：`/shop/en/xxx` 和 `/p/xxx`（后者是规范化后的路径）
+
+## 2026-04-29 测试10补充规则
+
+- **产品身份就绪不要依赖 `tab.wait.ele_displayed('tag:h1')`**：生产测试10中 DrissionPage 在 `DOM.getSearchResults` 返回缺少 `searchId` 时会抛出 `KeyError('searchId')`。BassPro 产品页关键就绪判断应使用轻量 `tab.run_js()` 轮询 `h1` 或 `document.title`，避免进入不稳定的元素搜索路径。
+- **age gate 只做多阶段轻量检查**：在导航后、产品身份识别后、BV 摘要前、评论展开前各检查一次即可。未出现时快速返回，出现后只做必要关闭，不增加循环点击或高频刷新。
+- **BV 评论必须记录阶段诊断**：至少记录 `stage`、`age_gate_seen`、`bv_container_seen`、`summary_count`、`shadow_count`、`load_more_state`、`stop_reason`。当 BV 容器存在但 Shadow DOM 评论为空时记录 `shadow_empty`，不能把 0 条评论误解释成完整采集。
+- **失败 URL 必须进入采集真相链路**：BassPro 单 URL 失败时，task result 和 run log 需要包含 URL、阶段、错误类型、错误信息和 diagnostics，方便后续定位，不进入用户业务报告。
+- **爬虫修复顺序**：先用生产日志或 fake tab 复现失败路径，再评估防爬影响和边界场景，最后只对单 URL 隔离实测。修复不得提高请求频率，不得扩大 URL 集合，不得绕过 Akamai 或站点访问控制。

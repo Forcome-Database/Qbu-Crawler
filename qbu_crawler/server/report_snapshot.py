@@ -1509,7 +1509,7 @@ def generate_full_report_from_snapshot(
         )
 
         # V3 HTML report (replaces V2 PDF + HTML pipeline)
-        html_path = report_html.render_v3_html(snapshot, analytics, output_path=html_output_path)
+        html_path = report_html.render_v3_html(snapshot, pre_normalized, output_path=html_output_path)
         _record_artifact_safe(
             snapshot.get("run_id"),
             "html_attachment",

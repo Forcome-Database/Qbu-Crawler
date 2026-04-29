@@ -360,6 +360,13 @@ def _competitor_product_count(item):
     return 1 if item.get("product_name") or item.get("product_sku") else 0
 
 
+def _competitor_products(item):
+    products = item.get("products") or item.get("affected_products") or []
+    if not products:
+        products = [item.get("product_name") or item.get("product_sku")]
+    return _unique_ordered(products)
+
+
 def _competitor_sample_size(item, evidence_ids):
     return int(
         item.get("sample_size")
@@ -372,6 +379,12 @@ def _competitor_sample_size(item, evidence_ids):
 def _competitor_contract_item(item, source, kind):
     summary = _competitor_summary(item)
     evidence_ids = _competitor_review_ids(item)
+    label_codes = item.get("label_codes") or []
+    label_code = item.get("label_code") or (label_codes[0] if label_codes else "") or source
+    theme = item.get("theme") or item.get("label_display") or item.get("topic") or label_code
+    products = _competitor_products(item)
+    product_count = len(products) if products else _competitor_product_count(item)
+    evidence_count = len(evidence_ids) if evidence_ids else _competitor_sample_size(item, evidence_ids)
     if kind == "avoid":
         implication = f"自有产品需避免复现：{summary}" if summary else "自有产品需避免复现竞品短板"
         validation = "抽样复核对应设计、包装和售后触点"
@@ -379,12 +392,18 @@ def _competitor_contract_item(item, source, kind):
         implication = f"自有产品可借鉴并转化为检查项：{summary}" if summary else "自有产品可借鉴竞品正面体验"
         validation = "抽查页面表达、说明书和客服问答是否覆盖该体验"
     return {
+        "label_code": label_code,
+        "theme": theme,
+        "products": products,
         "summary_cn": summary,
         "self_product_implication": item.get("self_product_implication") or implication,
         "suggested_validation": item.get("suggested_validation") or validation,
+        "competitor_signal": item.get("competitor_signal") or summary,
+        "validation_hypothesis": item.get("validation_hypothesis") or item.get("suggested_validation") or validation,
         "evidence_review_ids": evidence_ids,
+        "evidence_count": evidence_count,
         "sample_size": _competitor_sample_size(item, evidence_ids),
-        "product_count": _competitor_product_count(item),
+        "product_count": product_count,
         "source": source,
     }
 
@@ -417,10 +436,16 @@ def _build_competitor_insights(analytics):
     hypotheses = []
     for item in (avoid + learn)[:3]:
         hypotheses.append({
+            "label_code": item.get("label_code") or "",
+            "theme": item.get("theme") or "",
+            "products": item.get("products") or [],
             "summary_cn": f"验证：{item.get('summary_cn')}",
             "self_product_implication": item.get("self_product_implication") or "",
             "suggested_validation": item.get("suggested_validation") or "",
+            "competitor_signal": item.get("competitor_signal") or "",
+            "validation_hypothesis": item.get("validation_hypothesis") or item.get("suggested_validation") or "",
             "evidence_review_ids": item.get("evidence_review_ids") or [],
+            "evidence_count": item.get("evidence_count") or len(item.get("evidence_review_ids") or []),
             "sample_size": item.get("sample_size") or 0,
             "product_count": item.get("product_count") or 0,
             "source": "validation_hypothesis",
@@ -486,10 +511,72 @@ def _build_delivery(analytics):
     }
 
 
+def _should_refresh_snapshot_derived(existing, context):
+    if context.get("snapshot_source") != "provided":
+        return False
+    old = existing.get("contract_context") or {}
+    return (
+        old.get("snapshot_source") != "provided"
+        or old.get("product_count") != context.get("product_count")
+        or old.get("review_count") != context.get("review_count")
+    )
+
+
+def _refresh_action_counts(items):
+    refreshed = []
+    for item in items or []:
+        row = dict(item)
+        products = row.get("affected_products") or []
+        evidence_ids = row.get("evidence_review_ids") or []
+        row["affected_products_count"] = len(products)
+        if row.get("evidence_count") is not None:
+            row["evidence_count"] = int(row.get("evidence_count") or 0)
+        elif evidence_ids:
+            row["evidence_count"] = len(evidence_ids)
+        else:
+            row["evidence_count"] = 0
+        refreshed.append(row)
+    return refreshed
+
+
+def _refresh_issue_counts(items):
+    refreshed = []
+    for item in items or []:
+        row = dict(item)
+        evidence_ids = row.get("evidence_review_ids") or []
+        text_evidence = row.get("text_evidence") or []
+        if row.get("evidence_count") is not None:
+            row["evidence_count"] = int(row.get("evidence_count") or 0)
+        elif evidence_ids:
+            row["evidence_count"] = len(evidence_ids)
+        elif text_evidence:
+            row["evidence_count"] = len(text_evidence)
+        else:
+            row["evidence_count"] = 0
+        refreshed.append(row)
+    return refreshed
+
+
+def _refresh_bootstrap_digest(existing_digest, snapshot, analytics, kpis, action_priorities, issue_diagnostics, mode):
+    refreshed = _build_bootstrap_digest(snapshot, analytics, kpis, action_priorities, issue_diagnostics, mode)
+    if not existing_digest or mode != "bootstrap":
+        return refreshed
+    existing_summary = existing_digest.get("baseline_summary") or {}
+    refreshed_summary = refreshed.setdefault("baseline_summary", {})
+    for key in ("headline", "coverage_rate", "translation_completion_rate"):
+        if existing_summary.get(key) is not None:
+            refreshed_summary[key] = existing_summary[key]
+    if existing_digest.get("immediate_attention"):
+        refreshed["immediate_attention"] = list(existing_digest.get("immediate_attention") or [])[:3]
+    return refreshed
+
+
 def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
     snapshot = snapshot or {}
     analytics = analytics or {}
     existing = analytics.get("report_user_contract") or {}
+    context = _contract_context(snapshot)
+    refresh_snapshot_derived = _should_refresh_snapshot_derived(existing, context)
     existing_is_provided = bool(existing.get("schema_version") or existing.get("contract_source"))
     legacy_contract_input = bool(
         (analytics.get("report_copy") or {}).get("improvement_priorities")
@@ -518,6 +605,8 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
             item for item in action_priorities
             if item.get("evidence_review_ids") or item.get("evidence_count")
         ]
+    action_priorities = _refresh_action_counts(action_priorities)
+    issue_diagnostics = _refresh_issue_counts(issue_diagnostics)
     executive_slots = existing.get("executive_slots") or _build_executive_slots(
         snapshot,
         analytics,
@@ -530,16 +619,30 @@ def build_report_user_contract(*, snapshot, analytics, llm_copy=None):
         "contract_source": contract_source,
         "mode": mode,
         "logical_date": snapshot.get("logical_date") or analytics.get("logical_date"),
-        "contract_context": _contract_context(snapshot),
+        "contract_context": context,
         "metric_definitions": _build_metric_definitions(kpis, mode),
         "kpis": kpis,
         "kpi_semantics": existing.get("kpi_semantics") or {},
         "action_priorities": action_priorities,
         "issue_diagnostics": issue_diagnostics,
         "heatmap": existing.get("heatmap") or {},
-        "competitor_insights": existing.get("competitor_insights") or _build_competitor_insights(analytics),
+        "competitor_insights": (
+            _build_competitor_insights(analytics)
+            if refresh_snapshot_derived and analytics.get("competitor")
+            else existing.get("competitor_insights") or _build_competitor_insights(analytics)
+        ),
         "bootstrap_digest": (
-            existing.get("bootstrap_digest")
+            _refresh_bootstrap_digest(
+                existing.get("bootstrap_digest") or {},
+                snapshot,
+                analytics,
+                kpis,
+                action_priorities,
+                issue_diagnostics,
+                mode,
+            )
+            if refresh_snapshot_derived
+            else existing.get("bootstrap_digest")
             or _build_bootstrap_digest(snapshot, analytics, kpis, action_priorities, issue_diagnostics, mode)
         ),
         "delivery": existing.get("delivery") or _build_delivery(analytics),
@@ -623,9 +726,13 @@ def merge_llm_copy_into_contract(contract, llm_copy):
         for item in merged.get("issue_diagnostics") or []
         if item.get("label_code")
     }
+    llm_priorities = (llm_copy or {}).get("improvement_priorities") or []
+    if not llm_priorities:
+        merged["validation_warnings"] = warnings
+        return merged
     actions = []
     seen_labels = set()
-    for item in (llm_copy or {}).get("improvement_priorities") or []:
+    for item in llm_priorities:
         action = dict(item)
         label_code = action.get("label_code")
         if label_code and label_code in seen_labels:

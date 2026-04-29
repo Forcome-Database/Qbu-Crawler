@@ -687,7 +687,7 @@ class WorkflowWorker:
                     _evaluate_ops_alert_triggers, count_outbox_deadletter,
                 )
                 snapshot = load_report_snapshot(run["snapshot_path"])
-                quality = summarize_scrape_quality(snapshot.get("products", []))
+                quality = summarize_scrape_quality(snapshot.get("products", []), tasks=task_rows)
                 # F011 §4.4.1 — augment quality with the inputs that the
                 # P0/P1/P2 evaluator consults beyond legacy ratios. Share the
                 # notifier-side json_extract counter to keep the deadletter

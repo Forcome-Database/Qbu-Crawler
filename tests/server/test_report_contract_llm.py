@@ -5,6 +5,7 @@ from qbu_crawler.server.report_common import normalize_deep_report_analytics
 from qbu_crawler.server.report_llm import (
     _build_insights_prompt_v3,
     _build_llm_evidence_payload,
+    _collect_known_numbers,
     normalize_llm_copy_shape,
     validate_llm_copy,
 )
@@ -175,3 +176,28 @@ def test_normalized_issue_cards_keep_text_evidence_for_llm_payload():
     assert text_evidence
     assert text_evidence[0]["review_id"] == 101
     assert "too large" in text_evidence[0]["display_body"].lower()
+
+
+def test_llm_known_numbers_include_contract_evidence_counts():
+    analytics = {
+        "kpis": {},
+        "report_user_contract": {
+            "action_priorities": [{"evidence_count": 30, "affected_products_count": 5}],
+            "issue_diagnostics": [{"evidence_count": 16}],
+            "competitor_insights": {
+                "avoid_competitor_failures": [{"evidence_count": 12}],
+            },
+            "bootstrap_digest": {
+                "baseline_summary": {"product_count": 7, "review_count": 565},
+            },
+        },
+    }
+
+    numbers = _collect_known_numbers(analytics)
+
+    assert 30.0 in numbers
+    assert 16.0 in numbers
+    assert 12.0 in numbers
+    assert 5.0 in numbers
+    assert 7.0 in numbers
+    assert 565.0 in numbers

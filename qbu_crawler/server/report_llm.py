@@ -175,7 +175,7 @@ def _assert_hero_health_match(copy: dict, kpis: dict) -> None:
         )
 
 
-def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> set:
+def _collect_known_numbers(kpis: dict, risk_products=None, reviews=None, contract=None) -> set:
     """Collect all numeric values from kpis and risk_products into a set of floats.
 
     Includes:
@@ -183,10 +183,20 @@ def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> se
     - All numeric values from each risk_product dict (rounded to 2 dp)
     - len(reviews) and len(risk_products) as total counts
     """
+    if risk_products is None and reviews is None and isinstance(kpis, dict) and (
+        "kpis" in kpis or "report_user_contract" in kpis
+    ):
+        analytics = kpis
+        kpis = analytics.get("kpis") or {}
+        risk_products = (analytics.get("self") or {}).get("risk_products") or []
+        reviews = analytics.get("reviews") or []
+        contract = contract or analytics.get("report_user_contract") or {}
+    risk_products = risk_products or []
+    reviews = reviews or []
+    contract = contract or {}
     known: set = set()
 
-    # All numeric kpi values
-    for val in kpis.values():
+    def add_number(val):
         try:
             numeric = float(val)
             known.add(round(numeric, 2))
@@ -195,16 +205,28 @@ def _collect_known_numbers(kpis: dict, risk_products: list, reviews: list) -> se
         except (TypeError, ValueError):
             pass
 
+    # All numeric kpi values
+    for val in (kpis or {}).values():
+        add_number(val)
+
     # All numeric values from risk products
     for product in risk_products:
         for val in product.values():
-            try:
-                numeric = float(val)
-                known.add(round(numeric, 2))
-                if 0 < abs(numeric) <= 1:
-                    known.add(round(numeric * 100, 2))
-            except (TypeError, ValueError):
-                pass
+            add_number(val)
+
+    for item in contract.get("action_priorities") or []:
+        add_number(item.get("evidence_count"))
+        add_number(item.get("affected_products_count"))
+    for item in contract.get("issue_diagnostics") or []:
+        add_number(item.get("evidence_count"))
+        add_number(item.get("affected_products_count"))
+    for section_items in (contract.get("competitor_insights") or {}).values():
+        for item in section_items or []:
+            add_number(item.get("evidence_count"))
+            add_number(item.get("affected_products_count") or item.get("product_count"))
+    baseline_summary = ((contract.get("bootstrap_digest") or {}).get("baseline_summary") or {})
+    add_number(baseline_summary.get("product_count"))
+    add_number(baseline_summary.get("review_count"))
 
     # Total counts
     known.add(float(len(reviews)))
@@ -284,6 +306,7 @@ def assert_consistency(
     reviews=_SENTINEL,
     allowed_products_by_label=None,
     all_product_names=None,
+    contract=None,
 ) -> None:
     """Full numeric + structural assertion for LLM copy.
 
@@ -314,7 +337,7 @@ def assert_consistency(
         return
 
     # Precompute known numbers for bullet traceability
-    known_numbers = _collect_known_numbers(kpis, _risk_products, _reviews)
+    known_numbers = _collect_known_numbers(kpis, _risk_products, _reviews, contract=contract)
 
     # 2. executive_bullets numeric traceability
     for i, bullet in enumerate(copy.get("executive_bullets") or []):
@@ -484,6 +507,7 @@ def generate_report_insights_with_validation(
                 reviews=reviews_for_check,
                 allowed_products_by_label=allowed_products_by_label,
                 all_product_names=all_product_names,
+                contract=analytics.get("report_user_contract") or {},
             )
             copy["_prompt_version"] = "v3"
             return copy

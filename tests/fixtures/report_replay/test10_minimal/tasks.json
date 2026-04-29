@@ -1,0 +1,36 @@
+[
+  {
+    "params": {
+      "urls": [
+        "https://example.test/p1",
+        "https://example.test/p2",
+        "https://example.test/p3",
+        "https://example.test/p4",
+        "https://example.test/p5",
+        "https://example.test/p6",
+        "https://example.test/p7",
+        "https://www.basspro.com/p/cabelas-heavy-duty-20-lb-meat-mixer"
+      ]
+    },
+    "result": {
+      "saved_urls": [
+        "https://example.test/p1",
+        "https://example.test/p2",
+        "https://example.test/p3",
+        "https://example.test/p4",
+        "https://example.test/p5",
+        "https://example.test/p6",
+        "https://example.test/p7"
+      ],
+      "failed_urls": [
+        {
+          "url": "https://www.basspro.com/p/cabelas-heavy-duty-20-lb-meat-mixer",
+          "site": "basspro",
+          "stage": "product_identity",
+          "error_type": "KeyError",
+          "error_message": "'searchId'"
+        }
+      ]
+    }
+  }
+]

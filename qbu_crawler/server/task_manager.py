@@ -186,6 +186,9 @@ class TaskManager:
         self._persist(task)
 
         urls = task.params["urls"]
+        expected_urls = list(urls)
+        saved_urls = []
+        failed_urls = []
         products_saved = 0
         reviews_saved = 0
         product_summaries = []
@@ -200,15 +203,17 @@ class TaskManager:
                 self._persist(task)
 
                 try:
+                    current_stage = "scraper_init"
+                    site_key = get_site_key(url)
                     if scraper is None or get_site_key(url) != getattr(scraper, '_current_site', None):
                         if scraper:
                             scraper.close()
-                        site_key = get_site_key(url)
                         logger.info(f"[Task {task_id}] 创建 scraper: site={site_key}, url={url}")
                         scraper = get_scraper(url)
                         scraper._current_site = site_key
                         logger.info(f"[Task {task_id}] scraper 就绪: site={site_key}, url={url}")
 
+                    current_stage = "scrape"
                     effective_review_limit = self._resolve_review_limit(
                         url,
                         task.params.get("review_limit", 0),
@@ -218,6 +223,7 @@ class TaskManager:
                     product["ownership"] = task.params["ownership"]
                     reviews = data.get("reviews", [])
 
+                    current_stage = "persist"
                     pid = models.save_product(product)
                     models.save_snapshot(pid, product)
                     rc = models.save_reviews(pid, reviews)
@@ -226,6 +232,7 @@ class TaskManager:
 
                     products_saved += 1
                     reviews_saved += rc
+                    saved_urls.append(url)
                     product_summaries.append({
                         "url": url,
                         "site": product.get("site"),
@@ -242,6 +249,14 @@ class TaskManager:
                     logger.error(f"[Task {task_id}] Failed {url}: {e}", exc_info=True)
                     task.progress["failed"] = task.progress.get("failed", 0) + 1
                     task.progress["completed"] = i + 1
+                    failed_urls.append({
+                        "url": url,
+                        "site": locals().get("site_key") or get_site_key(url),
+                        "stage": locals().get("current_stage") or "scrape",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "diagnostics": getattr(e, "diagnostics", None) or {},
+                    })
                     # 浏览器可能已不可用（Chrome 死、tab 丢、session 污染），销毁 scraper；
                     # 下次迭代通过 scraper is None 分支重建，避免单点失败连锁拖垮整个任务
                     if scraper:
@@ -261,6 +276,12 @@ class TaskManager:
                     "products_saved": products_saved,
                     "reviews_saved": reviews_saved,
                     "product_summaries": product_summaries,
+                    "expected_urls": expected_urls,
+                    "saved_urls": saved_urls,
+                    "failed_urls": failed_urls,
+                    "expected_url_count": len(expected_urls),
+                    "saved_url_count": len(saved_urls),
+                    "failed_url_count": len(failed_urls),
                 }
 
         except Exception as e:

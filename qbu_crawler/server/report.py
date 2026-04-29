@@ -1157,17 +1157,21 @@ def _generate_analytical_excel(
 
     if contract_rows:
         for item in contract_rows:
+            products_text = "、".join(
+                str(pid) for pid in (item.get("products") or item.get("affected_products") or []) if pid
+            )
+            evidence_ids_text = "、".join(str(rid) for rid in (item.get("evidence_review_ids") or []) if rid)
             ws_comp.append([
                 item.get("_excel_type") or "—",
-                _safe_text(item.get("summary_cn")) or "—",
-                int(item.get("sample_size") or len(item.get("evidence_review_ids") or []) or 0),
-                _safe_text(item.get("summary_cn")) or "—",
-                "、".join(str(pid) for pid in (item.get("products") or item.get("affected_products") or []) if pid) or "—",
+                _safe_text(item.get("theme") or item.get("label_display") or item.get("label_code")) or "—",
+                int(item.get("evidence_count") or len(item.get("evidence_review_ids") or []) or 0),
+                _safe_text(item.get("competitor_signal") or item.get("summary_cn")) or "—",
+                products_text or "—",
                 _safe_text(item.get("self_product_implication")) or "—",
-                _safe_text(item.get("suggested_validation")) or "—",
-                "、".join(str(rid) for rid in (item.get("evidence_review_ids") or []) if rid) or "—",
+                _safe_text(item.get("validation_hypothesis") or item.get("suggested_validation")) or "—",
+                evidence_ids_text or "—",
                 int(item.get("sample_size") or 0),
-                int(item.get("product_count") or 0),
+                int(item.get("product_count") or len(item.get("products") or []) or 0),
             ])
     else:
         raw_benchmark_items = competitor.get("benchmark_examples") or []

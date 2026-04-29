@@ -83,3 +83,30 @@ def test_quality_log_lines_include_low_coverage_task_meta():
     assert "stop_reason=no_next" in text
     assert "outbox_deadletter_count=1" in text
     assert "estimated_date_ratio=43.9%" in text
+
+
+def test_quality_log_lines_include_failed_url_details():
+    snapshot = {"products": [{"url": "u1", "sku": "S1"}]}
+    quality = {
+        "scrape_completeness_ratio": 0.875,
+        "expected_url_count": 8,
+        "saved_product_count": 7,
+        "failed_url_count": 1,
+        "failed_urls": [{
+            "url": "https://www.basspro.com/p/cabelas-heavy-duty-20-lb-meat-mixer",
+            "site": "basspro",
+            "stage": "product_identity",
+            "error_type": "KeyError",
+            "error_message": "'searchId'",
+        }],
+    }
+
+    lines = build_quality_log_lines(snapshot, quality, [])
+    text = "\n".join(lines)
+
+    assert "expected_urls=8" in text
+    assert "saved_products=7" in text
+    assert "failed_url_count=1" in text
+    assert "failed_url[1].url=https://www.basspro.com/p/cabelas-heavy-duty-20-lb-meat-mixer" in text
+    assert "failed_url[1].stage=product_identity" in text
+    assert "failed_url[1].error=KeyError: 'searchId'" in text

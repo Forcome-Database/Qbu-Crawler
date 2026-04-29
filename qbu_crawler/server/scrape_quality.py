@@ -3,6 +3,7 @@
 与 report_snapshot.detect_snapshot_changes 共享 missing-value 约定（None/""/"unknown"）。
 """
 
+import json
 from typing import Iterable
 
 MISSING_SENTINELS = (None, "", "unknown")
@@ -21,6 +22,7 @@ def summarize_scrape_quality(
     products: Iterable[dict],
     *,
     low_coverage_threshold: float = 0.6,
+    tasks: Iterable[dict] | None = None,
 ) -> dict:
     """对一次采集的产品列表统计字段缺失 + 采集完整度 (F011 H1)。
 
@@ -37,6 +39,7 @@ def summarize_scrape_quality(
             low_coverage_skus / low_coverage_count (per-product ingested/site < threshold)
     """
     products = list(products)
+    tasks = list(tasks or [])
     total = len(products)
 
     # --- legacy missing-field metrics (unchanged contract) ---
@@ -66,6 +69,43 @@ def summarize_scrape_quality(
 
     completeness = (ingested_total / site_total) if site_total else 1.0
 
+    expected_urls = []
+    saved_urls = []
+    failed_urls = []
+    for row in tasks:
+        params = row.get("params") or {}
+        result = row.get("result") or {}
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except Exception:
+                params = {}
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except Exception:
+                result = {}
+        expected_urls.extend(params.get("urls") or [])
+        saved_urls.extend(result.get("saved_urls") or [])
+        failed_urls.extend(result.get("failed_urls") or [])
+        if not saved_urls:
+            saved_urls.extend([
+                item.get("url")
+                for item in (result.get("product_summaries") or [])
+                if item.get("url")
+            ])
+    if not expected_urls:
+        expected_urls = [p.get("url") for p in products if p.get("url")]
+    if not saved_urls:
+        saved_urls = [p.get("url") for p in products if p.get("url")]
+
+    failed_url_set = {item.get("url") for item in failed_urls if item.get("url")}
+    saved_url_set = {url for url in saved_urls if url}
+    missing_urls = [
+        url for url in expected_urls
+        if url and url not in saved_url_set and url not in failed_url_set
+    ]
+
     return {
         # legacy
         "total": total,
@@ -81,6 +121,12 @@ def summarize_scrape_quality(
         "scrape_completeness_ratio": round(completeness, 4),
         "low_coverage_skus": low_coverage_skus,
         "low_coverage_count": len(low_coverage_skus),
+        "expected_url_count": len([url for url in expected_urls if url]),
+        "saved_product_count": len([url for url in saved_urls if url]) or total,
+        "failed_url_count": len(failed_urls),
+        "failed_urls": failed_urls,
+        "missing_url_count": len(missing_urls),
+        "missing_urls": missing_urls,
     }
 
 

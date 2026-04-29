@@ -3282,16 +3282,24 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
     own_reviews = [item for item in labeled_reviews if item["review"].get("ownership") == "own"]
     competitor_reviews = [item for item in labeled_reviews if item["review"].get("ownership") == "competitor"]
 
-    # Compute own_avg_rating from own products
-    own_ratings = [p.get("rating") for p in own_products if p.get("rating")]
-    own_avg_rating = round(sum(own_ratings) / len(own_ratings), 2) if own_ratings else 0
-
-    # sample_avg_rating: average from actual reviews in this window (leading)
+    all_review_ratings = [
+        float(review.get("rating") or 0) for review in snapshot_reviews
+        if review.get("rating")
+    ]
     own_review_ratings = [
         float(r["review"].get("rating") or 0) for r in own_reviews
         if r["review"].get("rating")
     ]
-    sample_avg_rating = round(sum(own_review_ratings) / len(own_review_ratings), 2) if own_review_ratings else own_avg_rating
+    competitor_review_ratings = [
+        float(r["review"].get("rating") or 0) for r in competitor_reviews
+        if r["review"].get("rating")
+    ]
+    sample_avg_rating = round(sum(all_review_ratings) / len(all_review_ratings), 2) if all_review_ratings else 0
+    own_avg_rating = round(sum(own_review_ratings) / len(own_review_ratings), 2) if own_review_ratings else 0
+    competitor_avg_rating = (
+        round(sum(competitor_review_ratings) / len(competitor_review_ratings), 2)
+        if competitor_review_ratings else 0
+    )
 
     # Use config.NEGATIVE_THRESHOLD for negative review counting
     negative_threshold = config.NEGATIVE_THRESHOLD
@@ -3372,6 +3380,7 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
             "competitor_review_rows": len(competitor_reviews),
             "image_review_rows": len(image_reviews),
             "own_avg_rating": own_avg_rating,
+            "competitor_avg_rating": competitor_avg_rating,
             "sample_avg_rating": sample_avg_rating,
             "negative_review_rows": sum(
                 1 for review in snapshot_reviews if (review.get("rating") or 0) <= negative_threshold

@@ -1,0 +1,61 @@
+{
+  "report_semantics": "bootstrap",
+  "kpis": {
+    "coverage_rate": 0.642,
+    "translation_completion_rate": 1.0,
+    "attention_product_count": 0,
+    "health_index": 96.2
+  },
+  "report_user_contract": {
+    "schema_version": "report_user_contract.v1",
+    "contract_context": {
+      "snapshot_source": "missing",
+      "product_count": 0,
+      "review_count": 0
+    },
+    "bootstrap_digest": {
+      "baseline_summary": {
+        "headline": "监控起点已建立",
+        "product_count": 0,
+        "review_count": 0
+      },
+      "immediate_attention": []
+    },
+    "action_priorities": [
+      {
+        "label_code": "structure_design",
+        "label_display": "结构设计",
+        "short_title": "复核结构设计",
+        "full_action": "复核结构设计、履约和材料做工三类高频证据",
+        "affected_products": ["Product 1", "Product 2", "Product 3", "Product 4", "Product 5"],
+        "affected_products_count": 0,
+        "evidence_count": 30,
+        "evidence_review_ids": [1, 2, 3]
+      }
+    ],
+    "issue_diagnostics": [
+      {
+        "label_code": "structure_design",
+        "label_display": "结构设计",
+        "affected_products": ["Product 1", "Product 2", "Product 3"],
+        "evidence_count": 16,
+        "evidence_review_ids": [1, 2]
+      }
+    ],
+    "competitor_insights": {
+      "learn_from_competitors": [],
+      "avoid_competitor_failures": [
+        {
+          "label_code": "material_quality",
+          "theme": "材料与做工",
+          "products": ["Competitor 1"],
+          "evidence_count": 12,
+          "evidence_review_ids": [101, 102],
+          "competitor_signal": "竞品差评集中在材料与做工。",
+          "validation_hypothesis": "复核自有产品材料说明与出厂抽检记录。"
+        }
+      ],
+      "validation_hypotheses": []
+    }
+  }
+}

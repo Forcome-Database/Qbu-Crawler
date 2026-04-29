@@ -306,6 +306,7 @@ def _evaluate_ops_alert_triggers(quality: dict) -> tuple[bool, str]:
     Triggers (highest precedence first):
       - zero_scrape_skus non-empty → P0
       - scrape_completeness_ratio < 0.6 → P1
+      - failed_url_count / missing_url_count > 0 → P1
       - outbox_deadletter_count > 0 → P1
       - estimated_date_ratio > 0.3 → P2
 
@@ -317,6 +318,10 @@ def _evaluate_ops_alert_triggers(quality: dict) -> tuple[bool, str]:
     if quality.get("zero_scrape_skus"):
         severities.append("P0")
     if (quality.get("scrape_completeness_ratio") or 1.0) < 0.6:
+        severities.append("P1")
+    if (quality.get("failed_url_count") or 0) > 0:
+        severities.append("P1")
+    if (quality.get("missing_url_count") or 0) > 0:
         severities.append("P1")
     if (quality.get("outbox_deadletter_count") or 0) > 0:
         severities.append("P1")

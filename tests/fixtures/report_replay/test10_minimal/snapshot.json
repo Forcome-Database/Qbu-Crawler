@@ -1,0 +1,17 @@
+{
+  "run_id": 1,
+  "logical_date": "2026-04-29",
+  "snapshot_hash": "test10-minimal",
+  "products": [
+    {"name": "Product 1", "sku": "SKU-1", "url": "https://example.test/p1", "ownership": "own", "review_count": 80, "ingested_count": 80},
+    {"name": "Product 2", "sku": "SKU-2", "url": "https://example.test/p2", "ownership": "own", "review_count": 80, "ingested_count": 80},
+    {"name": "Product 3", "sku": "SKU-3", "url": "https://example.test/p3", "ownership": "own", "review_count": 80, "ingested_count": 80},
+    {"name": "Product 4", "sku": "SKU-4", "url": "https://example.test/p4", "ownership": "own", "review_count": 80, "ingested_count": 80},
+    {"name": "Product 5", "sku": "SKU-5", "url": "https://example.test/p5", "ownership": "own", "review_count": 80, "ingested_count": 80},
+    {"name": "Competitor 1", "sku": "SKU-6", "url": "https://example.test/p6", "ownership": "competitor", "review_count": 82, "ingested_count": 82},
+    {"name": "Competitor 2", "sku": "SKU-7", "url": "https://example.test/p7", "ownership": "competitor", "review_count": 83, "ingested_count": 83}
+  ],
+  "reviews_count": 565,
+  "translated_count": 565,
+  "untranslated_count": 0
+}

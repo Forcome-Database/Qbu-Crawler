@@ -47,6 +47,31 @@ def test_alert_not_triggered_on_empty():
     assert should_raise_alert(quality, threshold=0.10) is False
 
 
+def test_summarize_uses_expected_and_failed_urls():
+    q = summarize_scrape_quality(
+        [{"url": "u1", "sku": "S1", "rating": 5, "stock_status": "in_stock", "review_count": 10, "ingested_count": 10}],
+        tasks=[{
+            "params": {"urls": ["u1", "u2"]},
+            "result": {
+                "saved_urls": ["u1"],
+                "failed_urls": [{
+                    "url": "u2",
+                    "site": "basspro",
+                    "stage": "product_identity",
+                    "error_type": "KeyError",
+                    "error_message": "'searchId'",
+                }],
+            },
+        }],
+    )
+
+    assert q["expected_url_count"] == 2
+    assert q["saved_product_count"] == 1
+    assert q["failed_url_count"] == 1
+    assert q["failed_urls"][0]["url"] == "u2"
+    assert q["missing_url_count"] == 0
+
+
 def test_update_and_readback_scrape_quality(tmp_path, monkeypatch):
     import sqlite3
     from qbu_crawler import config, models

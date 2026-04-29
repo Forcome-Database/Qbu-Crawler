@@ -79,7 +79,7 @@ class BassProScraper(BaseScraper):
             # 先快速检测弹窗是否存在（用稳定的非 hash class）
             gate = tab.ele('css:.restriction_disclosure_container', timeout=2)
             if not gate:
-                return
+                return False
 
             # 选择器优先级：精确 class > 包装器首个按钮 > JS 文本匹配
             btn = (
@@ -100,23 +100,68 @@ class BassProScraper(BaseScraper):
                 btn.click()
                 logger.info("  [年龄验证] 已自动点击 Yes 关闭弹窗")
                 tab.wait(0.5, 1)
+                return True
             else:
                 logger.warning("  [年龄验证] 检测到弹窗但未找到 Yes 按钮")
+                return True
         except Exception:
-            pass  # 无弹窗或异常，正常继续
+            return False  # 无弹窗或异常，正常继续
+
+    def _new_scrape_diagnostics(self):
+        return {
+            "stage": "init",
+            "age_gate_seen": False,
+            "age_gate_stages": [],
+            "bv_container_seen": False,
+            "summary_count": 0,
+            "shadow_count": 0,
+            "load_more_state": None,
+            "stop_reason": None,
+            "attempt": 1,
+        }
+
+    def _age_gate_checkpoint(self, tab, diagnostics, stage):
+        if self._dismiss_age_gate(tab):
+            diagnostics["age_gate_seen"] = True
+            diagnostics.setdefault("age_gate_stages", []).append(stage)
+
+    def _wait_product_identity(self, tab, timeout=15):
+        deadline = time.time() + timeout
+        last_error = None
+        while time.time() < deadline:
+            try:
+                text = tab.run_js("return document.querySelector('h1')?.innerText || document.title || '';")
+                if text and str(text).strip():
+                    return str(text).strip()
+            except KeyError as exc:
+                if str(exc).strip("'") == "searchId":
+                    last_error = exc
+                else:
+                    raise
+            time.sleep(0.5)
+        if last_error:
+            raise RuntimeError("basspro product_identity cdp_search_error") from last_error
+        raise TimeoutError("basspro product_identity timeout")
 
     def scrape(self, url: str, review_limit: int | None = None) -> dict:
         self._maybe_refresh_session()
         self._maybe_restart_browser()
 
+        scrape_diagnostics = self._new_scrape_diagnostics()
+        scrape_diagnostics["stage"] = "navigate"
         tab = self._get_page(url)
         # eager 模式下 get() 在 DOM 就绪后自动返回
-        self._dismiss_age_gate(tab)
+        self._age_gate_checkpoint(tab, scrape_diagnostics, "after_get")
         # 等待页面主要内容加载
-        tab.wait.ele_displayed('tag:h1', timeout=15)
+        scrape_diagnostics["stage"] = "product_identity"
+        self._wait_product_identity(tab, timeout=15)
+        self._age_gate_checkpoint(tab, scrape_diagnostics, "after_product_identity")
         self._check_url_match(tab, url)
         # 等待 BV 组件加载（容器一定会出现，但 JSON-LD 数据只有有评论时才有）
+        scrape_diagnostics["stage"] = "bv_summary"
+        self._age_gate_checkpoint(tab, scrape_diagnostics, "before_bv")
         bv_container = tab.ele('css:.bv_main_container', timeout=10)
+        scrape_diagnostics["bv_container_seen"] = bool(bv_container)
         # 滚动到 BV 组件位置，触发懒加载（BV 不在视口内不会注入 reviews-data）
         if bv_container:
             bv_container.scroll.to_see()
@@ -192,6 +237,8 @@ class BassProScraper(BaseScraper):
 
         # 5. BV 评论数据（从 Shadow DOM 提取）
         self._last_review_extraction_meta = {}
+        scrape_diagnostics["stage"] = "reviews_open"
+        self._age_gate_checkpoint(tab, scrape_diagnostics, "before_reviews")
         reviews = self._extract_reviews_from_dom(tab, review_limit=review_limit)
         reviews = self._process_review_images(reviews)
 
@@ -212,6 +259,7 @@ class BassProScraper(BaseScraper):
             "reviews": reviews,
             "scrape_meta": {
                 "review_extraction": self._last_review_extraction_meta,
+                "diagnostics": {**scrape_diagnostics, **(self._last_review_extraction_meta or {})},
             },
         }
         self._validate_product(data, url)
@@ -224,7 +272,7 @@ class BassProScraper(BaseScraper):
         tab = self._get_page(category_url)
         tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
         self._dismiss_age_gate(tab)
-        tab.wait.ele_displayed('tag:h1', timeout=15)
+        self._wait_product_identity(tab, timeout=15)
 
         all_urls = []
         page = 1
@@ -271,7 +319,7 @@ class BassProScraper(BaseScraper):
                     break
                 next_link.click(by_js=None)
                 tab.wait.doc_loaded(timeout=PAGE_LOAD_TIMEOUT)
-                tab.wait.ele_displayed('tag:h1', timeout=15)
+                self._wait_product_identity(tab, timeout=15)
                 page += 1
             except Exception:
                 break
@@ -356,25 +404,39 @@ class BassProScraper(BaseScraper):
             "load_more_clicks": 0,
             "loaded_section_count": 0,
             "review_limit": review_limit,
+            "bv_container_seen": False,
+            "shadow_count": 0,
+            "load_more_state": None,
         }
         for i in range(max_clicks):
             result = tab.run_js("""
                 const container = document.querySelector('[data-bv-show="reviews"]');
-                if (!container || !container.shadowRoot) return JSON.stringify({clicked: false, count: 0});
+                if (!container) return JSON.stringify({clicked: false, count: 0, container_seen: false, shadow_seen: false, load_more_state: 'container_missing'});
+                if (!container.shadowRoot) return JSON.stringify({clicked: false, count: 0, container_seen: true, shadow_seen: false, load_more_state: 'shadow_missing'});
                 const shadow = container.shadowRoot;
                 const count = shadow.querySelectorAll('section').length;
                 const btn = shadow.querySelector('button[aria-label*="Load More"]');
                 if (btn) {
                     btn.scrollIntoView({block: 'center'});
                     btn.click();
-                    return JSON.stringify({clicked: true, count: count});
+                    return JSON.stringify({clicked: true, count: count, container_seen: true, shadow_seen: true, load_more_state: 'clicked'});
                 }
-                return JSON.stringify({clicked: false, count: count});
+                return JSON.stringify({clicked: false, count: count, container_seen: true, shadow_seen: true, load_more_state: 'missing'});
             """)
             data = json.loads(result) if isinstance(result, str) else (result or {})
             meta["loaded_section_count"] = int(data.get("count") or 0)
+            meta["shadow_count"] = int(data.get("count") or 0)
+            meta["bv_container_seen"] = bool(data.get("container_seen"))
+            meta["load_more_state"] = data.get("load_more_state")
             if not data.get("clicked"):
-                meta["stop_reason"] = "load_more_missing"
+                if not data.get("container_seen"):
+                    meta["stop_reason"] = "bv_container_missing"
+                elif not data.get("shadow_seen"):
+                    meta["stop_reason"] = "shadow_missing"
+                elif not data.get("count"):
+                    meta["stop_reason"] = "shadow_empty"
+                else:
+                    meta["stop_reason"] = "load_more_missing"
                 break
             meta["load_more_clicks"] = i + 1
             prev_count = data.get("count", 0)

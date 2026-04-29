@@ -195,6 +195,43 @@ def test_excel_competitor_insights_can_render_from_contract_only(tmp_path, monke
     assert "自有产品需压测包装边角保护" in values
 
 
+def test_excel_competitor_insights_use_contract_theme_and_products(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    contract = _contract()
+    contract["competitor_insights"] = {
+        "learn_from_competitors": [],
+        "avoid_competitor_failures": [{
+            "theme": "packaging",
+            "summary_cn": "Long negative comment should not become the theme",
+            "products": ["Cabela Mixer"],
+            "evidence_count": 2,
+            "evidence_review_ids": [301, 302],
+            "competitor_signal": "Packaging breaks on delivery",
+            "validation_hypothesis": "Run a drop test on the shipping package",
+        }],
+        "validation_hypotheses": [],
+    }
+    analytics = {"report_user_contract": contract, "kpis": {}, "self": {}, "competitor": {}}
+
+    path = generate_excel(
+        [{"name": "Cabela Mixer", "sku": "CM", "ownership": "competitor"}],
+        [],
+        analytics=analytics,
+        output_path=str(tmp_path / "contract-competitor-products.xlsx"),
+    )
+
+    wb = openpyxl.load_workbook(path)
+    ws = wb[wb.sheetnames[-1]]
+    rows = list(ws.iter_rows(values_only=True))
+    row = next(row for row in rows if row[1] == "packaging")
+
+    assert row[1] != "Long negative comment should not become the theme"
+    assert row[2] == 2
+    assert row[4] == "Cabela Mixer"
+    assert row[6] == "Run a drop test on the shipping package"
+    assert row[7] == "301、302"
+
+
 def test_html_bootstrap_changes_tab_reads_contract_digest():
     snapshot = {
         "logical_date": "2026-04-28",
@@ -249,3 +286,56 @@ def test_post_normalize_mutations_refresh_contract_with_real_snapshot():
     assert context["snapshot_source"] == "provided"
     assert context["product_count"] == 1
     assert context["review_count"] == 1
+
+
+def test_full_report_html_receives_pre_normalized_contract(tmp_path, monkeypatch):
+    from qbu_crawler.server import report_snapshot
+    from qbu_crawler.server import report as report_module
+    from qbu_crawler.server import report_analytics
+    from qbu_crawler.server import report_html
+    from qbu_crawler.server import report_llm
+
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "REPORT_CLUSTER_ANALYSIS", False)
+    monkeypatch.setattr(report_analytics, "build_report_analytics", lambda *a, **k: {
+        "report_semantics": "bootstrap",
+        "kpis": {"health_index": 96.2},
+    })
+    monkeypatch.setattr(report_llm, "generate_report_insights_with_validation", lambda *a, **k: {})
+    monkeypatch.setattr(report_analytics, "build_fallback_priorities", lambda *a, **k: [])
+    monkeypatch.setattr(report_snapshot, "load_previous_report_context", lambda *_a, **_k: (None, None))
+    monkeypatch.setattr(report_snapshot, "_record_artifact_safe", lambda *a, **k: None)
+    monkeypatch.setattr(report_module, "generate_excel", lambda *a, **k: str(tmp_path / "report.xlsx"))
+
+    captured = {}
+
+    def fake_render_v3_html(snapshot, analytics, output_path=None):
+        captured["analytics"] = analytics
+        path = tmp_path / "report.html"
+        path.write_text("<html></html>", encoding="utf-8")
+        return str(path)
+
+    monkeypatch.setattr(report_html, "render_v3_html", fake_render_v3_html)
+
+    snapshot = {
+        "run_id": 1,
+        "logical_date": "2026-04-29",
+        "snapshot_hash": "hash",
+        "products_count": 1,
+        "reviews_count": 1,
+        "translated_count": 1,
+        "untranslated_count": 0,
+        "products": [{"name": "A"}],
+        "reviews": [{"id": 1}],
+    }
+
+    report_snapshot.generate_full_report_from_snapshot(
+        snapshot,
+        send_email=False,
+        output_path=str(tmp_path / "report.xlsx"),
+    )
+
+    contract = captured["analytics"]["report_user_contract"]
+    assert contract["contract_context"]["snapshot_source"] == "provided"
+    assert contract["contract_context"]["product_count"] == 1
+    assert contract["contract_context"]["review_count"] == 1
