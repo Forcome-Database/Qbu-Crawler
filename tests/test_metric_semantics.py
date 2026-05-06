@@ -197,7 +197,7 @@ def test_time_axis_helpers_expose_canonical_fields_and_latest_values(metric_db):
     assert time_axes["snapshot_time"]["latest"] == "2026-03-01 08:30:00"
     assert time_axes["review_ingest_time"]["field"] == "reviews.scraped_at"
     assert time_axes["review_ingest_time"]["latest"] == "2026-03-03 13:00:00"
-    assert time_axes["review_publish_time"]["field"] == "reviews.date_published"
+    assert time_axes["review_publish_time"]["field"] == "reviews.date_published_parsed"
     assert time_axes["review_publish_time"]["latest"] == "2026-03-02"
 
 

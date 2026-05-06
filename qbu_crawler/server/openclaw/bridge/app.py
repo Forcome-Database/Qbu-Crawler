@@ -51,10 +51,11 @@ DEFAULT_TEMPLATES = {
     "workflow_full_report": (
         "## ✅ 每日完整报告已生成\n\n"
         "- **日期**：{logical_date}\n"
-        "- **状态**：完整报告已生成\n"
         "- **workflow**：{run_id}\n"
+        "- **本地报告产物**：{report_generation_status}\n"
         "- **附件**：{excel_path}\n"
-        "- **邮件发送**：{email_status}\n\n"
+        "- **业务邮件**：{email_status}\n"
+        "- **workflow 通知**：{workflow_notification_status}\n\n"
         "如需，我可以继续补充差评、价格波动和竞品对比解读。"
     ),
     "workflow_report_skipped": (
@@ -170,6 +171,14 @@ def _render_template(template: str, template_vars: dict[str, Any]) -> str:
     }
     if safe_vars.get("email_status"):
         safe_vars["email_status"] = _display_email_status(safe_vars["email_status"])
+    if safe_vars.get("report_generation_status"):
+        safe_vars["report_generation_status"] = _display_report_generation_status(
+            safe_vars["report_generation_status"]
+        )
+    if safe_vars.get("workflow_notification_status"):
+        safe_vars["workflow_notification_status"] = _display_workflow_notification_status(
+            safe_vars["workflow_notification_status"]
+        )
     defaults = {
         "task_heading": "✅ 任务已完成",
         "task_type": "",
@@ -195,6 +204,8 @@ def _render_template(template: str, template_vars: dict[str, Any]) -> str:
         "untranslated_count": "",
         "excel_path": "",
         "email_status": "",
+        "report_generation_status": "",
+        "workflow_notification_status": "",
         "reason": "",
     }
     defaults.update(safe_vars)
@@ -270,6 +281,38 @@ def _display_email_status(status: str) -> str:
         return "发送失败"
     if value == "skipped":
         return "已跳过（无新增评论）"
+    return status
+
+
+def _display_report_generation_status(status: str) -> str:
+    value = status.strip().lower()
+    if value == "generated":
+        return "已生成"
+    if value == "failed":
+        return "生成失败"
+    if value == "pending":
+        return "生成中"
+    if value == "skipped":
+        return "已跳过"
+    if value == "unknown":
+        return "未知"
+    return status
+
+
+def _display_workflow_notification_status(status: str) -> str:
+    value = status.strip().lower()
+    if value == "sent":
+        return "已送达"
+    if value == "pending":
+        return "待投递"
+    if value == "deadletter":
+        return "投递失败（deadletter）"
+    if value == "partial":
+        return "部分送达"
+    if value == "skipped":
+        return "已跳过"
+    if value == "unknown":
+        return "未知"
     return status
 
 

@@ -91,7 +91,7 @@ METRIC_TOOLTIPS = {
     "自有评论": "当前基线样本中的自有产品评论行数；近30天样本用于判断新近反馈。",
     "累计自有评论": "当前基线样本中的自有产品评论行数；近30天样本用于判断新近反馈。",
     "高风险产品": "风险分 ≥{high_risk} 的自有产品数量",
-    "总体竞品差距指数": "跨维度平均的竞品差距指数：各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
+    "竞品差距分": "跨维度平均的竞品差距指数：各维度(竞品好评率+自有差评率)/2 的均值×100，0=无差距，100=全面落后",
     "样本覆盖率": "<strong>分析代表性</strong>：实际入库评论数 ÷ 站点总反馈数（含 ratings-only）。低于 100% 不代表 scraper 异常，而是反映「还有部分用户只打了星没写文字、其态度未被 NLP 分析覆盖」；判 scraper 健康看「采集完整率」。",
     "采集完整率": "<strong>爬虫健康度</strong>：实际入库评论数 ÷ 物理上能抓到的文字评论数（站点总反馈 − 仅评分数）。正常应 ≈ 100%；明显小于 100% 说明 scraper 漏抓、需排查。",
     # Product health matrix (P2)
@@ -321,7 +321,7 @@ def _compute_kpi_deltas(current_kpis, prev_analytics):
                 "health_index", "recently_published_count"):
         curr = current_kpis.get(key, 0) or 0
         prev = prev_kpis.get(key, 0) or 0
-        diff = curr - prev
+        diff = round(curr - prev, 1) if key == "health_index" else curr - prev
         deltas[f"{key}_delta"] = diff
         deltas[f"{key}_delta_display"] = (
             f"+{diff}" if diff > 0 else str(diff)
@@ -1059,6 +1059,8 @@ def normalize_deep_report_analytics(analytics):
     own_pos = kpis.get("own_positive_review_rows", 0)
     own_total = kpis.get("own_review_rows", 0) or 1
     positive_rate = own_pos / own_total
+    # F011 v1.3 — KPI 顶部行专注健康/信号指标；样本量级重复的 "累计自有评论" 由
+    # 下方 review_scope_cards 板块统一展示，避免顶部 chip 与下排卡片视觉重复。
     kpi_cards = [
         {
             "label": "健康指数",
@@ -1073,13 +1075,6 @@ def normalize_deep_report_analytics(analytics):
             "delta_display": kpis.get("negative_review_rows_delta_display", ""),
             "delta_class": "delta-up" if (kpis.get("negative_review_rows_delta", 0) or 0) > 0 else "delta-flat",
             "tooltip": _resolve_tooltip("差评率"),
-        },
-        {
-            "label": "累计自有评论",
-            "value": kpis.get("own_review_rows", 0),
-            "delta_display": kpis.get("ingested_review_rows_delta_display", ""),
-            "delta_class": "delta-flat",
-            "tooltip": _resolve_tooltip("累计自有评论"),
         },
         {
             "label": "好评率",
@@ -1097,11 +1092,11 @@ def normalize_deep_report_analytics(analytics):
             "tooltip": _resolve_tooltip("高风险产品"),
         },
         {
-            "label": "总体竞品差距指数",
+            "label": "竞品差距分",
             "value": kpis.get("competitive_gap_index") if kpis.get("competitive_gap_index") is not None else "—",
             "delta_display": kpis.get("competitive_gap_index_delta_display", ""),
             "delta_class": "delta-flat",
-            "tooltip": _resolve_tooltip("总体竞品差距指数"),
+            "tooltip": _resolve_tooltip("竞品差距分"),
         },
     ]
 
@@ -1163,7 +1158,7 @@ def normalize_deep_report_analytics(analytics):
             card["value_class"] = "severity-high" if rate > 20 else ("severity-medium" if rate > 10 else "")
         elif label == "高风险产品" and isinstance(val, (int, float)):
             card["value_class"] = "severity-high" if val > 0 else ""
-        elif label == "总体竞品差距指数" and isinstance(val, (int, float)):
+        elif label == "竞品差距分" and isinstance(val, (int, float)):
             card["value_class"] = "severity-high" if val > 60 else ("severity-medium" if val > 30 else "")
         else:
             card.setdefault("value_class", "")

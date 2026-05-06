@@ -308,7 +308,10 @@ def test_competitor_rating_distribution_in_competitor_section():
     if next_section < 0:
         next_section = len(html)
     competitive_chunk = html[comp_open:next_section]
-    assert "竞品评分两极分化" in competitive_chunk
+    # F011 §4.2.7 v1.3 — block was renamed from "竞品评分两极分化" to
+    # the dual-panel "评分分布对比" (with "竞品评分分布" subtitle).
+    assert "评分分布对比" in competitive_chunk
+    assert "竞品评分分布" in competitive_chunk
 
     # And NOT inside tab-panorama
     pan_open = html.find('id="tab-panorama"')
@@ -317,7 +320,8 @@ def test_competitor_rating_distribution_in_competitor_section():
         if pan_next < 0:
             pan_next = len(html)
         panorama_chunk = html[pan_open:pan_next]
-        assert "竞品评分两极分化" not in panorama_chunk
+        assert "评分分布对比" not in panorama_chunk
+        assert "竞品评分分布" not in panorama_chunk
 
 
 def test_weakness_opportunities_block_renders_when_present():

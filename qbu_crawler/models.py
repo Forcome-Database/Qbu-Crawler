@@ -15,7 +15,7 @@ _TIME_AXIS_FIELDS = {
     "product_state_time": "products.scraped_at",
     "snapshot_time": "product_snapshots.scraped_at",
     "review_ingest_time": "reviews.scraped_at",
-    "review_publish_time": "reviews.date_published",
+    "review_publish_time": "reviews.date_published_parsed",
 }
 
 
@@ -1389,7 +1389,11 @@ def get_time_axis_semantics() -> dict:
             "product_state_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM products", default=None),
             "snapshot_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM product_snapshots", default=None),
             "review_ingest_time": _fetch_scalar(conn, "SELECT MAX(scraped_at) FROM reviews", default=None),
-            "review_publish_time": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+            "review_publish_time": _fetch_scalar(
+                conn,
+                "SELECT MAX(COALESCE(date_published_parsed, date_published)) FROM reviews",
+                default=None,
+            ),
         }
         return {
             axis: {
@@ -1556,7 +1560,11 @@ def get_stats() -> dict:
                 },
                 "review_publish_time": {
                     "field": _TIME_AXIS_FIELDS["review_publish_time"],
-                    "latest": _fetch_scalar(conn, "SELECT MAX(date_published) FROM reviews", default=None),
+                    "latest": _fetch_scalar(
+                        conn,
+                        "SELECT MAX(COALESCE(date_published_parsed, date_published)) FROM reviews",
+                        default=None,
+                    ),
                 },
             },
             "total_products": total_products,
@@ -2128,6 +2136,42 @@ def get_product_snapshots(sku, days=30):
             ORDER BY ps.scraped_at ASC
             """,
             (sku, f"-{days}"),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_product_snapshots_until(product_url=None, until=None, days=30, sku=None, site=None):
+    if hasattr(until, "tzinfo") and until.tzinfo is not None:
+        until_str = until.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        until_str = str(until).replace("T", " ")[:19]
+
+    where = ["ps.scraped_at < ?", "ps.scraped_at >= datetime(?, ? || ' days')"]
+    params = [until_str, until_str, f"-{days}"]
+    if product_url:
+        where.insert(0, "p.url = ?")
+        params.insert(0, product_url)
+    else:
+        where.insert(0, "p.sku = ?")
+        params.insert(0, sku)
+        if site:
+            where.insert(1, "p.site = ?")
+            params.insert(1, site)
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT ps.price, ps.stock_status, ps.review_count, ps.rating,
+                   ps.ratings_only_count, ps.scraped_at
+            FROM product_snapshots ps
+            JOIN products p ON ps.product_id = p.id
+            WHERE {' AND '.join(where)}
+            ORDER BY ps.scraped_at ASC
+            """,
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
     finally:

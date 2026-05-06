@@ -932,6 +932,10 @@ function summarizeWorkflowStatus(data) {
     "",
     "- **状态**：" + (run.status || "未知"),
     "- **报告阶段**：" + (run.report_phase || "未知"),
+    "- **报告产物**：" + (run.report_generation_status || "未知"),
+    "- **业务邮件**：" + (run.email_delivery_status || "未知"),
+    "- **workflow 通知**：" + (run.workflow_notification_status || "未知"),
+    "- **最近投递错误**：" + (run.delivery_last_error || "无"),
     "- **触发键**：" + (run.trigger_key || run.id || "未知"),
     "- **关联任务数**：" + tasks.length,
   ].join("\n");

@@ -626,6 +626,17 @@ def build_chartjs_configs(analytics):
         configs["heatmap"] = _chartjs_heatmap_table(heatmap)
 
     trend_digest = analytics.get("trend_digest") or {}
+    workspace = trend_digest.get("workspace") or {}
+    for view, dimensions in (workspace.get("data") or {}).items():
+        for dimension, payload in (dimensions or {}).items():
+            primary_chart = (payload or {}).get("primary_chart") or {}
+            if (
+                primary_chart.get("status") == "ready"
+                and primary_chart.get("labels")
+                and primary_chart.get("series")
+            ):
+                configs[f"trend_workspace_{view}_{dimension}"] = _chartjs_trend_line(primary_chart)
+
     for view, dimensions in (trend_digest.get("data") or {}).items():
         for dimension, payload in (dimensions or {}).items():
             payload = payload or {}
@@ -740,6 +751,9 @@ def _chartjs_stacked_bar(dist_data, chart_id):
             },
             "plugins": {"legend": {"position": "bottom"}},
             "responsive": True,
+            # Let canvas fill the parent container's full width × fixed height
+            # so the rating-distribution chart truly fills the card frame.
+            "maintainAspectRatio": False,
         },
     }
 

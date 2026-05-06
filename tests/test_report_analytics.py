@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -921,10 +922,18 @@ def test_build_trend_data_returns_time_series(analytics_db):
             ("https://example.com/p1", "basspro", "Product 1", "SKU1", 100, "in_stock", 4.0, 10, "own", "2026-04-01 10:00:00"),
         )
         pid = conn.execute("SELECT id FROM products WHERE sku='SKU1'").fetchone()["id"]
+        base_time = datetime.now() - timedelta(days=3)
         for day in range(1, 4):
             conn.execute(
                 "INSERT INTO product_snapshots (product_id, price, stock_status, review_count, rating, scraped_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (pid, 100.0 + day, "in_stock", 10 + day, 4.0 + day * 0.1, f"2026-04-0{day} 10:00:00"),
+                (
+                    pid,
+                    100.0 + day,
+                    "in_stock",
+                    10 + day,
+                    4.0 + day * 0.1,
+                    (base_time + timedelta(days=day)).strftime("%Y-%m-%d 10:00:00"),
+                ),
             )
         conn.commit()
     finally:
@@ -1183,6 +1192,30 @@ def test_build_dual_report_analytics_has_cumulative_kpis(analytics_db):
     # cumulative has 5 (window) + 3 (older) = 8 reviews total
     cumulative_review_count = len(snapshot["cumulative"]["reviews"])
     assert kpis["ingested_review_rows"] == cumulative_review_count
+
+
+def test_build_dual_report_analytics_computes_health_delta_after_health_index(analytics_db, tmp_path):
+    """累计口径的健康指数变化值必须基于已计算出的 health_index。"""
+    from qbu_crawler.server.report_analytics import build_dual_report_analytics
+
+    prev_path = tmp_path / "prev-analytics.json"
+    prev_path.write_text(
+        json.dumps({"kpis": {}, "cumulative_kpis": {"health_index": 71.4}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    for day in ("2026-03-26", "2026-03-27"):
+        path = tmp_path / f"analytics-{day}.json"
+        path.write_text(json.dumps({"kpis": {}}, ensure_ascii=False), encoding="utf-8")
+        _create_daily_run(day, status="completed", analytics_path=str(path))
+    _create_daily_run("2026-03-28", status="completed", analytics_path=str(prev_path))
+    run = _create_daily_run("2026-03-29", status="reporting")
+    snapshot = _build_dual_snapshot(run["id"], "2026-03-29")
+
+    result = build_dual_report_analytics(snapshot)
+
+    assert result["cumulative_kpis"]["health_index"] == 50.0
+    assert result["kpis"]["health_index_delta"] == -21.4
+    assert result["kpis"]["health_index_delta_display"] == "-21.4"
 
 
 def test_build_dual_report_analytics_has_window(analytics_db):

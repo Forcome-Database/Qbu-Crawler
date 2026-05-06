@@ -242,8 +242,11 @@ class TestAnalyticsPipeline:
 
         assert normalized["kpis"]["ingested_review_rows"] == 12
         assert normalized["cumulative_kpis"]["ingested_review_rows"] == 999
-        assert any(card["value"] == 12 for card in normalized["kpi_cards"])
+        # F011 v1.3 — 累计自有评论 卡片移到了 review_scope_cards
+        # 顶部 KPI 行不再有直接 == 12 的字段；用负向断言锁住"不读 cumulative"
         assert all(card["value"] != 999 for card in normalized["kpi_cards"])
+        assert any(card["value"] == 12 for card in normalized["review_scope_cards"])
+        assert all(card["value"] != 999 for card in normalized["review_scope_cards"])
 
 
 # ── Chart Generation ──────────────────────────────────────────────────────────

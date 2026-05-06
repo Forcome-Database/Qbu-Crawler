@@ -423,7 +423,8 @@ def test_heatmap_drilldown_has_product_filter_contract():
 
     html = render_attachment_html(snapshot, analytics)
 
-    assert 'select name="product"' in html
+    # name="product" is what the JS filter looks up; it now also carries an id.
+    assert 'name="product"' in html
     assert "product: prodEl ? prodEl.value : ''" in html
     assert "if (f.product && d.product !== f.product) return false;" in html
     assert "productSelect.value = product" in html

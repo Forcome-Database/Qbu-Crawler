@@ -193,7 +193,8 @@ def test_trend_section_shows_primary_chart_in_mature():
         analytics=_mature_analytics(),
     )
     assert "口碑健康度趋势" in html
-    assert "对比上 30 天平均" in html or "vs 上期平均" in html
+    assert "对比前30天平均" in html or "较前30天" in html
+    assert "上期" not in html
     # 折叠下钻
     assert "Top 3 问题随时间" in html
     assert "产品评分变化" in html
@@ -213,6 +214,7 @@ def test_trend_section_uses_primary_chart_data_source():
     assert "trend_digest.data[" not in template_source, (
         "F011 §4.2.5 — 模板必须不再访问 trend_digest.data[view][dim] 路径"
     )
+    assert "trend_digest.workspace" in template_source or ".workspace" in template_source
 
 
 def test_trend_section_no_legacy_12_panels():
@@ -238,6 +240,22 @@ def test_trend_section_drill_downs_use_details_summary():
     section = _extract_trend_section(html)
     assert '<details class="drill-down"' in section
     assert "<summary>" in section
+
+
+def test_trend_drill_down_items_render_as_visible_content():
+    """下钻数据必须渲染成可见内容，不能只放在 data-payload 里。"""
+    html = render_attachment_html(
+        snapshot=_mature_snapshot(),
+        analytics=_mature_analytics(),
+    )
+    section = _extract_trend_section(html)
+
+    assert '<table class="drill-table' in section
+    assert '<td class="drill-label">switch_failure</td>' in section
+    assert '<td class="drill-product">P1</td>' in section
+    assert '<td class="drill-sku">S1</td>' in section
+    assert '<td class="drill-rating">4.2</td>' in section
+    assert '<td class="drill-label">easy_to_use</td>' in section
 
 
 def _make_review(date_str, *, rating=4, ownership="own"):

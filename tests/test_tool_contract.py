@@ -10,6 +10,7 @@ from qbu_crawler.server.mcp.contract import (
     TOOL_CONTRACTS,
     export_tool_contract_artifact,
 )
+from qbu_crawler.server.mcp.resources import SCHEMAS
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_DIR = ROOT / "qbu_crawler" / "server" / "openclaw" / "workspace"
@@ -57,7 +58,28 @@ def test_preview_scope_contract_declares_scope_preview_semantics():
 def test_time_axis_catalog_contains_canonical_axes():
     assert TIME_AXIS_CATALOG["product_state_time"]["field"] == "products.scraped_at"
     assert TIME_AXIS_CATALOG["review_ingest_time"]["field"] == "reviews.scraped_at"
-    assert TIME_AXIS_CATALOG["review_publish_time"]["field"] == "reviews.date_published"
+    assert TIME_AXIS_CATALOG["review_publish_time"]["field"] == "reviews.date_published_parsed"
+
+
+def test_mcp_resources_cover_current_workflow_and_analysis_schema():
+    expected = {
+        "overview",
+        "products",
+        "product_snapshots",
+        "reviews",
+        "tasks",
+        "workflow_runs",
+        "workflow_run_tasks",
+        "notification_outbox",
+        "report_artifacts",
+        "review_analysis",
+        "review_issue_labels",
+    }
+    assert expected.issubset(SCHEMAS.keys())
+    assert "ratings_only_count" in SCHEMAS["products"]
+    assert "date_published_parsed" in SCHEMAS["reviews"]
+    assert "report_generation_status" in SCHEMAS["workflow_runs"]
+    assert "workflow_notification_status" in SCHEMAS["workflow_runs"]
 
 
 def test_export_tool_contract_artifact_matches_checked_in_json(tmp_path: Path):
@@ -110,6 +132,11 @@ def test_runtime_workspace_docs_stay_repo_local_free_and_role_separated():
     assert "## Routing-Aware Output Guidance" in tools
     assert "## 进入条件（Decision Vector）" in skill
     assert "按当前归属回看" in skill
+    assert "report_generation_status" in tools
+    assert "email_delivery_status" in tools
+    assert "workflow_notification_status" in tools
+    assert "date_published_parsed" in skill
+    assert "ratings_only_count" in skill
 
 
 def test_runtime_workspace_docs_lock_single_product_email_scope():

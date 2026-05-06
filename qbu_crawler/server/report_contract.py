@@ -233,48 +233,99 @@ def _build_executive_slots(snapshot, analytics, kpis, issue_diagnostics):
         review_count = len((snapshot or {}).get("reviews") or [])
 
     top_issue = (issue_diagnostics or [{}])[0] if issue_diagnostics else {}
-    top_issue_text = top_issue.get("label_display") or top_issue.get("label_code") or "暂无集中问题"
+    top_issue_text = top_issue.get("label_display") or top_issue.get("label_code") or ""
     top_issue_count = top_issue.get("evidence_count") or top_issue.get("review_count") or 0
+
+    # ── 判断式文案：基于阈值给出评估，而不是复述 KPI 数字 ────────────
+    coverage = kpis.get("coverage_rate") or 0
+    translation_rate = kpis.get("translation_completion_rate")
+    own_neg_rate = kpis.get("own_negative_review_rate") or 0
+    own_avg_rating = kpis.get("own_avg_rating")
+    high_risk = kpis.get("high_risk_count") or 0
+    untranslated = kpis.get("untranslated_count") or 0
+    review_count_int = int(review_count or 0)
+
+    if review_count_int == 0:
+        sample_text = "本期暂无新评论入库，无法形成结论。"
+    elif review_count_int < 30:
+        sample_text = (
+            f"样本仅 {review_count_int} 条偏小，结论作参考；需 ≥30 条才能稳定判断趋势。"
+        )
+    elif coverage and coverage < 0.5:
+        sample_text = (
+            f"样本 {review_count_int} 条但站点覆盖 {_fmt_percent(coverage)} 偏低，"
+            "需评估代表性。"
+        )
+    else:
+        sample_text = (
+            f"样本 {review_count_int} 条 / 覆盖 {_fmt_percent(coverage)}，"
+            "已具参考性。"
+        )
+
+    if translation_rate is None:
+        translation_text = "暂无翻译进度数据。"
+    elif translation_rate >= 0.95:
+        translation_text = "翻译完成 ≥ 95%，标签准确度可信。"
+    else:
+        translation_text = (
+            f"翻译仅 {_fmt_percent(translation_rate)}，{int(untranslated)} 条未译"
+            "可能影响标签准确性。"
+        )
+
+    if review_count_int == 0:
+        own_text = "本期无自有产品新增反馈。"
+    elif own_neg_rate > 0.20:
+        own_text = (
+            f"自有差评率 {_fmt_percent(own_neg_rate)} 偏高（>20% 阈值）"
+            f"{('，主力机型需关注。' if high_risk > 0 else '，需关注。')}"
+        )
+    elif own_neg_rate > 0.10:
+        own_text = (
+            f"自有差评率 {_fmt_percent(own_neg_rate)} 处于警戒区（10–20%），需持续观察。"
+        )
+    else:
+        rating_text = f"，平均评分 {_fmt_number(own_avg_rating)}" if own_avg_rating else ""
+        own_text = (
+            f"自有差评率 {_fmt_percent(own_neg_rate)} 健康（<10%）{rating_text}。"
+        )
+
+    if top_issue_text:
+        priority_parts = [
+            f"优先关注「{top_issue_text}」（证据 {_fmt_number(top_issue_count, 0)} 条）"
+        ]
+        if high_risk > 0:
+            priority_parts.append(f"，同时 {int(high_risk)} 个高风险产品待排查。")
+        else:
+            priority_parts.append("。")
+        priority_text = "".join(priority_parts)
+    elif high_risk > 0:
+        priority_text = f"未发现集中问题，但 {int(high_risk)} 个高风险产品需排查。"
+    else:
+        priority_text = "未检测到聚焦问题或高风险产品，整体健康。"
 
     slots = [
         {
             "slot_id": "sample_scope",
-            "label": "样本范围",
-            "default_text": (
-                f"本次覆盖 {_fmt_number(product_count, 0)} 个产品，"
-                f"采集评论 {_fmt_number(review_count, 0)} 条，"
-                f"样本覆盖率 {_fmt_percent(kpis.get('coverage_rate'))}。"
-            ),
+            "label": "样本可信度",
+            "default_text": sample_text,
             "source_fields": ["product_count", "ingested_review_rows", "coverage_rate"],
         },
         {
             "slot_id": "translation_quality",
             "label": "翻译质量",
-            "default_text": (
-                f"评论翻译完成率 {_fmt_percent(kpis.get('translation_completion_rate'))}，"
-                f"未翻译 {_fmt_number(kpis.get('untranslated_count') or 0, 0)} 条。"
-            ),
+            "default_text": translation_text,
             "source_fields": ["translation_completion_rate", "untranslated_count"],
         },
         {
             "slot_id": "own_product_health",
-            "label": "自有产品表现",
-            "default_text": (
-                f"自有产品 {_fmt_number(kpis.get('own_product_count') or 0, 0)} 个，"
-                f"自有评论 {_fmt_number(kpis.get('own_review_rows') or 0, 0)} 条，"
-                f"平均评分 {_fmt_number(kpis.get('own_avg_rating'))}，"
-                f"负评率 {_fmt_percent(kpis.get('own_negative_review_rate'))}。"
-            ),
-            "source_fields": ["own_product_count", "own_review_rows", "own_avg_rating", "own_negative_review_rate"],
+            "label": "自有表现",
+            "default_text": own_text,
+            "source_fields": ["own_negative_review_rate", "own_avg_rating", "high_risk_count"],
         },
         {
             "slot_id": "priority_focus",
-            "label": "优先问题",
-            "default_text": (
-                f"当前优先关注 {top_issue_text}，"
-                f"证据 {_fmt_number(top_issue_count, 0)} 条；"
-                f"高风险产品 {_fmt_number(kpis.get('high_risk_count') or 0, 0)} 个。"
-            ),
+            "label": "优先关注",
+            "default_text": priority_text,
             "source_fields": ["issue_diagnostics", "high_risk_count"],
         },
     ]

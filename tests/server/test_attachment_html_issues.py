@@ -174,13 +174,13 @@ def test_issue_card_shows_frequent_period():
 
 
 # ──────────────────────────────────────────────────────────
-# H14 — improvement_priorities renders "现在该做什么" with short_title
+# H14 — improvement_priorities renders "建议行动" with short_title
 # ──────────────────────────────────────────────────────────
 def test_improvement_uses_short_title_not_full_action():
-    """F011 H14 — '现在该做什么' 卡片标题用 short_title。"""
+    """F011 H14 — '建议行动' 卡片标题用 short_title。"""
     analytics = _base_analytics(improvement_priorities=_v3_priorities_fixture())
     html = render_attachment_html(_base_snapshot(), analytics)
-    assert "现在该做什么" in html
+    assert "建议行动" in html
     # short_title appears as visible card title
     assert "结构设计：肉饼厚度不可调" in html
 
@@ -209,7 +209,7 @@ def test_improvement_section_absent_when_priorities_empty():
     """F011 H14 — no priorities → section is suppressed (gracefully)."""
     analytics = _base_analytics(improvement_priorities=[])
     html = render_attachment_html(_base_snapshot(), analytics)
-    assert "现在该做什么" not in html
+    assert "建议行动" not in html
 
 
 def test_issue_card_renders_image_evidence_and_deep_analysis():

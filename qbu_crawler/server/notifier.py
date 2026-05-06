@@ -131,6 +131,9 @@ class OpenClawBridgeSender:
         for path_key in ("excel_path", "analytics_path", "pdf_path", "html_path"):
             if result.get(path_key) is None:
                 result[path_key] = ""
+        if kind == "workflow_full_report":
+            result.setdefault("report_generation_status", payload.get("report_generation_status", "generated"))
+            result.setdefault("workflow_notification_status", payload.get("workflow_notification_status", "pending"))
         return result
 
 

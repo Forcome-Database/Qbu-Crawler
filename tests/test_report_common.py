@@ -356,6 +356,14 @@ def test_compute_kpi_deltas_normal():
     assert deltas["product_count_delta_display"] == "—"
 
 
+def test_compute_kpi_deltas_rounds_health_index():
+    current = {"health_index": 50.0}
+    prev = {"kpis": {"health_index": 71.4}}
+    deltas = _compute_kpi_deltas(current, prev)
+    assert deltas["health_index_delta"] == -21.4
+    assert deltas["health_index_delta_display"] == "-21.4"
+
+
 def test_compute_kpi_deltas_no_prev():
     deltas = _compute_kpi_deltas({"negative_review_rows": 78}, None)
     assert deltas == {}
@@ -573,11 +581,14 @@ def test_normalize_injects_kpi_cards():
     }
     result = normalize_deep_report_analytics(analytics)
     assert "kpi_cards" in result
-    assert len(result["kpi_cards"]) == 7
+    # F011 v1.3 — 顶部 KPI 行只保留健康/信号指标；累计自有评论由 review_scope_cards 展示
+    assert len(result["kpi_cards"]) == 6
     labels = [c["label"] for c in result["kpi_cards"]]
     assert "健康指数" in labels
-    assert "总体竞品差距指数" in labels
+    assert "竞品差距分" in labels
     assert "样本覆盖率" in labels
+    # 移除：累计自有评论不应出现在顶部 KPI 行（避免与下方 review_scope_cards 重复）
+    assert "累计自有评论" not in labels
 
 
 def test_normalize_labels_cumulative_and_window_review_metrics():
@@ -603,7 +614,8 @@ def test_normalize_labels_cumulative_and_window_review_metrics():
     result = normalize_deep_report_analytics(analytics)
 
     labels = [card["label"] for card in result["kpi_cards"]]
-    assert "累计自有评论" in labels
+    # F011 v1.3 — 顶部 KPI 行不再展示 "累计自有评论"（移到 review_scope_cards 避免重复）
+    assert "累计自有评论" not in labels
     assert "自有评论" not in labels
 
     scope = {card["label"]: card["value"] for card in result["review_scope_cards"]}
@@ -611,10 +623,6 @@ def test_normalize_labels_cumulative_and_window_review_metrics():
     assert scope["累计竞品评论"] == 143
     assert scope["基线样本评论"] == 32
     assert scope["近30天评论"] == 1
-
-    own_card = next(card for card in result["kpi_cards"] if card["label"] == "累计自有评论")
-    assert "基线样本" in own_card["tooltip"]
-    assert "本期采集窗口" not in own_card["tooltip"]
 
 
 def test_normalize_injects_issue_cards():
@@ -1209,7 +1217,7 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result = normalize_deep_report_analytics(analytics)
-    gap_card = [c for c in result["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
+    gap_card = [c for c in result["kpi_cards"] if c["label"] == "竞品差距分"][0]
     assert gap_card["value_class"] == "severity-high"
 
     # severity-medium: 30 < index <= 60
@@ -1237,7 +1245,7 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result2 = normalize_deep_report_analytics(analytics2)
-    gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
+    gap_card2 = [c for c in result2["kpi_cards"] if c["label"] == "竞品差距分"][0]
     assert gap_card2["value_class"] == "severity-medium"
 
     # no class: index <= 30
@@ -1265,7 +1273,7 @@ def test_kpi_cards_value_class_competitive_gap():
         },
     }
     result3 = normalize_deep_report_analytics(analytics3)
-    gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "总体竞品差距指数"][0]
+    gap_card3 = [c for c in result3["kpi_cards"] if c["label"] == "竞品差距分"][0]
     assert gap_card3["value_class"] == ""
 
 
@@ -1293,7 +1301,7 @@ def test_competitive_gap_kpi_uses_overall_label_and_tooltip():
 
     result = normalize_deep_report_analytics(analytics)
     labels = [card["label"] for card in result["kpi_cards"]]
-    gap_card = next(card for card in result["kpi_cards"] if card["label"] == "总体竞品差距指数")
+    gap_card = next(card for card in result["kpi_cards"] if card["label"] == "竞品差距分")
 
     assert "竞品差距指数" not in labels
     assert "跨维度平均" in gap_card["tooltip"]

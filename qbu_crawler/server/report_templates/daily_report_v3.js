@@ -102,9 +102,9 @@
     var allPoints = (seriesOwn || []).concat(seriesCompetitor || []);
     if (!allPoints.length) return;
 
-    var w = container.clientWidth || 600;
-    var h = 280;
-    var padL = 40, padR = 16, padT = 16, padB = 32;
+    var w = container.clientWidth || 760;
+    var h = 260;
+    var padL = 46, padR = 24, padT = 30, padB = 42;
     var innerW = w - padL - padR, innerH = h - padT - padB;
 
     var dates = allPoints.map(function (p) { return p.date; });
@@ -112,9 +112,17 @@
     dates.forEach(function (d) { if (uniqDates.indexOf(d) < 0) uniqDates.push(d); });
     uniqDates.sort();
     var values = allPoints.map(function (p) { return p.value; }).filter(function (v) { return typeof v === 'number'; });
-    var vMin = Math.min.apply(null, values.concat([0]));
-    var vMax = Math.max.apply(null, values.concat([100]));
-    if (vMax === vMin) vMax = vMin + 1;
+    if (!values.length) return;
+    var rawMin = Math.min.apply(null, values);
+    var rawMax = Math.max.apply(null, values);
+    var spread = Math.max(rawMax - rawMin, 8);
+    var vMin = Math.max(0, rawMin - spread * 0.18);
+    var vMax = Math.min(100, rawMax + spread * 0.18);
+    if (vMax - vMin < 10) {
+      var mid = (vMax + vMin) / 2;
+      vMin = Math.max(0, mid - 5);
+      vMax = Math.min(100, mid + 5);
+    }
 
     function xFor(date) {
       var idx = uniqDates.indexOf(date);
@@ -126,23 +134,49 @@
     }
     function pathFor(series, color) {
       if (!series || !series.length) return '';
-      var d = series.map(function (p, i) {
+      var clean = series.filter(function (p) { return typeof p.value === 'number'; });
+      if (!clean.length) return '';
+      var d = clean.map(function (p, i) {
         return (i === 0 ? 'M' : 'L') + xFor(p.date).toFixed(1) + ',' + yFor(p.value).toFixed(1);
       }).join(' ');
-      return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2"/>';
+      return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>';
     }
-    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '">';
-    // Axes
-    svg += '<line x1="' + padL + '" y1="' + padT + '" x2="' + padL + '" y2="' + (padT + innerH) + '" stroke="#cbd5e1"/>';
-    svg += '<line x1="' + padL + '" y1="' + (padT + innerH) + '" x2="' + (padL + innerW) + '" y2="' + (padT + innerH) + '" stroke="#cbd5e1"/>';
+    function dotsFor(series, color) {
+      if (!series || !series.length) return '';
+      return series.filter(function (p) { return typeof p.value === 'number'; }).map(function (p) {
+        var title = p.date + '：' + p.value + '（样本 ' + (p.sample_count || 0) + '）';
+        return '<circle cx="' + xFor(p.date).toFixed(1) + '" cy="' + yFor(p.value).toFixed(1) + '" r="3.2" fill="#fff" stroke="' + color + '" stroke-width="2"><title>' + title + '</title></circle>';
+      }).join('');
+    }
+    function yTick(value) {
+      var y = yFor(value);
+      return '<g class="chart-y-tick"><line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (padL + innerW) + '" y2="' + y.toFixed(1) + '" stroke="#e2e8f0"/><text x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end">' + Math.round(value) + '</text></g>';
+    }
+    function xTicks() {
+      var step = Math.max(1, Math.ceil(uniqDates.length / 6));
+      return uniqDates.map(function (date, idx) {
+        if (idx % step !== 0 && idx !== uniqDates.length - 1) return '';
+        var x = xFor(date);
+        return '<g class="chart-x-tick"><line x1="' + x.toFixed(1) + '" y1="' + (padT + innerH) + '" x2="' + x.toFixed(1) + '" y2="' + (padT + innerH + 5) + '" stroke="#94a3b8"/><text x="' + x.toFixed(1) + '" y="' + (padT + innerH + 22) + '" text-anchor="middle">' + String(date).slice(5) + '</text></g>';
+      }).join('');
+    }
+    var tickStep = (vMax - vMin) / 4;
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" role="img" aria-label="口碑健康度趋势">';
+    svg += '<rect x="0" y="0" width="' + w + '" height="' + h + '" fill="transparent"/>';
+    svg += '<g font-size="11" font-family="sans-serif" fill="#64748b">';
+    for (var i = 0; i <= 4; i++) svg += yTick(vMin + tickStep * i);
+    svg += xTicks();
+    svg += '</g>';
+    svg += '<line x1="' + padL + '" y1="' + (padT + innerH) + '" x2="' + (padL + innerW) + '" y2="' + (padT + innerH) + '" stroke="#94a3b8"/>';
     svg += pathFor(seriesOwn, '#16a34a');         // green: own
     svg += pathFor(seriesCompetitor, '#dc2626');  // red: competitor
-    // Legend
-    svg += '<g font-size="11" font-family="sans-serif">';
-    svg += '<rect x="' + (padL + 4) + '" y="' + (padT + 4) + '" width="10" height="2" fill="#16a34a"/>';
-    svg += '<text x="' + (padL + 18) + '" y="' + (padT + 8) + '">自有</text>';
-    svg += '<rect x="' + (padL + 60) + '" y="' + (padT + 4) + '" width="10" height="2" fill="#dc2626"/>';
-    svg += '<text x="' + (padL + 74) + '" y="' + (padT + 8) + '">竞品</text>';
+    svg += dotsFor(seriesOwn, '#16a34a');
+    svg += dotsFor(seriesCompetitor, '#dc2626');
+    svg += '<g font-size="12" font-family="sans-serif" fill="#334155">';
+    svg += '<line x1="' + (padL + innerW - 120) + '" y1="16" x2="' + (padL + innerW - 96) + '" y2="16" stroke="#16a34a" stroke-width="3" stroke-linecap="round"/>';
+    svg += '<text x="' + (padL + innerW - 90) + '" y="20">自有</text>';
+    svg += '<line x1="' + (padL + innerW - 48) + '" y1="16" x2="' + (padL + innerW - 24) + '" y2="16" stroke="#dc2626" stroke-width="3" stroke-linecap="round"/>';
+    svg += '<text x="' + (padL + innerW - 18) + '" y="20">竞品</text>';
     svg += '</g>';
     svg += '</svg>';
     container.innerHTML = svg;
@@ -198,6 +232,62 @@
     });
 
     renderTrendPanel();
+  }
+
+  function initTrendWorkspacePanels() {
+    var viewBtns = document.querySelectorAll('.trend-workspace-view-btn[data-trend-workspace-view]');
+    var dimensionBtns = document.querySelectorAll('.trend-workspace-dimension-btn[data-trend-workspace-dimension]');
+    var panels = document.querySelectorAll('.trend-workspace-panel[data-trend-workspace-view][data-trend-workspace-dimension]');
+    if (!viewBtns.length || !dimensionBtns.length || !panels.length) return;
+
+    var activeViewBtn = document.querySelector('.trend-workspace-view-btn.trend-active') || viewBtns[0];
+    var activeDimensionBtn = document.querySelector('.trend-workspace-dimension-btn.trend-active') || dimensionBtns[0];
+    var currentView = activeViewBtn.getAttribute('data-trend-workspace-view');
+    var currentDimension = activeDimensionBtn.getAttribute('data-trend-workspace-dimension');
+
+    function resizeChartsIn(panel) {
+      if (!panel || typeof Chart === 'undefined') return;
+      requestAnimationFrame(function () {
+        panel.querySelectorAll('canvas').forEach(function (canvas) {
+          var chart = Chart.getChart(canvas);
+          if (chart) chart.resize();
+        });
+      });
+    }
+
+    function renderTrendWorkspacePanel() {
+      var activePanel = null;
+      viewBtns.forEach(function (btn) {
+        btn.classList.toggle('trend-active', btn.getAttribute('data-trend-workspace-view') === currentView);
+      });
+      dimensionBtns.forEach(function (btn) {
+        btn.classList.toggle('trend-active', btn.getAttribute('data-trend-workspace-dimension') === currentDimension);
+      });
+      panels.forEach(function (panel) {
+        var matchesView = panel.getAttribute('data-trend-workspace-view') === currentView;
+        var matchesDimension = panel.getAttribute('data-trend-workspace-dimension') === currentDimension;
+        var isActive = matchesView && matchesDimension;
+        panel.classList.toggle('trend-workspace-panel-active', isActive);
+        if (isActive) activePanel = panel;
+      });
+      resizeChartsIn(activePanel);
+    }
+
+    viewBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        currentView = btn.getAttribute('data-trend-workspace-view');
+        renderTrendWorkspacePanel();
+      });
+    });
+
+    dimensionBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        currentDimension = btn.getAttribute('data-trend-workspace-dimension');
+        renderTrendWorkspacePanel();
+      });
+    });
+
+    renderTrendWorkspacePanel();
   }
 
   /* =========================================================================
@@ -290,8 +380,16 @@
     }
 
     document.addEventListener('click', function (e) {
-      if (e.target.classList.contains('evidence-img')) {
-        openLB(e.target.getAttribute('data-full') || e.target.src, e.target.alt);
+      var t = e.target;
+      if (t.tagName !== 'IMG') return;
+      // F011 §4.2.3.1 v1.3 — issue card 图片证据 + 任何 evidence-img 都可点击放大
+      if (
+        t.classList.contains('evidence-img') ||
+        t.closest('.issue-image-evidence') ||
+        t.closest('.evidence-thumb') ||
+        t.closest('.evidence-gallery')
+      ) {
+        openLB(t.getAttribute('data-full') || t.src, t.alt);
       }
     });
 
@@ -727,6 +825,7 @@
   function boot() {
     initTabs();
     initTrendPanels();
+    initTrendWorkspacePanels();
     initHealthTrendChart();
     initGauge();
     initCounters();

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 from qbu_crawler import config, models
 from qbu_crawler.server import report, report_analytics, report_html, report_llm
 from qbu_crawler.server.report_artifacts import record_artifact
-from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO
+from qbu_crawler.server.report_common import BACKFILL_DOMINANT_RATIO, _label_display
 
 _logger = logging.getLogger(__name__)
 
@@ -685,10 +686,13 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
                 if (lab.get("polarity") or "").lower() == "negative":
                     if lab.get("code"):
                         label_codes.append(lab["code"])
+        _top_codes = [c for c, _ in Counter(label_codes).most_common(2)]
         own_new_negative_reviews.append({
             "product_name": pname,
             "review_count": len(rev_list),
-            "primary_problems": [c for c, _ in Counter(label_codes).most_common(2)],
+            "primary_problems": _top_codes,
+            # 人话化别名供模板渲染（保留 raw codes 以保持向后兼容）
+            "primary_problems_display": [_label_display(c) for c in _top_codes],
         })
 
     # Build sku → ownership map for filtering rating/stock changes.
@@ -763,10 +767,35 @@ def build_change_digest(snapshot, analytics, previous_snapshot=None, previous_an
         pname = r.get("product_name") or "(unknown)"
         comp_new_neg_by_product.setdefault(pname, []).append(r)
 
-    competitor_new_negative_reviews = [
-        {"product_name": pname, "review_count": len(rev_list)}
-        for pname, rev_list in comp_new_neg_by_product.items()
-    ]
+    competitor_new_negative_reviews = []
+    for pname, rev_list in comp_new_neg_by_product.items():
+        comp_codes: list[str] = []
+        for r in rev_list:
+            raw_labels = r.get("labels")
+            if not raw_labels:
+                continue
+            try:
+                if isinstance(raw_labels, list):
+                    labels_iter = raw_labels
+                else:
+                    parsed = json.loads(raw_labels)
+                    labels_iter = parsed if isinstance(parsed, list) else []
+            except (TypeError, ValueError):
+                labels_iter = []
+            for lab in labels_iter:
+                if not isinstance(lab, dict):
+                    continue
+                if (lab.get("polarity") or "").lower() != "negative":
+                    continue
+                if lab.get("code"):
+                    comp_codes.append(lab["code"])
+        _top_comp_codes = [c for c, _ in Counter(comp_codes).most_common(2)]
+        competitor_new_negative_reviews.append({
+            "product_name": pname,
+            "review_count": len(rev_list),
+            "primary_problems": _top_comp_codes,
+            "primary_problems_display": [_label_display(c) for c in _top_comp_codes],
+        })
 
     competitive_opportunities = {
         "competitor_new_negative_reviews": competitor_new_negative_reviews,
@@ -1105,6 +1134,46 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
         return {"success": False, "error": str(e), "recipients": recipients}
 
 
+def _build_trend_history_for_snapshot(snapshot):
+    until = snapshot.get("data_until") or f"{snapshot['logical_date']}T23:59:59+08:00"
+    trend_products, trend_reviews = report.query_trend_history(until, lookback_days=730)
+    product_series = report_analytics.build_historical_product_trend_series(
+        trend_products,
+        until=until,
+        days=730,
+    )
+    return {
+        "products": trend_products,
+        "reviews": trend_reviews,
+        "product_series": product_series,
+        "until": until,
+    }
+
+
+def _call_build_report_analytics(snapshot, *, synced_labels=None, skip_delta=False, trend_history=None):
+    params = inspect.signature(report_analytics.build_report_analytics).parameters
+    accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+    kwargs = {}
+    if accepts_kwargs or "synced_labels" in params:
+        kwargs["synced_labels"] = synced_labels
+    if accepts_kwargs or "skip_delta" in params:
+        kwargs["skip_delta"] = skip_delta
+    if accepts_kwargs or "trend_history" in params:
+        kwargs["trend_history"] = trend_history
+    return report_analytics.build_report_analytics(snapshot, **kwargs)
+
+
+def _call_build_dual_report_analytics(snapshot, *, synced_labels=None, trend_history=None):
+    params = inspect.signature(report_analytics.build_dual_report_analytics).parameters
+    accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+    kwargs = {}
+    if accepts_kwargs or "synced_labels" in params:
+        kwargs["synced_labels"] = synced_labels
+    if accepts_kwargs or "trend_history" in params:
+        kwargs["trend_history"] = trend_history
+    return report_analytics.build_dual_report_analytics(snapshot, **kwargs)
+
+
 def _generate_change_report(snapshot, send_email, prev_analytics, context):
     """Generate a change report (no new reviews, but price/stock/rating changed)."""
     run_id = snapshot.get("run_id", 0)
@@ -1116,6 +1185,7 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     cumulative_computed = False
     if snapshot.get("cumulative"):
         try:
+            trend_history = _build_trend_history_for_snapshot(snapshot)
             cum_snapshot = {
                 "run_id": run_id,
                 "logical_date": snapshot.get("logical_date", ""),
@@ -1124,7 +1194,10 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
                 "snapshot_hash": snapshot.get("snapshot_hash", ""),
                 **snapshot["cumulative"],
             }
-            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            cum_analytics = _call_build_report_analytics(
+                cum_snapshot,
+                trend_history=trend_history,
+            )
             from qbu_crawler.server.report_common import normalize_deep_report_analytics
             cum_analytics = normalize_deep_report_analytics(cum_analytics)
             os.makedirs(config.REPORT_DIR, exist_ok=True)
@@ -1189,6 +1262,7 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     cumulative_computed = False
     if snapshot.get("cumulative"):
         try:
+            trend_history = _build_trend_history_for_snapshot(snapshot)
             cum_snapshot = {
                 "run_id": run_id,
                 "logical_date": snapshot.get("logical_date", ""),
@@ -1197,7 +1271,10 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
                 "snapshot_hash": snapshot.get("snapshot_hash", ""),
                 **snapshot["cumulative"],
             }
-            cum_analytics = report_analytics.build_report_analytics(cum_snapshot)
+            cum_analytics = _call_build_report_analytics(
+                cum_snapshot,
+                trend_history=trend_history,
+            )
             from qbu_crawler.server.report_common import normalize_deep_report_analytics
             cum_analytics = normalize_deep_report_analytics(cum_analytics)
             os.makedirs(config.REPORT_DIR, exist_ok=True)
@@ -1396,15 +1473,16 @@ def generate_full_report_from_snapshot(
         else:
             _label_snapshot = snapshot
         synced_labels = report_analytics.sync_review_labels(_label_snapshot)
+        trend_history = _build_trend_history_for_snapshot(snapshot)
 
         # Use dual analytics when cumulative data exists
         if snapshot.get("cumulative"):
-            analytics = report_analytics.build_dual_report_analytics(
-                snapshot, synced_labels=synced_labels,
+            analytics = _call_build_dual_report_analytics(
+                snapshot, synced_labels=synced_labels, trend_history=trend_history,
             )
         else:
-            analytics = report_analytics.build_report_analytics(
-                snapshot, synced_labels=synced_labels,
+            analytics = _call_build_report_analytics(
+                snapshot, synced_labels=synced_labels, trend_history=trend_history,
             )
 
         # Pre-normalize so LLM gets gap_analysis, enriched clusters, and top_symptoms

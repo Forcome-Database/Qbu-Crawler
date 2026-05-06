@@ -32,6 +32,8 @@ Qbu-Crawler/
 ├── models.py          # SQLite 数据层（products + product_snapshots + reviews + tasks 表）
 ├── minio_client.py    # MinIO 图片上传客户端
 ├── main.py            # CLI 入口（多站点路由 + 并行采集 + serve 子命令）
+├── scripts/
+│   └── simulate_daily_report.py  # 隔离模拟连续多天采集入库并生成每日报告
 ├── server/
 │   ├── __init__.py
 │   ├── app.py              # FastAPI + FastMCP 组装 + Uvicorn 启动
@@ -382,3 +384,17 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `qbu_crawler/server/report_llm.py` - LLM 数字校验纳入 contract evidence counts，避免已锁定证据数被误判为幻觉数字。
 - `qbu_crawler/server/report_analytics.py` - `sample_avg_rating` 回到全样本评论均分，`own_avg_rating` 单独表达自有产品评论均分。
 - `tests/server/test_test10_artifact_replay.py` 与 `tests/fixtures/report_replay/test10_minimal/` - 锁住测试10的业务报告和运维日志隔离、防漏采回归。
+
+## 2026-04-29 每日报告模拟脚本增量
+
+- `scripts/simulate_daily_report.py` - 新增隔离模拟脚本，可按天数从当前日期往前连续生成产品、快照、评论、任务和 workflow run，并调用真实报表链路生成 snapshot / analytics / Excel / HTML。
+- `tests/server/test_simulate_daily_report_script.py` - 锁住日期生成、隔离 DB 写入、默认禁用邮件 / AI digest / 运维告警外发等模拟边界。
+
+## 2026-04-30 历史口径变化趋势页增量
+
+- `qbu_crawler/server/report.py::query_trend_history()` - 新增历史趋势查询，按报告 `data_until` 截断评论入库时间和评论发布时间，避免旧报告回放读到未来才采集的数据。
+- `qbu_crawler/models.py::get_product_snapshots_until()` - 新增按 `product_url` / `sku + site` 和 `until` 查询产品历史记录，避免 `datetime('now')` 造成历史报告漂移。
+- `qbu_crawler/server/report_analytics.py` - 在现有 `trend_digest` 内新增 `workspace`，提供近7天 / 近30天 / 近12个月与口碑趋势、问题趋势、产品趋势、竞品对比四个维度。
+- `qbu_crawler/server/report_snapshot.py` - full / change / quiet 三条报告路径统一注入历史趋势输入，`REPORT_PERSPECTIVE=window` 下趋势页仍基于历史库。
+- `qbu_crawler/server/report_templates/daily_report_v3.html.j2`、`.css`、`.js` - 趋势页优先渲染历史趋势工作台，每个面板保持一张主图、最多三个指标和一张明细表。
+- `tests/server/test_historical_trend_queries.py`、`test_historical_trend_digest.py`、`test_historical_report_paths.py`、`test_historical_trend_template.py` - 锁定历史截止、四维度趋势口径、报告路径接入和 HTML 禁词。

@@ -1159,7 +1159,7 @@ def test_build_insights_prompt_uses_disambiguated_gap_labels():
 
     prompt = _build_insights_prompt(analytics)
 
-    assert "总体竞品差距指数" in prompt
+    assert "竞品差距分" in prompt
     assert "维度差距指数 15" in prompt
 
 

@@ -48,7 +48,7 @@
       "meaning": "Time when a review row was ingested by the crawler."
     },
     "review_publish_time": {
-      "field": "reviews.date_published",
+      "field": "reviews.date_published_parsed",
       "label": "Review publish time",
       "meaning": "Time published on the source site."
     },

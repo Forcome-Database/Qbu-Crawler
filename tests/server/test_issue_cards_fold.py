@@ -1,10 +1,11 @@
-"""F011 §4.2.3.1 v1.2 — issue cards Top 3 默认展开 + 删除 temporal_pattern.
+"""F011 §4.2.3.1 v1.3 — issue cards Top 3 默认展开 + 删除 temporal_pattern.
 
 Covers AC-35:
   1. issue_cards sorted by (evidence_count DESC, severity_rank DESC,
      affected_product_count DESC).
   2. First 3 cards have ``default_expanded=True``; rest have False.
-  3. HTML renders Top 3 outside <details>, 4-N inside <details class="issue-cards-folded">.
+  3. HTML renders all cards inline; Top 3 expanded, 4-N carry ``card-collapsed``
+     class so only the header is visible (click header to expand).
   4. ``temporal_pattern`` no longer appears in rendered HTML.
   5. LLM prompt + parser for ``analyze_cluster_deep`` no longer requests/emits
      ``temporal_pattern``.
@@ -157,53 +158,35 @@ def test_issue_cards_evidence_count_field_present():
 
 
 # ──────────────────────────────────────────────────────────
-# AC-35 (3) — HTML rendering: Top 3 expanded, 4-N inside <details>
+# AC-35 (3) — HTML rendering: Top 3 expanded, 4-N inline with card-collapsed
 # ──────────────────────────────────────────────────────────
 def test_html_top_3_expanded_rest_folded():
-    """Top 3 issue-card divs are at top level; remaining wrapped in <details class="issue-cards-folded">."""
+    """All 8 issue-card divs render inline; only 4-N carry ``card-collapsed`` class."""
     analytics = _eight_card_analytics()
     html = render_attachment_html(_base_snapshot(), analytics)
 
-    # The folded <details> wrapper should appear once
-    folded_open = re.findall(r'<details[^>]*class="issue-cards-folded"', html)
-    assert len(folded_open) == 1, (
-        f"Expected exactly one <details class=\"issue-cards-folded\">, got {len(folded_open)}"
+    # Old <details class="issue-cards-folded"> wrapper must NOT exist
+    assert 'class="issue-cards-folded"' not in html, (
+        "Folded <details> wrapper should be removed in v1.3 — cards now render inline"
     )
 
-    # Cards inside the folded block: 8 - 3 = 5
-    folded_match = re.search(
-        r'<details[^>]*class="issue-cards-folded".*?</details>',
-        html,
-        flags=re.DOTALL,
-    )
-    assert folded_match, "Could not locate folded <details> region"
-    folded_html = folded_match.group(0)
-    # Match the issue-card div class precisely (e.g. ``issue-card severity-high``)
-    # — the substring ``class="issue-card`` would also match the wrapper
-    # ``class="issue-cards-folded"`` and inflate the count by 1.
-    folded_card_count = len(re.findall(r'class="issue-card severity-', folded_html))
-    assert folded_card_count == 5, f"Expected 5 folded cards, got {folded_card_count}"
-
-    # And 3 cards outside (total 8 - 5 folded)
+    # All 8 cards visible at section level
     total_card_count = len(re.findall(r'class="issue-card severity-', html))
-    expanded_card_count = total_card_count - folded_card_count
-    assert expanded_card_count == 3, f"Expected 3 expanded cards, got {expanded_card_count}"
+    assert total_card_count == 8, f"Expected 8 issue cards inline, got {total_card_count}"
+
+    # 5 cards collapsed (4-N), 3 cards expanded (Top 3)
+    collapsed_count = len(re.findall(r'class="issue-card severity-\w+ card-collapsed', html))
+    assert collapsed_count == 5, f"Expected 5 collapsed cards, got {collapsed_count}"
+    expanded_count = total_card_count - collapsed_count
+    assert expanded_count == 3, f"Expected 3 expanded cards, got {expanded_count}"
 
 
-def test_html_folded_summary_mentions_remaining_count():
-    """Summary text should communicate the number of remaining hidden cards."""
+def test_html_no_folded_details_summary():
+    """v1.3 — old '展开剩余 N 张诊断卡' summary text must be gone."""
     analytics = _eight_card_analytics()
     html = render_attachment_html(_base_snapshot(), analytics)
-    folded_match = re.search(
-        r'<details[^>]*class="issue-cards-folded".*?</details>',
-        html,
-        flags=re.DOTALL,
-    )
-    assert folded_match
-    summary_match = re.search(r"<summary[^>]*>(.*?)</summary>", folded_match.group(0), flags=re.DOTALL)
-    assert summary_match, "No <summary> found inside folded details"
-    summary_text = summary_match.group(1)
-    assert "5" in summary_text, f"Summary should mention remaining 5 cards: {summary_text!r}"
+    assert "展开剩余" not in html
+    assert 'class="issue-cards-folded"' not in html
 
 
 def test_html_no_data_default_collapsed_attribute():

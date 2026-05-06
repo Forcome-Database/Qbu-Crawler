@@ -1083,7 +1083,7 @@ def _build_insights_prompt(analytics, snapshot=None):
 - 自有评论 {own_reviews} 条，自有差评 {own_neg} 条（自有差评率 {own_rate * 100:.1f}%）
 - 全量评论 {total} 条（含竞品 {comp_reviews} 条），全量差评 {neg} 条
 - 健康指数：{health}/100
-- 总体竞品差距指数：{analytics.get("kpis", {}).get("competitive_gap_index", "暂无")}/100（跨维度平均）
+- 竞品差距分：{analytics.get("kpis", {}).get("competitive_gap_index", "暂无")}/100（跨维度平均，原"总体竞品差距指数"）
 
 高风险产品：
 {risk_text}

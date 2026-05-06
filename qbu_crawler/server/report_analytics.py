@@ -2039,6 +2039,39 @@ def _build_trend_data(products, days=30):
     return result
 
 
+def build_historical_product_trend_series(products, until, days=365):
+    result = []
+    for product in products or []:
+        sku = product.get("sku")
+        product_url = product.get("url") or product.get("product_url")
+        snapshots = models.get_product_snapshots_until(
+            product_url=product_url,
+            sku=sku,
+            site=product.get("site"),
+            until=until,
+            days=days,
+        ) if (product_url or sku) else []
+        result.append({
+            "product_name": product.get("name", ""),
+            "product_sku": sku or "",
+            "product_url": product_url or "",
+            "site": product.get("site", ""),
+            "ownership": product.get("ownership", ""),
+            "series": [
+                {
+                    "date": s.get("scraped_at", ""),
+                    "price": s.get("price"),
+                    "rating": s.get("rating"),
+                    "review_count": s.get("review_count"),
+                    "ratings_only_count": s.get("ratings_only_count"),
+                    "stock_status": s.get("stock_status"),
+                }
+                for s in snapshots
+            ],
+        })
+    return result
+
+
 _TREND_VIEWS = {
     "week": {"days": 7, "grain": "day"},
     "month": {"days": 30, "grain": "day"},
@@ -3261,7 +3294,445 @@ def _build_trend_digest(snapshot, labeled_reviews, trend_series):
     }
 
 
-def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=None):
+_WORKSPACE_VIEWS = {
+    "week": {"label": "近7天", "days": 7, "previous_label": "较前7天"},
+    "month": {"label": "近30天", "days": 30, "previous_label": "较前30天"},
+    "year": {"label": "近12个月", "days": 365, "previous_label": "较前12个月"},
+}
+
+_WORKSPACE_DIMENSIONS = ("reputation", "issues", "products", "competition")
+
+
+def _trend_until_date(snapshot, trend_history):
+    until = (trend_history or {}).get("until") or snapshot.get("data_until") or f"{snapshot['logical_date']}T23:59:59+08:00"
+    return date.fromisoformat(str(until)[:10])
+
+
+def _trend_review_date(review):
+    from qbu_crawler.server.report_common import _parse_date_flexible
+
+    raw = review.get("date_published_parsed") or review.get("date_published")
+    return _parse_date_flexible(raw) if raw else None
+
+
+def _window_bounds(until_day, days):
+    current_end = until_day - timedelta(days=1)
+    current_start = current_end - timedelta(days=days - 1)
+    previous_end = current_start - timedelta(days=1)
+    previous_start = previous_end - timedelta(days=days - 1)
+    return current_start, current_end, previous_start, previous_end
+
+
+def _reviews_between(reviews, start, end):
+    selected = []
+    for review in reviews or []:
+        day = _trend_review_date(review)
+        if day and start <= day <= end:
+            selected.append(review)
+    return selected
+
+
+def _avg_rating(reviews):
+    ratings = []
+    for review in reviews or []:
+        try:
+            ratings.append(float(review.get("rating")))
+        except (TypeError, ValueError):
+            pass
+    return round(sum(ratings) / len(ratings), 2) if ratings else None
+
+
+def _bad_rate(reviews):
+    if not reviews:
+        return None
+    bad = sum(1 for review in reviews if float(review.get("rating") or 0) <= config.NEGATIVE_THRESHOLD)
+    return round(bad / len(reviews), 4)
+
+
+def _rate_display(value):
+    return "—" if value is None else f"{value * 100:.1f}%"
+
+
+def _delta_display(current, previous, suffix=""):
+    if current is None or previous is None:
+        return "暂无足够历史对比"
+    delta = round(current - previous, 2)
+    sign = "+" if delta > 0 else ""
+    return f"{sign}{delta}{suffix}"
+
+
+def _workspace_labels(until_day, view):
+    days = _WORKSPACE_VIEWS[view]["days"]
+    if view == "year":
+        labels = []
+        month_anchor = until_day - timedelta(days=1)
+        year = month_anchor.year
+        month = month_anchor.month
+        for offset in range(11, -1, -1):
+            shifted_year, shifted_month = _shift_month(year, month, -offset)
+            labels.append(f"{shifted_year:04d}-{shifted_month:02d}")
+        return labels
+    start = until_day - timedelta(days=days)
+    return [(start + timedelta(days=index)).isoformat() for index in range(days)]
+
+
+def _bucket_review_counts(reviews, labels, view, ownership=None, metric="avg_rating"):
+    buckets = {label: [] for label in labels}
+    for review in reviews or []:
+        if ownership and review.get("ownership") != ownership:
+            continue
+        day = _trend_review_date(review)
+        if not day:
+            continue
+        label = f"{day.year:04d}-{day.month:02d}" if view == "year" else day.isoformat()
+        if label in buckets:
+            buckets[label].append(review)
+    values = []
+    for label in labels:
+        bucket_reviews = buckets[label]
+        if metric == "bad_rate":
+            value = _bad_rate(bucket_reviews)
+        else:
+            value = _avg_rating(bucket_reviews)
+        values.append(value)
+    return values
+
+
+def _workspace_empty(title, message, columns):
+    return {
+        "status": "accumulating",
+        "title": title,
+        "status_message": message,
+        "comparison": {"status": "insufficient_history", "label": "暂无足够历史对比"},
+        "kpis": {"items": []},
+        "primary_chart": {"status": "accumulating", "chart_type": "line", "title": title, "labels": [], "series": []},
+        "table": {"columns": columns, "rows": []},
+    }
+
+
+def _workspace_analysis_labels(review):
+    labels = _extract_validated_llm_labels(review)
+    if labels:
+        return labels
+    return classify_review_labels(review)
+
+
+def _workspace_label_display(code):
+    from qbu_crawler.server.report_common import _LABEL_DISPLAY
+
+    return _LABEL_DISPLAY.get(code, code)
+
+
+def _workspace_dimension(code):
+    from qbu_crawler.server.report_common import CODE_TO_DIMENSION
+
+    return CODE_TO_DIMENSION.get(code, code)
+
+
+def _build_workspace_reputation(view, reviews, until_day):
+    view_conf = _WORKSPACE_VIEWS[view]
+    labels = _workspace_labels(until_day, view)
+    own_series = _bucket_review_counts(reviews, labels, view, ownership="own")
+    competitor_series = _bucket_review_counts(reviews, labels, view, ownership="competitor")
+    current_start, current_end, previous_start, previous_end = _window_bounds(until_day, view_conf["days"])
+    current = _reviews_between(reviews, current_start, current_end)
+    previous = _reviews_between(reviews, previous_start, previous_end)
+    own_current = [r for r in current if r.get("ownership") == "own"]
+    comp_current = [r for r in current if r.get("ownership") == "competitor"]
+    own_previous = [r for r in previous if r.get("ownership") == "own"]
+    own_avg = _avg_rating(own_current)
+    comp_avg = _avg_rating(comp_current)
+    own_bad_rate = _bad_rate(own_current)
+    gap = round((comp_avg or 0) - (own_avg or 0), 2) if own_avg is not None and comp_avg is not None else None
+    rows = []
+    for label in labels:
+        bucket_reviews = []
+        for review in reviews:
+            day = _trend_review_date(review)
+            if not day:
+                continue
+            bucket = f"{day.year:04d}-{day.month:02d}" if view == "year" else day.isoformat()
+            if bucket == label:
+                bucket_reviews.append(review)
+        bucket_own = [r for r in bucket_reviews if r.get("ownership") == "own"]
+        bucket_comp = [r for r in bucket_reviews if r.get("ownership") == "competitor"]
+        rows.append({
+            "日期 / 月份": label,
+            "评论量": len(bucket_reviews),
+            "自有均分": _avg_rating(bucket_own) or "—",
+            "自有差评率": _rate_display(_bad_rate(bucket_own)),
+            "竞品均分": _avg_rating(bucket_comp) or "—",
+        })
+    return {
+        "status": "ready" if current else "accumulating",
+        "title": f"{view_conf['label']} / 口碑趋势",
+        "status_message": "",
+        "comparison": {
+            "status": "ready" if previous else "insufficient_history",
+            "label": view_conf["previous_label"],
+        },
+        "kpis": {"items": [
+            {"label": "自有平均评分", "value": own_avg if own_avg is not None else "—", "change": _delta_display(own_avg, _avg_rating(own_previous))},
+            {"label": "自有差评率", "value": _rate_display(own_bad_rate)},
+            {"label": "与竞品评分差", "value": gap if gap is not None else "—"},
+        ]},
+        "primary_chart": {
+            "status": "ready",
+            "chart_type": "line",
+            "title": "自有平均评分 vs 竞品平均评分",
+            "labels": labels,
+            "series": [
+                {"name": "自有平均评分", "data": own_series},
+                {"name": "竞品平均评分", "data": competitor_series},
+            ],
+        },
+        "table": {"columns": ["日期 / 月份", "评论量", "自有均分", "自有差评率", "竞品均分"], "rows": rows},
+    }
+
+
+def _label_counts(reviews, polarity, *, ownership=None):
+    counts = {}
+    skus = {}
+    for review in reviews or []:
+        if ownership and review.get("ownership") != ownership:
+            continue
+        for label in _workspace_analysis_labels(review):
+            if label.get("label_polarity") != polarity:
+                continue
+            code = label.get("label_code")
+            counts[code] = counts.get(code, 0) + 1
+            skus.setdefault(code, set()).add(review.get("product_sku") or review.get("product_name") or "")
+    return counts, skus
+
+
+def _build_workspace_issues(view, reviews, until_day):
+    view_conf = _WORKSPACE_VIEWS[view]
+    labels = _workspace_labels(until_day, view)
+    current_start, current_end, previous_start, previous_end = _window_bounds(until_day, view_conf["days"])
+    current = _reviews_between(reviews, current_start, current_end)
+    previous = _reviews_between(reviews, previous_start, previous_end)
+    own_current = [r for r in current if r.get("ownership") == "own"]
+    own_previous = [r for r in previous if r.get("ownership") == "own"]
+    counts, skus = _label_counts(own_current, "negative", ownership="own")
+    prev_counts, _ = _label_counts(own_previous, "negative", ownership="own")
+    top_codes = [code for code, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:3]]
+    rows = []
+    for code in top_codes:
+        count = counts.get(code, 0)
+        rows.append({
+            "问题": _workspace_label_display(code),
+            "当前评论数": count,
+            "占比": _rate_display(count / len(own_current) if own_current else None),
+            "对比变化": _delta_display(count, prev_counts.get(code)),
+            "影响 SKU": "、".join(sorted(item for item in skus.get(code, set()) if item)),
+        })
+    series = []
+    for code in top_codes:
+        data = []
+        for label in labels:
+            bucket_reviews = []
+            for review in own_current:
+                day = _trend_review_date(review)
+                bucket = f"{day.year:04d}-{day.month:02d}" if (day and view == "year") else day.isoformat() if day else ""
+                if bucket == label:
+                    bucket_reviews.append(review)
+            bucket_count = sum(
+                1 for review in bucket_reviews
+                if any(l.get("label_code") == code and l.get("label_polarity") == "negative" for l in _workspace_analysis_labels(review))
+            )
+            data.append(round(bucket_count / len(bucket_reviews), 4) if bucket_reviews else None)
+        series.append({"name": _workspace_label_display(code), "data": data})
+    top_code = top_codes[0] if top_codes else None
+    return {
+        "status": "ready" if own_current else "accumulating",
+        "title": f"{view_conf['label']} / 问题趋势",
+        "status_message": "",
+        "comparison": {"status": "ready" if previous else "insufficient_history", "label": view_conf["previous_label"]},
+        "kpis": {"items": [
+            {"label": "问题评论占比", "value": _rate_display(sum(counts.values()) / len(own_current) if own_current else None)},
+            {"label": "Top 1 问题", "value": _workspace_label_display(top_code) if top_code else "—"},
+            {"label": "影响产品数", "value": len(skus.get(top_code, set())) if top_code else 0},
+        ]},
+        "primary_chart": {
+            "status": "ready",
+            "chart_type": "line",
+            "title": "Top 3 问题评论占比趋势",
+            "labels": labels,
+            "series": series,
+        },
+        "table": {"columns": ["问题", "当前评论数", "占比", "对比变化", "影响 SKU"], "rows": rows},
+    }
+
+
+def _series_window_points(series, start, end):
+    points = []
+    for point in series or []:
+        day = _scraped_date(point.get("date"))
+        if day and start <= day <= end:
+            points.append(point)
+    return points
+
+
+def _sku_bad_rate(reviews):
+    result = {}
+    for review in reviews or []:
+        sku = review.get("product_sku")
+        if not sku:
+            continue
+        bucket = result.setdefault(sku, {"total": 0, "bad": 0})
+        bucket["total"] += 1
+        if float(review.get("rating") or 0) <= config.NEGATIVE_THRESHOLD:
+            bucket["bad"] += 1
+    return {sku: (data["bad"] / data["total"] if data["total"] else None) for sku, data in result.items()}
+
+
+def _build_workspace_products(view, reviews, product_series, until_day):
+    view_conf = _WORKSPACE_VIEWS[view]
+    current_start, current_end, previous_start, previous_end = _window_bounds(until_day, view_conf["days"])
+    current_reviews = _reviews_between([r for r in reviews if r.get("ownership") == "own"], current_start, current_end)
+    previous_reviews = _reviews_between([r for r in reviews if r.get("ownership") == "own"], previous_start, previous_end)
+    current_bad = _sku_bad_rate(current_reviews)
+    previous_bad = _sku_bad_rate(previous_reviews)
+    labels = _workspace_labels(until_day, view)
+    rows = []
+    chart_series = []
+    rating_down = bad_rate_up = growth_rating_down = 0
+    for product in product_series or []:
+        points = _series_window_points(product.get("series"), current_start, current_end)
+        if len(points) < 2:
+            continue
+        first = points[0]
+        last = points[-1]
+        rating_delta = None
+        if first.get("rating") is not None and last.get("rating") is not None:
+            rating_delta = round(float(last["rating"]) - float(first["rating"]), 2)
+        review_growth = (last.get("review_count") or 0) - (first.get("review_count") or 0)
+        sku = product.get("product_sku")
+        current_rate = current_bad.get(sku)
+        previous_rate = previous_bad.get(sku)
+        bad_delta = current_rate - previous_rate if current_rate is not None and previous_rate is not None else None
+        if rating_delta is not None and rating_delta < 0:
+            rating_down += 1
+        if bad_delta is not None and bad_delta > 0:
+            bad_rate_up += 1
+        if review_growth > 0 and rating_delta is not None and rating_delta < 0:
+            growth_rating_down += 1
+        rows.append({
+            "产品": product.get("product_name") or sku or "—",
+            "当前评分": last.get("rating") if last.get("rating") is not None else "—",
+            "评分变化": rating_delta if rating_delta is not None else "—",
+            "当前差评率": _rate_display(current_rate),
+            "差评率变化": _delta_display(current_rate, previous_rate),
+            "评论增长数": review_growth,
+        })
+        chart_series.append({
+            "name": product.get("product_name") or sku or "—",
+            "data": [point.get("rating") for point in points],
+        })
+    return {
+        "status": "ready" if rows else "accumulating",
+        "title": f"{view_conf['label']} / 产品趋势",
+        "status_message": "",
+        "comparison": {"status": "ready" if previous_reviews else "insufficient_history", "label": view_conf["previous_label"]},
+        "kpis": {"items": [
+            {"label": "评分下降产品数", "value": rating_down},
+            {"label": "差评率上升产品数", "value": bad_rate_up},
+            {"label": "评论增长但评分下降产品数", "value": growth_rating_down},
+        ]},
+        "primary_chart": {
+            "status": "ready" if chart_series else "accumulating",
+            "chart_type": "line",
+            "title": "重点风险产品评分趋势",
+            "labels": labels,
+            "series": chart_series[:3],
+        },
+        "table": {"columns": ["产品", "当前评分", "评分变化", "当前差评率", "差评率变化", "评论增长数"], "rows": rows},
+    }
+
+
+def _build_workspace_competition(view, reviews, until_day):
+    view_conf = _WORKSPACE_VIEWS[view]
+    labels = _workspace_labels(until_day, view)
+    current_start, current_end, previous_start, previous_end = _window_bounds(until_day, view_conf["days"])
+    current = _reviews_between(reviews, current_start, current_end)
+    previous = _reviews_between(reviews, previous_start, previous_end)
+    own = [r for r in current if r.get("ownership") == "own"]
+    comp = [r for r in current if r.get("ownership") == "competitor"]
+    own_avg = _avg_rating(own)
+    comp_avg = _avg_rating(comp)
+    own_bad = _bad_rate(own)
+    comp_bad = _bad_rate(comp)
+    pos_counts, _ = _label_counts(comp, "positive", ownership="competitor")
+    neg_counts, _ = _label_counts(own, "negative", ownership="own")
+    top_code = next(iter(sorted(pos_counts, key=lambda code: (-pos_counts[code], code))), None)
+    related = "暂无匹配"
+    if top_code:
+        dimension = _workspace_dimension(top_code)
+        matched = [
+            code for code in neg_counts
+            if code == top_code or _workspace_dimension(code) == dimension
+        ]
+        if matched:
+            related = "、".join(_workspace_label_display(code) for code in matched[:3])
+    rows = []
+    if top_code:
+        rows.append({
+            "竞品优势主题": "做工与质量" if top_code == "solid_build" else _workspace_label_display(top_code),
+            "竞品好评数": pos_counts.get(top_code, 0),
+            "自有相关问题": related,
+            "启示": "暂无匹配" if related == "暂无匹配" else "优先对照该主题下的自有负面反馈复核体验短板",
+        })
+    gap_series = []
+    own_series = _bucket_review_counts(reviews, labels, view, ownership="own")
+    comp_series = _bucket_review_counts(reviews, labels, view, ownership="competitor")
+    for own_value, comp_value in zip(own_series, comp_series):
+        gap_series.append(round(comp_value - own_value, 2) if own_value is not None and comp_value is not None else None)
+    gap = round(comp_avg - own_avg, 2) if own_avg is not None and comp_avg is not None else None
+    bad_gap = own_bad - comp_bad if own_bad is not None and comp_bad is not None else None
+    return {
+        "status": "ready" if current else "accumulating",
+        "title": f"{view_conf['label']} / 竞品对比",
+        "status_message": "",
+        "comparison": {"status": "ready" if previous else "insufficient_history", "label": view_conf["previous_label"]},
+        "kpis": {"items": [
+            {"label": "当前评分差", "value": gap if gap is not None else "—"},
+            {"label": "差评率差", "value": _rate_display(bad_gap)},
+            {"label": "竞品优势主题 Top 1", "value": "做工与质量" if top_code == "solid_build" else _workspace_label_display(top_code) if top_code else "—"},
+        ]},
+        "primary_chart": {
+            "status": "ready",
+            "chart_type": "line",
+            "title": "评分差趋势",
+            "labels": labels,
+            "series": [{"name": "评分差", "data": gap_series}],
+        },
+        "table": {"columns": ["竞品优势主题", "竞品好评数", "自有相关问题", "启示"], "rows": rows},
+    }
+
+
+def build_trend_workspace_digest(snapshot, trend_history, trend_product_series=None):
+    trend_history = trend_history or {}
+    reviews = trend_history.get("reviews") or []
+    product_series = trend_product_series if trend_product_series is not None else trend_history.get("product_series") or []
+    until_day = _trend_until_date(snapshot, trend_history)
+    data = {}
+    for view in _WORKSPACE_VIEWS:
+        data[view] = {
+            "reputation": _build_workspace_reputation(view, reviews, until_day),
+            "issues": _build_workspace_issues(view, reviews, until_day),
+            "products": _build_workspace_products(view, reviews, product_series, until_day),
+            "competition": _build_workspace_competition(view, reviews, until_day),
+        }
+    return {
+        "views": list(_WORKSPACE_VIEWS.keys()),
+        "dimensions": list(_WORKSPACE_DIMENSIONS),
+        "default_view": "month",
+        "default_dimension": "reputation",
+        "data": data,
+    }
+
+
+def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=None, trend_history=None):
     mode_info = detect_report_mode(snapshot.get("run_id", 0), snapshot["logical_date"])
     labeled_reviews = _build_labeled_reviews(snapshot, synced_labels=synced_labels)
 
@@ -3483,6 +3954,15 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
         "_trend_series": _trend_series,
     }
 
+    if trend_history is not None:
+        analytics["trend_digest"]["workspace"] = build_trend_workspace_digest(
+            snapshot,
+            trend_history,
+            trend_history.get("product_series") if isinstance(trend_history, dict) else None,
+        )
+
+    _ensure_delta_ready_kpis(analytics)
+
     # ── KPI delta computation (Fix-4) ────────────────────────────────────
     if not skip_delta and mode_info["mode"] != "baseline":
         from .report_snapshot import load_previous_report_context  # lazy import
@@ -3497,14 +3977,22 @@ def build_report_analytics(snapshot, synced_labels=None, skip_delta=False, conn=
     return analytics
 
 
-def build_dual_report_analytics(snapshot, synced_labels=None):
+def _ensure_delta_ready_kpis(analytics):
+    from qbu_crawler.server.report_common import compute_health_index
+
+    health, confidence = compute_health_index(analytics)
+    analytics.setdefault("kpis", {})["health_index"] = health
+    analytics["kpis"]["health_confidence"] = confidence
+
+
+def build_dual_report_analytics(snapshot, synced_labels=None, trend_history=None):
     """Dual-perspective analytics: cumulative (main) + window (delta).
 
     If snapshot has no 'cumulative' field (old format), degrades to single
     perspective by calling build_report_analytics() directly.
     """
     if not snapshot.get("cumulative"):
-        return build_report_analytics(snapshot, synced_labels=synced_labels)
+        return build_report_analytics(snapshot, synced_labels=synced_labels, trend_history=trend_history)
 
     cum = snapshot["cumulative"]
     cumulative_snapshot = {
@@ -3520,7 +4008,12 @@ def build_dual_report_analytics(snapshot, synced_labels=None):
     }
 
     # Cumulative analytics (main body) — skip_delta=True: outer block handles delta correctly
-    cum_analytics = build_report_analytics(cumulative_snapshot, synced_labels=synced_labels, skip_delta=True)
+    cum_analytics = build_report_analytics(
+        cumulative_snapshot,
+        synced_labels=synced_labels,
+        skip_delta=True,
+        trend_history=trend_history,
+    )
 
     # Window analytics — skip delta (F3: avoids meaningless window-vs-cumulative comparison)
     window_analytics = None
@@ -3554,6 +4047,7 @@ def build_dual_report_analytics(snapshot, synced_labels=None):
         from .report_snapshot import load_previous_report_context
         from .report_common import _compute_kpi_deltas
 
+        _ensure_delta_ready_kpis(merged)
         _run_id = snapshot.get("run_id", 0)
         prev_analytics, _ = load_previous_report_context(_run_id)
         if prev_analytics:

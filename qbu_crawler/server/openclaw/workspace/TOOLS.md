@@ -45,7 +45,26 @@
   - `fast_sent`
   - `full_pending`
   - `full_sent`
-  - `skipped_no_reviews`
+  - `full_sent_local`
+- workflow `report_generation_status`
+  - `unknown`
+  - `pending`
+  - `generated`
+  - `failed`
+  - `skipped`
+- workflow `email_delivery_status`
+  - `unknown`
+  - `pending`
+  - `sent`
+  - `failed`
+  - `skipped`
+- workflow `workflow_notification_status`
+  - `unknown`
+  - `pending`
+  - `sent`
+  - `deadletter`
+  - `partial`
+  - `skipped`
 - notification `status`
   - `pending`
   - `claimed`
@@ -60,6 +79,13 @@
 - `report generation status`
 
 这三类必须拆开说，不要混成一句“已经完成”。
+
+补充语义：
+
+- `report_generation_status` 只表示本地报告产物是否生成。
+- `email_delivery_status` 只表示业务日报邮件是否送达。
+- `workflow_notification_status` 只表示 workflow 外部通知是否送达。
+- `full_sent_local + workflow_notification_status=deadletter` 是本地报告/业务邮件可成功、外部通知失败的降级态，不等于业务日报失败。
 
 ## Data and Report Tools
 
@@ -139,7 +165,7 @@ For ad-hoc email/report requests:
 
 - `product_state_time`：最近更新时间
 - `review_ingest_time`：最近抓取时间 / 按抓取时间
-- `review_publish_time`：站点发布时间 / 按发布时间
+- `review_publish_time`：站点发布时间 / 按发布时间，优先使用 `date_published_parsed`
 - 任何带时间窗的结论，一旦不是显然的当前态概览，就要把时间轴名字说出来，不能只说“最近”
 
 ### Style Preference
@@ -287,6 +313,9 @@ For ad-hoc email/report requests:
 - **workflow**：{run_id_or_trigger_key}
 - **执行状态**：{workflow_status}
 - **报告阶段**：{report_phase}
+- **报告产物**：{report_generation_status}
+- **业务邮件**：{email_delivery_status}
+- **workflow 通知**：{workflow_notification_status}
 - **关联任务数**：{task_count}
 - **开始时间**：{started_at}
 - **结束时间**：{finished_at}

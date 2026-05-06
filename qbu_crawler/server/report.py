@@ -1425,6 +1425,73 @@ def query_cumulative_data() -> tuple[list[dict], list[dict]]:
     return products, reviews
 
 
+def _query_reviews_with_latest_analysis_for_trend(conn, until_str, lookback_days):
+    review_rows = conn.execute(
+        """
+        SELECT r.id AS id, p.name AS product_name, p.sku AS product_sku,
+               p.url AS product_url, p.site AS site, p.ownership,
+               r.scraped_at AS scraped_at,
+               r.author, r.headline, r.body, r.rating,
+               r.date_published, r.date_published_parsed, r.images,
+               r.headline_cn, r.body_cn, r.translate_status,
+               ra.sentiment,
+               ra.sentiment_score,
+               ra.labels AS analysis_labels,
+               ra.features AS analysis_features,
+               ra.insight_cn AS analysis_insight_cn,
+               ra.insight_en AS analysis_insight_en,
+               ra.impact_category,
+               ra.failure_mode
+        FROM reviews r
+        JOIN products p ON r.product_id = p.id
+        LEFT JOIN review_analysis ra
+            ON ra.review_id = r.id
+            AND ra.analyzed_at = (
+                SELECT MAX(ra2.analyzed_at)
+                FROM review_analysis ra2
+                WHERE ra2.review_id = r.id
+            )
+        WHERE r.scraped_at < ?
+          AND COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10)) IS NOT NULL
+          AND datetime(COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10))) < datetime(?)
+          AND datetime(COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10))) >= datetime(?, ?)
+        ORDER BY COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10)) ASC, r.id ASC
+        """,
+        (until_str, until_str, until_str, f"-{lookback_days} days"),
+    ).fetchall()
+    reviews = []
+    for row in review_rows:
+        data = dict(row)
+        if data.get("images") and isinstance(data["images"], str):
+            try:
+                data["images"] = json.loads(data["images"])
+            except Exception:
+                pass
+        reviews.append(data)
+    return reviews
+
+
+def query_trend_history(until, lookback_days=730):
+    until_str = _report_ts(until)
+    conn = models.get_conn()
+    try:
+        products = [dict(row) for row in conn.execute(
+            """
+            SELECT DISTINCT
+                   p.url, p.name, p.sku, p.site, p.ownership
+            FROM products p
+            JOIN product_snapshots ps ON ps.product_id = p.id
+            WHERE ps.scraped_at < ?
+            ORDER BY p.site, p.ownership, p.sku
+            """,
+            (until_str,),
+        ).fetchall()]
+        reviews = _query_reviews_with_latest_analysis_for_trend(conn, until_str, lookback_days)
+        return products, reviews
+    finally:
+        conn.close()
+
+
 def query_scope_report_data(scope: Scope) -> tuple[list[dict], list[dict]]:
     """Query products and reviews for a normalized scope."""
     conn = models.get_conn()

@@ -62,7 +62,7 @@ TIME_AXIS_CATALOG = {
     "review_publish_time": {
         "label": "Review publish time",
         "meaning": "Time published on the source site.",
-        "field": "reviews.date_published",
+        "field": "reviews.date_published_parsed",
     },
     "task_lifecycle_time": {
         "label": "Task lifecycle time",

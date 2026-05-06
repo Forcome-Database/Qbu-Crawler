@@ -53,7 +53,7 @@ def test_get_stats_returns_structured_content(monkeypatch):
                     "latest": "2026-03-31 18:20:00",
                 },
                 "review_publish_time": {
-                    "field": "reviews.date_published",
+                    "field": "reviews.date_published_parsed",
                     "latest": "2026-03-30",
                 },
             },
@@ -99,7 +99,7 @@ def test_get_stats_returns_structured_content(monkeypatch):
                 "latest": "2026-03-31 18:20:00",
             },
             "review_publish_time": {
-                "field": "reviews.date_published",
+                "field": "reviews.date_published_parsed",
                 "latest": "2026-03-30",
             },
         },

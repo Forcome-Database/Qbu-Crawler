@@ -558,14 +558,17 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "run_id": 7,
                 "excel_path": "./reports/workflow-run-7-full-report.xlsx",
                 "email_status": "success",
+                "report_generation_status": "generated",
+                "workflow_notification_status": "pending",
             },
             (
                 "## ✅ 每日完整报告已生成\n\n"
                 "- **日期**：2026-03-31\n"
-                "- **状态**：完整报告已生成\n"
                 "- **workflow**：7\n"
+                "- **本地报告产物**：已生成\n"
                 "- **附件**：./reports/workflow-run-7-full-report.xlsx\n"
-                "- **邮件发送**：已发送\n\n"
+                "- **业务邮件**：已发送\n"
+                "- **workflow 通知**：待投递\n\n"
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
@@ -576,14 +579,17 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "run_id": 8,
                 "excel_path": "./reports/workflow-run-8-full-report.xlsx",
                 "email_status": "skipped",
+                "report_generation_status": "generated",
+                "workflow_notification_status": "pending",
             },
             (
                 "## ✅ 每日完整报告已生成\n\n"
                 "- **日期**：2026-03-31\n"
-                "- **状态**：完整报告已生成\n"
                 "- **workflow**：8\n"
+                "- **本地报告产物**：已生成\n"
                 "- **附件**：./reports/workflow-run-8-full-report.xlsx\n"
-                "- **邮件发送**：已跳过（无新增评论）\n\n"
+                "- **业务邮件**：已跳过（无新增评论）\n"
+                "- **workflow 通知**：待投递\n\n"
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
