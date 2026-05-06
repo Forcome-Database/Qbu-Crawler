@@ -661,6 +661,7 @@ def render_email_full(snapshot, analytics):
         email_analytics.setdefault("report_user_contract", {}).setdefault("kpis", {})["health_index"] = input_kpis["health_index"]
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
+        snapshot=snapshot or {},
         logical_date=snapshot.get("logical_date", "") if snapshot else "",
         analytics=email_analytics,
     )
@@ -1452,10 +1453,39 @@ def _query_reviews_with_latest_analysis_for_trend(conn, until_str, lookback_days
                 WHERE ra2.review_id = r.id
             )
         WHERE r.scraped_at < ?
-          AND COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10)) IS NOT NULL
-          AND datetime(COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10))) < datetime(?)
-          AND datetime(COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10))) >= datetime(?, ?)
-        ORDER BY COALESCE(r.date_published_parsed, substr(r.date_published, 1, 10)) ASC, r.id ASC
+          AND datetime(COALESCE(
+                CASE
+                    WHEN date(r.date_published_parsed) IS NOT NULL
+                    THEN r.date_published_parsed
+                END,
+                CASE
+                    WHEN date(substr(r.date_published, 1, 10)) IS NOT NULL
+                    THEN substr(r.date_published, 1, 10)
+                END,
+                substr(r.scraped_at, 1, 10)
+              )) < datetime(?)
+          AND datetime(COALESCE(
+                CASE
+                    WHEN date(r.date_published_parsed) IS NOT NULL
+                    THEN r.date_published_parsed
+                END,
+                CASE
+                    WHEN date(substr(r.date_published, 1, 10)) IS NOT NULL
+                    THEN substr(r.date_published, 1, 10)
+                END,
+                substr(r.scraped_at, 1, 10)
+              )) >= datetime(?, ?)
+        ORDER BY COALESCE(
+            CASE
+                WHEN date(r.date_published_parsed) IS NOT NULL
+                THEN r.date_published_parsed
+            END,
+            CASE
+                WHEN date(substr(r.date_published, 1, 10)) IS NOT NULL
+                THEN substr(r.date_published, 1, 10)
+            END,
+            substr(r.scraped_at, 1, 10)
+        ) ASC, r.id ASC
         """,
         (until_str, until_str, until_str, f"-{lookback_days} days"),
     ).fetchall()

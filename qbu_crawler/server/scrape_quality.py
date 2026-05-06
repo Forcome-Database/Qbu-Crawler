@@ -61,28 +61,8 @@ def summarize_scrape_quality(
         ratings_only = _safe_int(p, "ratings_only_count")
         return max(0, site - ratings_only)
 
-    site_total = sum(_text_review_count(p) for p in products)
-    ingested_total = sum(_safe_int(p, "ingested_count") for p in products)
-    ratings_only_total = sum(_safe_int(p, "ratings_only_count") for p in products)
-
-    # zero_scrape：只有"应该有文字评论"的产品才报。
-    # 旧逻辑用 review_count > 0；现改用 text_review_count > 0，
-    # 当 BV 给出 review_count=92 但 92 条全是 ratings-only 时不会再误报零采集。
-    zero_scrape_skus = [
-        p["sku"] for p in products
-        if (_text_review_count(p) > 0)
-        and (_safe_int(p, "ingested_count") == 0)
-    ]
-
-    low_coverage_skus = []
-    for p in products:
-        text_total = _text_review_count(p)
-        ingested = _safe_int(p, "ingested_count")
-        if text_total > 0 and (ingested / text_total) < low_coverage_threshold:
-            low_coverage_skus.append(p["sku"])
-
-    completeness = (ingested_total / site_total) if site_total else 1.0
-
+    extracted_by_key = {}
+    summary_text_total_by_key = {}
     expected_urls = []
     saved_urls = []
     failed_urls = []
@@ -102,12 +82,66 @@ def summarize_scrape_quality(
         expected_urls.extend(params.get("urls") or [])
         saved_urls.extend(result.get("saved_urls") or [])
         failed_urls.extend(result.get("failed_urls") or [])
+        for item in result.get("product_summaries") or []:
+            key = item.get("url") or item.get("sku")
+            if not key:
+                continue
+            extracted_by_key[key] = _safe_int(item, "extracted_review_count")
+            site = _safe_int(item, "site_review_count")
+            ratings_only = _safe_int(item, "ratings_only_count")
+            summary_text_total_by_key[key] = max(0, site - ratings_only)
+            if not item.get("url") and item.get("sku"):
+                extracted_by_key[item["sku"]] = extracted_by_key[key]
+                summary_text_total_by_key[item["sku"]] = summary_text_total_by_key[key]
         if not saved_urls:
             saved_urls.extend([
                 item.get("url")
                 for item in (result.get("product_summaries") or [])
                 if item.get("url")
             ])
+
+    def _product_key(p: dict) -> str:
+        return p.get("url") or p.get("sku") or ""
+
+    def _observed_count(p: dict) -> int:
+        key = _product_key(p)
+        if key in extracted_by_key:
+            return extracted_by_key[key]
+        sku = p.get("sku")
+        if sku in extracted_by_key:
+            return extracted_by_key[sku]
+        return _safe_int(p, "ingested_count")
+
+    def _target_count(p: dict) -> int:
+        key = _product_key(p)
+        if key in summary_text_total_by_key:
+            return summary_text_total_by_key[key]
+        sku = p.get("sku")
+        if sku in summary_text_total_by_key:
+            return summary_text_total_by_key[sku]
+        return _text_review_count(p)
+
+    site_total = sum(_target_count(p) for p in products)
+    ingested_total = sum(_observed_count(p) for p in products)
+    ratings_only_total = sum(_safe_int(p, "ratings_only_count") for p in products)
+
+    # zero_scrape：只有"应该有文字评论"的产品才报。
+    # 旧逻辑用 review_count > 0；现改用 text_review_count > 0，
+    # 当 BV 给出 review_count=92 但 92 条全是 ratings-only 时不会再误报零采集。
+    zero_scrape_skus = [
+        p["sku"] for p in products
+        if (_target_count(p) > 0)
+        and (_observed_count(p) == 0)
+    ]
+
+    low_coverage_skus = []
+    for p in products:
+        text_total = _target_count(p)
+        observed = _observed_count(p)
+        if text_total > 0 and (observed / text_total) < low_coverage_threshold:
+            low_coverage_skus.append(p["sku"])
+
+    completeness = (ingested_total / site_total) if site_total else 1.0
     if not expected_urls:
         expected_urls = [p.get("url") for p in products if p.get("url")]
     if not saved_urls:

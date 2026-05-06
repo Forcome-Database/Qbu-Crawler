@@ -262,6 +262,15 @@ SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 # ── Report ────────────────────────────────────────
 REPORT_LABEL_MODE = _enum_env("REPORT_LABEL_MODE", "rule", ("rule", "hybrid"))
 REPORT_PERSPECTIVE = _enum_env("REPORT_PERSPECTIVE", "dual", ("dual", "window"))
+REPORT_EMAIL_CADENCE = _enum_env("REPORT_EMAIL_CADENCE", "weekly", ("daily", "weekly"))
+REPORT_WEEKLY_EMAIL_WEEKDAY = int(os.getenv("REPORT_WEEKLY_EMAIL_WEEKDAY", "1"))
+if REPORT_WEEKLY_EMAIL_WEEKDAY < 1 or REPORT_WEEKLY_EMAIL_WEEKDAY > 7:
+    raise ValueError("REPORT_WEEKLY_EMAIL_WEEKDAY must be between 1 and 7")
+REPORT_WEEKLY_WINDOW_DAYS = int(os.getenv("REPORT_WEEKLY_WINDOW_DAYS", "7"))
+if REPORT_WEEKLY_WINDOW_DAYS < 1:
+    raise ValueError("REPORT_WEEKLY_WINDOW_DAYS must be >= 1")
+REPORT_EMAIL_SEND_BOOTSTRAP = os.getenv("REPORT_EMAIL_SEND_BOOTSTRAP", "true").lower() == "true"
+REPORT_EMAIL_FORCE_DISABLED = os.getenv("REPORT_EMAIL_FORCE_DISABLED", "false").lower() == "true"
 # PDF config removed in V3 — Playwright pipeline eliminated
 # ── Report Thresholds ─────────────────────────────
 NEGATIVE_THRESHOLD = int(os.getenv("REPORT_NEGATIVE_THRESHOLD", "2"))

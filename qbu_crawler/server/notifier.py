@@ -125,6 +125,15 @@ class OpenClawBridgeSender:
                 "collect_count": len(payload.get("collect_task_ids") or []),
                 "scrape_count": len(payload.get("scrape_task_ids") or []),
             }
+        if kind == "workflow_daily_digest":
+            return {
+                "logical_date": payload.get("logical_date", ""),
+                "run_id": payload.get("run_id", ""),
+                "new_review_count": payload.get("new_review_count", 0),
+                "own_new_count": payload.get("own_new_count", 0),
+                "competitor_new_count": payload.get("competitor_new_count", 0),
+                "markdown": payload.get("markdown", ""),
+            }
         # Sanitize path fields that may be None for change/quiet report modes
         # to avoid the literal string "None" in DingTalk messages.
         result = dict(payload)
@@ -242,6 +251,8 @@ def _plus_seconds(ts: str, seconds: int) -> str:
 
 def _sync_workflow_notification_status(notification: dict) -> None:
     if not str(notification.get("kind") or "").startswith("workflow_"):
+        return
+    if notification.get("kind") == "workflow_daily_digest":
         return
     payload = notification.get("payload") or {}
     run_id = payload.get("run_id")

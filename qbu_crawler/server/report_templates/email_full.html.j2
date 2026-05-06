@@ -30,6 +30,11 @@
 {% set _own_pc = _kpis.get("own_product_count", 0) %}
 {% set _comp_pc = _kpis.get("competitor_product_count", 0) %}
 {% set _ingested = _kpis.get("ingested_review_rows", 0) %}
+{% set _change_summary = (_analytics.get("change_digest") or {}).get("summary") or {} %}
+{% set _window = _analytics.get("window") or {} %}
+{% set _window_reviews = _window.get("reviews_count", _change_summary.get("ingested_review_count", 0)) %}
+{% set _report_window = snapshot.report_window or {"type": "daily", "label": "今日"} %}
+{% set _window_label = "本周" if _report_window.type == "weekly" else ("监控起点" if _report_window.type == "bootstrap" else "本期") %}
 
 {# ── 健康灯阈值 ≥85 绿 / [70,85) 黄 / <70 红 ── #}
 {% set _health_num = _health if _health is number else (_health | float if _health else 0) %}
@@ -105,9 +110,9 @@
         {# ── 1. 标题 + 副标题 ── #}
         <tr>
           <td style="padding:20px 24px 8px;">
-            <div style="font-size:18px;font-weight:800;color:#0f172a;line-height:1.3;">QBU 评论分析 · {{ logical_date }}</div>
+            <div style="font-size:18px;font-weight:800;color:#0f172a;line-height:1.3;">QBU 评论分析 · {{ _window_label }} · {{ logical_date }}</div>
             <div style="font-size:12px;color:#64748b;margin-top:6px;">
-              本期 自有 {{ _own_pc }} 款 / 竞品 {{ _comp_pc }} 款 / 共 {{ _ingested }} 条评论
+              累计 自有 {{ _own_pc }} 款 / 竞品 {{ _comp_pc }} 款 / 共 {{ _ingested }} 条评论；{{ _window_label }}新增 {{ _window_reviews or 0 }} 条评论
             </div>
           </td>
         </tr>

@@ -263,6 +263,7 @@ def _isolated_runtime(db_path, report_dir, use_llm, send_email):
         "models_db_path": models.DB_PATH,
         "report_dir": config.REPORT_DIR,
         "email_recipients": list(config.EMAIL_RECIPIENTS),
+        "email_force_disabled": getattr(config, "REPORT_EMAIL_FORCE_DISABLED", False),
         "smtp_host": config.SMTP_HOST,
         "ops_recipients": list(config.SCRAPE_QUALITY_ALERT_RECIPIENTS),
         "llm_api_base": config.LLM_API_BASE,
@@ -279,6 +280,7 @@ def _isolated_runtime(db_path, report_dir, use_llm, send_email):
     config.OPENCLAW_HOOK_URL = ""
     if not send_email:
         config.EMAIL_RECIPIENTS = []
+        config.REPORT_EMAIL_FORCE_DISABLED = True
         config.SMTP_HOST = ""
     if not use_llm:
         config.LLM_API_BASE = ""
@@ -291,6 +293,7 @@ def _isolated_runtime(db_path, report_dir, use_llm, send_email):
         models.DB_PATH = original["models_db_path"]
         config.REPORT_DIR = original["report_dir"]
         config.EMAIL_RECIPIENTS = original["email_recipients"]
+        config.REPORT_EMAIL_FORCE_DISABLED = original["email_force_disabled"]
         config.SMTP_HOST = original["smtp_host"]
         config.SCRAPE_QUALITY_ALERT_RECIPIENTS = original["ops_recipients"]
         config.LLM_API_BASE = original["llm_api_base"]

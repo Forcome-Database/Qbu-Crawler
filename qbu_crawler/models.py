@@ -20,8 +20,8 @@ _TIME_AXIS_FIELDS = {
 
 
 ABSOLUTE_FORMATS = ["%m/%d/%Y", "%Y/%m/%d"]
-RELATIVE_RE = _re.compile(r"^(?:(\d+)|a|an)\s+(day|week|month|year)s?\s+ago$", _re.IGNORECASE)
-CONFIDENCE_BY_UNIT = {"day": 0.95, "week": 0.85, "month": 0.7, "year": 0.5}
+RELATIVE_RE = _re.compile(r"^(?:(\d+)|a|an)\s+(minute|hour|day|week|month|year)s?\s+ago$", _re.IGNORECASE)
+CONFIDENCE_BY_UNIT = {"minute": 0.99, "hour": 0.98, "day": 0.95, "week": 0.85, "month": 0.7, "year": 0.5}
 
 
 def _parse_date_published(value, *, scraped_at=None, return_meta=False):
@@ -79,7 +79,11 @@ def _parse_date_published(value, *, scraped_at=None, return_meta=False):
             anchor_dt = datetime.now()
 
         # Use calendar-aware month/year subtraction to match existing behavior:
-        if unit == "day":
+        if unit == "minute":
+            parsed_dt = anchor_dt - timedelta(minutes=n)
+        elif unit == "hour":
+            parsed_dt = anchor_dt - timedelta(hours=n)
+        elif unit == "day":
             parsed_dt = anchor_dt - timedelta(days=n)
         elif unit == "week":
             parsed_dt = anchor_dt - timedelta(weeks=n)
@@ -419,12 +423,12 @@ def _decode_json_fields(row: sqlite3.Row | None, fields: tuple[str, ...] = ()) -
 def save_product(data: dict) -> int:
     conn = get_conn()
     now = _NOW_SHANGHAI
-    # ratings_only_count 默认 0：旧 scraper 不返回该字段时落 0，等同"全部都是文字评论"语义
+    has_ratings_only_count = "ratings_only_count" in data and data.get("ratings_only_count") is not None
     data = dict(data)
-    data.setdefault("ratings_only_count", 0)
+    data["ratings_only_count"] = int(data.get("ratings_only_count") or 0) if has_ratings_only_count else None
     cursor = conn.execute(f"""
         INSERT INTO products (url, site, name, sku, price, stock_status, review_count, rating, ownership, ratings_only_count, scraped_at)
-        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, :ratings_only_count, {now})
+        VALUES (:url, :site, :name, :sku, :price, :stock_status, :review_count, :rating, :ownership, COALESCE(:ratings_only_count, 0), {now})
         ON CONFLICT(url) DO UPDATE SET
             site = excluded.site,
             name = excluded.name,
@@ -434,7 +438,7 @@ def save_product(data: dict) -> int:
             review_count = excluded.review_count,
             rating = excluded.rating,
             ownership = excluded.ownership,
-            ratings_only_count = excluded.ratings_only_count,
+            ratings_only_count = COALESCE(:ratings_only_count, products.ratings_only_count),
             scraped_at = {now}
     """, data)
     product_id = cursor.lastrowid

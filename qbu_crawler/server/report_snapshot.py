@@ -975,6 +975,82 @@ def load_report_snapshot(path: str) -> dict:
     return snapshot
 
 
+def _window_since(data_until: str, window_days: int):
+    until_dt = datetime.fromisoformat(data_until)
+    return until_dt - timedelta(days=window_days)
+
+
+def _product_key(product: dict) -> tuple[str, str, str]:
+    return (
+        str(product.get("url") or ""),
+        str(product.get("sku") or product.get("product_sku") or ""),
+        str(product.get("site") or ""),
+    )
+
+
+def _merge_products_for_window_reviews(products: list[dict], reviews: list[dict], base_snapshot: dict) -> list[dict]:
+    merged = list(products or [])
+    seen = {_product_key(product) for product in merged}
+    cumulative_products = list((base_snapshot.get("cumulative") or {}).get("products") or [])
+    for review in reviews or []:
+        review_url = str(review.get("product_url") or "")
+        review_sku = str(review.get("product_sku") or review.get("sku") or "")
+        review_site = str(review.get("site") or "")
+        for product in cumulative_products:
+            product_url, product_sku, product_site = _product_key(product)
+            matched = bool(review_url and product_url == review_url)
+            if not matched and review_sku:
+                matched = product_sku == review_sku and (not review_site or not product_site or product_site == review_site)
+            if matched:
+                key = _product_key(product)
+                if key not in seen:
+                    merged.append(product)
+                    seen.add(key)
+                break
+    return merged
+
+
+def build_windowed_report_snapshot(base_snapshot: dict, *, window_type: str, window_days: int) -> dict:
+    if window_type != "weekly":
+        result = dict(base_snapshot)
+        result.setdefault("report_window", {"type": "daily", "label": "今日", "days": 1})
+        return result
+
+    data_until = base_snapshot["data_until"]
+    data_since = _window_since(data_until, window_days)
+    products, reviews = report.query_report_data(data_since, until=data_until)
+    products = _merge_products_for_window_reviews(products, reviews, base_snapshot)
+    _attach_ingested_counts(products, reviews)
+    for item in reviews:
+        item.setdefault("headline_cn", "")
+        item.setdefault("body_cn", "")
+    cumulative = base_snapshot.get("cumulative")
+    if not cumulative and config.REPORT_PERSPECTIVE == "dual":
+        cum_products, cum_reviews = report.query_cumulative_data()
+        cumulative = {
+            "products": cum_products,
+            "reviews": cum_reviews,
+            "products_count": len(cum_products),
+            "reviews_count": len(cum_reviews),
+            "translated_count": sum(1 for r in cum_reviews if r.get("translate_status") == "done"),
+            "untranslated_count": sum(1 for r in cum_reviews if r.get("translate_status") != "done"),
+        }
+    result = dict(base_snapshot)
+    result.update({
+        "data_since": data_since.isoformat(),
+        "products": products,
+        "reviews": reviews,
+        "products_count": len(products),
+        "reviews_count": len(reviews),
+        "translated_count": sum(1 for r in reviews if r.get("translate_status") == "done"),
+        "untranslated_count": sum(1 for r in reviews if r.get("translate_status") != "done"),
+        "report_window": {"type": "weekly", "label": "本周", "days": window_days},
+    })
+    if cumulative:
+        result["cumulative"] = cumulative
+    return result
+
+
 def build_fast_report(snapshot: dict) -> dict:
     return {
         "run_id": snapshot["run_id"],
@@ -1174,6 +1250,11 @@ def _call_build_dual_report_analytics(snapshot, *, synced_labels=None, trend_his
     return report_analytics.build_dual_report_analytics(snapshot, **kwargs)
 
 
+def _sync_snapshot_labels_for_analytics(snapshot):
+    label_snapshot = {"reviews": snapshot.get("reviews") or []}
+    return report_analytics.sync_review_labels(label_snapshot)
+
+
 def _generate_change_report(snapshot, send_email, prev_analytics, context):
     """Generate a change report (no new reviews, but price/stock/rating changed)."""
     run_id = snapshot.get("run_id", 0)
@@ -1194,8 +1275,10 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
                 "snapshot_hash": snapshot.get("snapshot_hash", ""),
                 **snapshot["cumulative"],
             }
+            synced_labels = _sync_snapshot_labels_for_analytics(cum_snapshot)
             cum_analytics = _call_build_report_analytics(
                 cum_snapshot,
+                synced_labels=synced_labels,
                 trend_history=trend_history,
             )
             from qbu_crawler.server.report_common import normalize_deep_report_analytics
@@ -1208,6 +1291,12 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
             Path(analytics_path).write_text(
                 json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
                 encoding="utf-8",
+            )
+            _record_artifact_safe(
+                run_id,
+                "analytics",
+                analytics_path,
+                template_version=None,
             )
             cumulative_computed = True
             _logger.info("Change report: cumulative analytics computed and saved to %s", analytics_path)
@@ -1223,6 +1312,12 @@ def _generate_change_report(snapshot, send_email, prev_analytics, context):
     html_path = None
     try:
         html_path = _render_quiet_or_change_html(snapshot, effective_analytics, changes=changes)
+        _record_artifact_safe(
+            run_id,
+            "html_attachment",
+            html_path,
+            template_version="quiet-change-v1",
+        )
     except Exception:
         _logger.exception("Change report HTML generation failed")
 
@@ -1255,6 +1350,9 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
 
     # Check if we should send this quiet-day email (also returns consecutive count)
     should_send, digest_mode, consecutive = should_send_quiet_email(run_id)
+    if send_email and (snapshot.get("report_window") or {}).get("type") == "weekly":
+        should_send = True
+        digest_mode = "weekly"
 
     # ── Cumulative analytics: compute from snapshot["cumulative"] when available ──
     cum_analytics = None
@@ -1271,8 +1369,10 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
                 "snapshot_hash": snapshot.get("snapshot_hash", ""),
                 **snapshot["cumulative"],
             }
+            synced_labels = _sync_snapshot_labels_for_analytics(cum_snapshot)
             cum_analytics = _call_build_report_analytics(
                 cum_snapshot,
+                synced_labels=synced_labels,
                 trend_history=trend_history,
             )
             from qbu_crawler.server.report_common import normalize_deep_report_analytics
@@ -1285,6 +1385,12 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
             Path(analytics_path).write_text(
                 json.dumps(cum_analytics, ensure_ascii=False, sort_keys=True, indent=2),
                 encoding="utf-8",
+            )
+            _record_artifact_safe(
+                run_id,
+                "analytics",
+                analytics_path,
+                template_version=None,
             )
             cumulative_computed = True
             _logger.info("Quiet report: cumulative analytics computed and saved to %s", analytics_path)
@@ -1299,6 +1405,12 @@ def _generate_quiet_report(snapshot, send_email, prev_analytics):
     html_path = None
     try:
         html_path = _render_quiet_or_change_html(snapshot, effective_analytics)
+        _record_artifact_safe(
+            run_id,
+            "html_attachment",
+            html_path,
+            template_version="quiet-change-v1",
+        )
     except Exception:
         _logger.exception("Quiet report HTML generation failed")
 

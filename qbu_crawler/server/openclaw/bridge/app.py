@@ -49,7 +49,7 @@ DEFAULT_TEMPLATES = {
         "完整版报告生成后会继续通知。"
     ),
     "workflow_full_report": (
-        "## ✅ 每日完整报告已生成\n\n"
+        "## ✅ 报告产物已生成\n\n"
         "- **日期**：{logical_date}\n"
         "- **workflow**：{run_id}\n"
         "- **本地报告产物**：{report_generation_status}\n"
@@ -58,6 +58,7 @@ DEFAULT_TEMPLATES = {
         "- **workflow 通知**：{workflow_notification_status}\n\n"
         "如需，我可以继续补充差评、价格波动和竞品对比解读。"
     ),
+    "workflow_daily_digest": "{markdown}",
     "workflow_report_skipped": (
         "## ✅ 每日任务已完成\n\n"
         "- **日期**：{logical_date}\n"

@@ -34,6 +34,15 @@
   {% set window_ingested_reviews = change_summary.get("ingested_review_count", analytics.kpis.get("ingested_review_rows", 0)) %}
   {% set recent_review_rows = analytics.kpis.get("recently_published_count", change_summary.fresh_review_count or 0) %}
   {% set report_contract = analytics.report_user_contract or {} %}
+  {% set panorama = panorama if panorama is defined else {"products": snapshot.products or [], "reviews": snapshot.reviews or []} %}
+  {% set report_window = snapshot.report_window or {"type": "daily", "label": "今日"} %}
+  {% if analytics.report_semantics == "bootstrap" or report_window.type == "bootstrap" %}
+    {% set change_title = "监控起点" %}
+  {% elif report_window.type == "weekly" %}
+    {% set change_title = "本周变化" %}
+  {% else %}
+    {% set change_title = "今日变化" %}
+  {% endif %}
 
   <header class="kpi-bar">
     <div class="kpi-bar-inner">
@@ -49,12 +58,12 @@
 
   <nav class="tab-nav" role="tablist">
     <button data-tab="overview" class="tab-btn tab-active" role="tab">总览</button>
-    <button data-tab="changes" class="tab-btn" role="tab">今日变化</button>
+    <button data-tab="changes" class="tab-btn" role="tab">{{ change_title }}</button>
     <button data-tab="trends" class="tab-btn" role="tab">变化趋势</button>
     <button data-tab="issues" class="tab-btn" role="tab">问题诊断 <span class="tab-badge">{{ (report_contract.get("issue_diagnostics") or analytics.issue_cards or []) | length }}</span></button>
     <button data-tab="products" class="tab-btn" role="tab">产品排行 <span class="tab-badge">{{ analytics.kpis.own_product_count or 0 }}</span></button>
     <button data-tab="competitive" class="tab-btn" role="tab">竞品启示</button>
-    <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ (snapshot.reviews or []) | length }}</span></button>
+    <button data-tab="panorama" class="tab-btn" role="tab">全景数据 <span class="tab-badge">{{ (panorama.reviews or []) | length }}</span></button>
   </nav>
 
   <main class="report-main">
@@ -90,7 +99,7 @@
       <div class="review-scope-grid">
         <div class="review-scope-item"><span>累计自有评论</span><strong>{{ own_review_rows }}</strong></div>
         <div class="review-scope-item"><span>累计竞品评论</span><strong>{{ competitor_review_rows }}</strong></div>
-        <div class="review-scope-item"><span>基线样本评论</span><strong>{{ window_ingested_reviews or 0 }}</strong></div>
+        <div class="review-scope-item"><span>本期入库评论</span><strong>{{ window_ingested_reviews or 0 }}</strong></div>
         <div class="review-scope-item"><span>近30天评论</span><strong>{{ recent_review_rows or 0 }}</strong></div>
       </div>
 
@@ -164,7 +173,7 @@
     </section>
 
     <section id="tab-changes" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">今日变化</h2>
+      <h2 class="section-title">{{ change_title }}</h2>
       <p class="section-sub">只看本期入库信号，不把全量现状和历史趋势混在一起。</p>
 
       {# F011 §4.2.4 — bootstrap 单卡 / mature 三层金字塔 #}
@@ -964,7 +973,7 @@
     <section id="tab-panorama" class="tab-panel panorama" role="tabpanel">
       <header class="section-head">
         <h2 class="section-title">全景数据</h2>
-        <p class="section-sub">{{ (snapshot.reviews or []) | length }} 条评论 · 按归属 / 评分 / 产品 / 标签 5 维筛选</p>
+        <p class="section-sub">{{ (panorama.reviews or []) | length }} 条评论 · 按归属 / 评分 / 产品 / 标签 5 维筛选</p>
       </header>
 
       {% if analytics._heatmap_data and analytics._heatmap_data.y_labels and analytics._heatmap_data.x_labels %}
@@ -1056,7 +1065,7 @@
             <label class="filter-label" for="filter-product">产品</label>
             <select id="filter-product" name="product">
               <option value="">全部产品</option>
-              {% for p in snapshot.products or [] %}
+              {% for p in panorama.products or [] %}
               <option value="{{ p.name or p.sku }}">{{ p.name or p.sku }}</option>
               {% endfor %}
             </select>
@@ -1088,7 +1097,7 @@
               </tr>
             </thead>
             <tbody>
-              {% for r in snapshot.reviews or [] %}
+              {% for r in panorama.reviews or [] %}
               {% set _body_raw = r.body_cn or r.body_translated or r.body or '' %}
               {% set _body_clean = _body_raw.split("产品：")[0].split(" 产品:")[0].rstrip(" 。.") %}
               {% set _body = _body_clean or _body_raw %}

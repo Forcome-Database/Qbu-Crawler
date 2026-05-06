@@ -1143,7 +1143,7 @@ def normalize_deep_report_analytics(analytics):
     normalized["review_scope_cards"] = [
         {"label": "累计自有评论", "value": kpis.get("own_review_rows", 0)},
         {"label": "累计竞品评论", "value": kpis.get("competitor_review_rows", 0)},
-        {"label": "基线样本评论", "value": change_summary.get("ingested_review_count", kpis.get("ingested_review_rows", 0))},
+        {"label": "本期入库评论", "value": change_summary.get("ingested_review_count", kpis.get("ingested_review_rows", 0))},
         {"label": "近30天评论", "value": recently_published or 0},
     ]
 

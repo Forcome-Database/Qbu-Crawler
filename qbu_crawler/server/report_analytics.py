@@ -621,7 +621,11 @@ def sync_review_labels(snapshot):
             if llm_labels:
                 models.replace_review_issue_labels(rid, llm_labels)
 
-    return models.list_review_issue_labels(list(all_labels))
+    persisted = models.list_review_issue_labels(list(all_labels))
+    for review_id, labels in all_labels.items():
+        if not persisted.get(review_id):
+            persisted[review_id] = labels
+    return persisted
 
 
 def _build_labeled_reviews(snapshot, synced_labels=None):

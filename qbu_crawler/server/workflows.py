@@ -18,14 +18,17 @@ from types import SimpleNamespace
 from typing import Any
 
 from qbu_crawler import __version__, config, models
+from qbu_crawler.server.daily_digest import build_daily_digest
 from qbu_crawler.server.daily_inputs import load_daily_inputs
 from qbu_crawler.server.report_snapshot import (
     FullReportGenerationError,
     build_fast_report,
+    build_windowed_report_snapshot,
     freeze_report_snapshot,
     generate_report_from_snapshot,
     load_report_snapshot,
 )
+from qbu_crawler.server.report_cadence import decide_business_email
 
 logger = logging.getLogger(__name__)
 
@@ -729,8 +732,16 @@ class WorkflowWorker:
                     "WorkflowWorker: scrape-quality summary/alert failed "
                     "(non-fatal, run %s continues)", run_id)
 
+        snapshot = load_report_snapshot(run["snapshot_path"])
+        digest = build_daily_digest(snapshot)
+        _enqueue_workflow_notification(
+            kind="workflow_daily_digest",
+            target=config.WORKFLOW_NOTIFICATION_TARGET,
+            payload=digest,
+            dedupe_key=f"workflow:{run_id}:daily-digest",
+        )
+
         if run.get("report_phase") == "none":
-            snapshot = load_report_snapshot(run["snapshot_path"])
             if snapshot.get("reviews_count", 0) == 0:
                 # No new reviews — skip fast report (meaningless without reviews),
                 # jump directly to full_pending where generate_report_from_snapshot
@@ -760,9 +771,38 @@ class WorkflowWorker:
         if run.get("report_phase") == "full_pending":
             try:
                 snapshot = load_report_snapshot(run["snapshot_path"])
-                should_send_email = _should_send_workflow_email(task_rows, snapshot)
+                from qbu_crawler.server import report_snapshot as report_snapshot_module
+                _prev_analytics, prev_snapshot = report_snapshot_module.load_previous_report_context(run_id)
+                snapshot_for_decision = dict(snapshot)
+                snapshot_for_decision["is_bootstrap"] = prev_snapshot is None
+                decision = decide_business_email(
+                    run=run,
+                    snapshot=snapshot_for_decision,
+                    mode=run.get("report_mode") or "",
+                )
+                report_snapshot_for_delivery = snapshot
+                if decision.report_window_type == "bootstrap":
+                    report_snapshot_for_delivery = dict(snapshot)
+                    report_snapshot_for_delivery["report_window"] = {
+                        "type": "bootstrap",
+                        "label": "监控起点",
+                        "days": 0,
+                    }
+                elif decision.report_window_type == "weekly":
+                    report_snapshot_for_delivery = build_windowed_report_snapshot(
+                        snapshot,
+                        window_type="weekly",
+                        window_days=decision.window_days,
+                    )
+                else:
+                    report_snapshot_for_delivery = dict(snapshot)
+                    report_snapshot_for_delivery.setdefault(
+                        "report_window",
+                        {"type": "daily", "label": "今日", "days": 1},
+                    )
+                should_send_email = decision.send_email
                 full_report = generate_report_from_snapshot(
-                    snapshot,
+                    report_snapshot_for_delivery,
                     send_email=should_send_email,
                 )
             except FullReportGenerationError as exc:
@@ -840,16 +880,21 @@ class WorkflowWorker:
                     "pdf_path": pdf_path,
                     "html_path": html_path,
                     "report_mode": full_report.get("mode", "full"),
-                    "email_status": _workflow_email_status(
+                    "email_status": _workflow_email_status_from_decision(
+                        decision=decision,
                         email_success=email_ok,
-                        untranslated_count=snapshot.get("untranslated_count", 0),
+                        untranslated_count=report_snapshot_for_delivery.get("untranslated_count", 0),
                     ),
                 },
                 dedupe_key=f"workflow:{run_id}:full-report",
             )
             email_delivery_status = "skipped"
+            delivery_last_error = None
             if should_send_email:
                 email_delivery_status = "sent" if email_ok else "failed"
+                delivery_last_error = (email or {}).get("error")
+            else:
+                delivery_last_error = decision.reason
             models.update_workflow_run(
                 run_id,
                 status="completed",
@@ -865,7 +910,7 @@ class WorkflowWorker:
                 report_generation_status="generated",
                 email_delivery_status=email_delivery_status,
                 workflow_notification_status="pending",
-                delivery_last_error=(email or {}).get("error"),
+                delivery_last_error=delivery_last_error,
             )
             try:
                 from qbu_crawler.server.report_manifest import update_analytics_delivery_from_db
@@ -1031,6 +1076,14 @@ def _workflow_email_status(email_success: bool | None, untranslated_count: int) 
     if untranslated_count > 0:
         return f"已发送（{untranslated_count} 条评论仍在翻译中）"
     return "success"
+
+
+def _workflow_email_status_from_decision(decision, email_success: bool | None, untranslated_count: int) -> str:
+    if not decision.send_email:
+        if decision.reason == "weekly_cadence_skip":
+            return "已跳过（周报频率）"
+        return f"已跳过（{decision.reason}）"
+    return _workflow_email_status(email_success, untranslated_count)
 
 
 def _should_send_workflow_email(task_rows: list[dict], snapshot: dict) -> bool:

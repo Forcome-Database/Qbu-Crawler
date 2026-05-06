@@ -366,7 +366,7 @@ class TestV3TemplateRender:
 
         assert "累计自有评论" in html
         assert "累计竞品评论" in html
-        assert "基线样本评论" in html
+        assert "本期入库评论" in html
         assert "近30天评论" in html
         assert "累计评论" in html
         assert "本期采集窗口内入库的自有产品评论行数" not in html

@@ -74,12 +74,15 @@ def _render_v3_html_string(snapshot, analytics):
       - ``render_attachment_html`` — returns the HTML string directly
         (F011 §4.2.4 contract; preferred entry for tests).
     """
+    original_snapshot = snapshot or {}
+    render_snapshot = dict(original_snapshot)
+    render_snapshot.setdefault("report_window", {"type": "daily", "label": "今日", "days": 1})
     normalized = normalize_deep_report_analytics(analytics)
     contract = normalized.get("report_user_contract") or {}
     if (contract.get("contract_context") or {}).get("snapshot_source") != "provided":
         llm_copy = None if contract.get("contract_source") == "legacy_adapter" else (normalized.get("report_copy") or None)
         contract = build_report_user_contract(
-            snapshot=snapshot or {},
+            snapshot=original_snapshot,
             analytics=normalized,
             llm_copy=llm_copy,
         )
@@ -94,8 +97,14 @@ def _render_v3_html_string(snapshot, analytics):
     if contract.get("executive_bullets"):
         normalized.setdefault("report_copy", {})["executive_bullets"] = contract["executive_bullets"][:5]
 
+    cumulative = render_snapshot.get("cumulative") or {}
+    panorama = {
+        "products": cumulative.get("products") or render_snapshot.get("products") or [],
+        "reviews": cumulative.get("reviews") or render_snapshot.get("reviews") or [],
+    }
+
     # F011 §4.2.6 — annotate reviews for panorama filter chrome (idempotent)
-    _annotate_reviews(snapshot.get("reviews") or [], snapshot.get("logical_date"))
+    _annotate_reviews(panorama.get("reviews") or [], render_snapshot.get("logical_date"))
 
     # Compute alert level before passing to template
     computed_alert = _compute_alert_level(normalized)
@@ -105,8 +114,8 @@ def _render_v3_html_string(snapshot, analytics):
 
     # Add has_estimated_dates flag for template
     normalized["has_estimated_dates"] = has_estimated_dates(
-        snapshot.get("reviews", []),
-        snapshot.get("logical_date", ""),
+        render_snapshot.get("reviews", []),
+        render_snapshot.get("logical_date", ""),
     )
 
     template_dir = Path(__file__).parent / "report_templates"
@@ -132,9 +141,9 @@ def _render_v3_html_string(snapshot, analytics):
         alert_level, alert_text = "green", ""
 
     return template.render(
-        logical_date=snapshot.get("logical_date", ""),
+        logical_date=render_snapshot.get("logical_date", ""),
         mode=normalized.get("mode", "baseline"),
-        snapshot=snapshot,
+        snapshot=render_snapshot,
         analytics=normalized,
         charts=charts,
         alert_level=alert_level,
@@ -145,6 +154,7 @@ def _render_v3_html_string(snapshot, analytics):
         threshold=config.NEGATIVE_THRESHOLD,
         cumulative_kpis=normalized.get("cumulative_kpis") or normalized.get("kpis", {}),
         window=normalized.get("window", {}),
+        panorama=panorama,
     )
 
 

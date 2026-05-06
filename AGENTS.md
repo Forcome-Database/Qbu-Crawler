@@ -398,3 +398,27 @@ CSV 文件存放在 OpenClaw workspace `~/.openclaw/workspace/data/`，与项目
 - `qbu_crawler/server/report_snapshot.py` - full / change / quiet 三条报告路径统一注入历史趋势输入，`REPORT_PERSPECTIVE=window` 下趋势页仍基于历史库。
 - `qbu_crawler/server/report_templates/daily_report_v3.html.j2`、`.css`、`.js` - 趋势页优先渲染历史趋势工作台，每个面板保持一张主图、最多三个指标和一张明细表。
 - `tests/server/test_historical_trend_queries.py`、`test_historical_trend_digest.py`、`test_historical_report_paths.py`、`test_historical_trend_template.py` - 锁定历史截止、四维度趋势口径、报告路径接入和 HTML 禁词。
+
+## 2026-05-06 测试14 报表语义与采集质量增量
+
+- `qbu_crawler/server/report_templates/email_full.html.j2` - 邮件副标题区分累计评论与本期新增评论，禁止把累计评论数写成“本期”。
+- `qbu_crawler/server/report_templates/daily_report_v3.html.j2` 与 `qbu_crawler/server/report_common.py` - 总览范围卡将窗口指标命名为“本期入库评论”，不再误标为“基线样本评论”。
+- `qbu_crawler/server/report_html.py` 与 `qbu_crawler/server/report_templates/daily_report_v3.html.j2` - 全景页优先消费 `snapshot.cumulative.products/reviews`，缺失时才回退本期窗口；全景数据必须表达累计视角，今日变化才表达本期窗口。
+- `qbu_crawler/server/scrape_quality.py` - 采集完整率优先使用 task `product_summaries[].extracted_review_count / text_review_count`；新增保存数 `saved_review_count` 只表示去重后的新增入库，不得作为低覆盖告警分子。
+- `qbu_crawler/models.py` - 相对发布时间支持 minute/hour；产品 UPSERT 在本次未提供 `ratings_only_count` 时保留历史值，避免 shadow root 失败把可采集文字评论分母污染为全量评论数。
+- `qbu_crawler/server/report.py` - 历史趋势查询对不可解析的发布时间回退到 `scraped_at` 日期，兼容已入库的 `a hour ago` 等旧相对时间数据。
+- `qbu_crawler/server/report_snapshot.py` 与 `qbu_crawler/server/report_analytics.py` - quiet/change 路径与 full 路径统一同步 `analysis_labels` 后构建风险分析，并登记 analytics/html artifacts。
+- `tests/server/test_test14_report_regressions.py` 与 `docs/devlogs/D029-test14-report-semantics-and-quality.md` - 锁定测试14生产问题的回归用例与修复记录。
+
+## 2026-05-07 周报邮件与每日钉钉摘要增量
+
+- `REPORT_EMAIL_CADENCE` 控制业务邮件频率，默认 `weekly`；`daily` 可恢复旧的每日业务邮件行为。
+- `REPORT_WEEKLY_EMAIL_WEEKDAY` 使用 ISO weekday，默认 `1` 表示周一发送周报；`REPORT_WEEKLY_WINDOW_DAYS` 默认 `7`，决定“本周变化”的入库评论窗口。
+- `REPORT_EMAIL_SEND_BOOTSTRAP=true` 时首次可报告 run 仍发送全量基线邮件；首次判断基于历史报告上下文，不依赖 `run_id == 1`。
+- `REPORT_EMAIL_FORCE_DISABLED` 是模拟和内部测试用总开关，生产默认不配置或保持 `false`。
+- DailySchedulerWorker 每天仍照常采集、冻结 snapshot 并生成本地产物；非周报日业务邮件 `email_delivery_status=skipped` 且 `delivery_last_error=weekly_cadence_skip` 是预期状态，不表示报告失败。
+- `workflow_daily_digest` 每天入 `notification_outbox`，用于钉钉群发送轻量业务摘要；有新增评论时展示自有 TOP3、竞品 TOP3 和确定性分析，无新增评论时发送“今日无新增评论”。
+- `workflow_daily_digest` 不参与完整报告通知状态同步，不应把日摘要 deadletter 误判为 full report 降级。
+- `report_window.type=daily|weekly|bootstrap` 驱动用户可见窗口文案；周报 HTML/邮件显示“本周变化”，首次基线显示“监控起点”。
+- 周报窗口只影响本期变化数据；“全景数据”继续优先消费 `snapshot.cumulative.products/reviews`，保持累计视角。
+- `qbu_crawler/server/report_cadence.py` 收口业务邮件发送决策；`qbu_crawler/server/daily_digest.py` 只使用 snapshot/DB 已有字段构建钉钉摘要，不调用 LLM 编造 SKU、评论或数字。

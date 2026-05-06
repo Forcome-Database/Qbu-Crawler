@@ -45,7 +45,7 @@ def _insert_product(conn, *, url, site, sku, ownership, name=None):
     return conn.execute("SELECT id FROM products WHERE url = ?", (url,)).fetchone()["id"]
 
 
-def _insert_review(conn, *, product_id, headline, rating, published, scraped_at):
+def _insert_review(conn, *, product_id, headline, rating, published, scraped_at, parsed=None):
     conn.execute(
         """
         INSERT INTO reviews (product_id, author, headline, body, body_hash,
@@ -61,7 +61,7 @@ def _insert_review(conn, *, product_id, headline, rating, published, scraped_at)
             headline,
             rating,
             published,
-            published,
+            published if parsed is None else parsed,
             "[]",
             scraped_at,
         ),
@@ -108,6 +108,39 @@ def test_query_trend_history_reviews_excludes_future_rows(trend_db):
     assert {review["headline"] for review in reviews} == {"current", "previous"}
     assert all(str(review["date_published_parsed"]) < "2026-04-30" for review in reviews)
     assert all(str(review["scraped_at"]) < "2026-04-30 00:00:00" for review in reviews)
+
+
+def test_query_trend_history_includes_unparsed_hour_relative_rows_by_scraped_at(trend_db):
+    from qbu_crawler.server import report
+
+    conn = _get_test_conn(trend_db)
+    own_id = _insert_product(
+        conn,
+        url="https://example.com/own-hour",
+        site="basspro",
+        sku="SKU-HOUR",
+        ownership="competitor",
+    )
+    _insert_snapshot(conn, product_id=own_id, rating=4.0, review_count=8, scraped_at="2026-05-06 00:20:00")
+    _insert_review(
+        conn,
+        product_id=own_id,
+        headline="Will break fast",
+        rating=1,
+        published="a hour ago",
+        parsed=None,
+        scraped_at="2026-05-06 00:19:00",
+    )
+    conn.commit()
+    conn.close()
+
+    products, reviews = report.query_trend_history(
+        until="2026-05-07T00:00:00+08:00",
+        lookback_days=7,
+    )
+
+    assert [product["sku"] for product in products] == ["SKU-HOUR"]
+    assert [review["headline"] for review in reviews] == ["Will break fast"]
 
 
 def test_get_product_snapshots_until_excludes_future_rows_and_same_sku_other_site(trend_db):
