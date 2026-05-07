@@ -16,7 +16,7 @@
   <tr>
     <td style="background:#4f46e5;padding:16px 24px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-        <td style="color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 网评监控 · 数据变动</td>
+        <td style="color:#ffffff;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">QBU 网评监控 · {% if is_weekly %}本周数据变动{% else %}数据变动{% endif %}</td>
         <td style="color:rgba(255,255,255,0.6);font-size:11px;text-align:right;white-space:nowrap;">{{ logical_date }}</td>
       </tr></table>
     </td>

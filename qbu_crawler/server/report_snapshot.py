@@ -1149,13 +1149,23 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
     )
 
     logical_date = snapshot.get("logical_date", "")
+    report_window = snapshot.get("report_window") or {}
+    is_weekly = report_window.get("type") == "weekly"
     kpis = (  # noqa: F841 — kept for future template use
         (prev_analytics or {}).get("kpis", {}) if mode != "full"
         else (analytics or {}).get("kpis", {})
     )
 
     # Build subject
-    if mode == "full":
+    if is_weekly:
+        if mode == "change":
+            prefix = _change_report_subject_prefix(changes or {})
+            subject = f"{prefix} 产品评论周报 {logical_date}"
+        elif mode == "quiet":
+            subject = f"[无新增评论] 产品评论周报 {logical_date}"
+        else:
+            subject = f"产品评论周报 {logical_date}"
+    elif mode == "full":
         subject = f"产品评论日报 {logical_date}"
     elif mode == "change":
         prefix = _change_report_subject_prefix(changes or {})
@@ -1186,6 +1196,8 @@ def _send_mode_email(mode, snapshot, prev_analytics, changes=None,
             report_copy=(analytics or {}).get("report_copy", {}),
             translate_stats=models.get_translate_stats() if mode == "quiet" else None,
             consecutive_quiet_days=consecutive_quiet,
+            report_window=report_window,
+            is_weekly=is_weekly,
         )
     except Exception as e:
         _logger.exception("Email template rendering failed for mode %s", mode)

@@ -19,6 +19,9 @@
 {% set _priorities   = (_contract.get("action_priorities") or [])[:3] %}
 {% set _hero         = _report_copy.get("hero_headline") or "" %}
 {% set _product_status = _self.get("product_status") or [] %}
+{% set _email_evidence = _analytics.get("email_evidence") or {} %}
+{% set _own_evidence = _email_evidence.get("own") or [] %}
+{% set _competitor_evidence = _email_evidence.get("competitor") or [] %}
 
 {# ── KPI 数值 ── #}
 {% set _health = _kpis.get("health_index") %}
@@ -182,6 +185,46 @@
               <li>{{ b }}</li>
               {% endfor %}
             </ul>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+
+        {% if _own_evidence or _competitor_evidence %}
+        <tr>
+          <td style="padding:0 24px 16px;">
+            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">代表性原文证据</div>
+            {% if _own_evidence %}
+            <div style="margin-top:8px;font-size:13px;font-weight:700;color:#0f172a;">{{ _email_evidence.get("own_title") or "自有证据" }}</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+              {% for item in _own_evidence %}
+              <tr>
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;font-size:12px;color:#334155;line-height:1.65;">
+                  <strong>SKU: {{ item.sku }}</strong> · 评分 {{ item.rating or "未知" }} 分 · {{ item.issue }}<br>
+                  原文：{{ item.original }}<br>
+                  译文：{{ item.translation }}<br>
+                  判断：{{ item.analysis }}
+                </td>
+              </tr>
+              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% endfor %}
+            </table>
+            {% endif %}
+            {% if _competitor_evidence %}
+            <div style="margin-top:10px;font-size:13px;font-weight:700;color:#0f172a;">{{ _email_evidence.get("competitor_title") or "竞品证据" }}</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+              {% for item in _competitor_evidence %}
+              <tr>
+                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;font-size:12px;color:#334155;line-height:1.65;">
+                  <strong>SKU: {{ item.sku }}</strong> · 评分 {{ item.rating or "未知" }} 分 · {{ item.issue }}<br>
+                  原文：{{ item.original }}<br>
+                  译文：{{ item.translation }}<br>
+                  判断：{{ item.analysis }}
+                </td>
+              </tr>
+              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% endfor %}
+            </table>
             {% endif %}
           </td>
         </tr>

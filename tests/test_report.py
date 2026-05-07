@@ -810,6 +810,29 @@ def test_build_daily_deep_report_email_keeps_only_core_summary():
     assert "竞品机会窗口" not in body
 
 
+def test_build_daily_deep_report_email_subject_uses_report_window():
+    from qbu_crawler.server.report import build_daily_deep_report_email
+
+    weekly_subject, _ = build_daily_deep_report_email(
+        {
+            "logical_date": "2026-05-07",
+            "report_window": {"type": "weekly", "label": "本周", "days": 7},
+        },
+        {"kpis": {"product_count": 3}, "self": {"risk_products": []}},
+    )
+    bootstrap_subject, _ = build_daily_deep_report_email(
+        {
+            "logical_date": "2026-05-07",
+            "report_window": {"type": "bootstrap", "label": "监控起点", "days": 0},
+        },
+        {"kpis": {"product_count": 3}, "self": {"risk_products": []}},
+    )
+
+    assert "产品评论周报" in weekly_subject
+    assert "产品评论日报" not in weekly_subject
+    assert "监控起点" in bootstrap_subject
+
+
 # ---------------------------------------------------------------------------
 # generate_report (full pipeline)
 # ---------------------------------------------------------------------------

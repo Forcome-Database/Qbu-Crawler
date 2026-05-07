@@ -310,3 +310,65 @@ def test_email_full_handles_none_report_copy():
     # mock executive bullets text shouldn't appear.
     assert "本期口碑稳健" not in html
     assert ".75 HP 售后开关失灵" not in html
+
+
+def test_email_full_renders_representative_original_evidence():
+    """周报邮件正文要带少量可追溯原文证据，而不是只给结论。"""
+    snapshot = _mock_snapshot("2026-05-07")
+    snapshot["report_window"] = {"type": "weekly", "label": "本周", "days": 7}
+    snapshot["reviews"] = [
+        {
+            "id": 1,
+            "product_sku": "OWN-1",
+            "ownership": "own",
+            "rating": 1,
+            "headline": "Hard to clean",
+            "body": "Meat gets stuck in the seams and takes forever to clean.",
+            "headline_cn": "很难清洁",
+            "body_cn": "肉屑容易卡在接缝处，每次清理很耗时。",
+            "analysis_labels": '[{"code":"cleaning_maintenance","display":"清洁维护"}]',
+            "analysis_insight_cn": "清洁维护是本周自有产品最明确风险。",
+        },
+        {
+            "id": 2,
+            "product_sku": "CMP-1",
+            "ownership": "competitor",
+            "rating": 5,
+            "headline": "Powerful",
+            "body": "It handled venison without slowing down.",
+            "headline_cn": "动力强",
+            "body_cn": "处理鹿肉时没有明显降速。",
+            "analysis_labels": '[{"code":"strong_performance","display":"性能强"}]',
+            "analysis_insight_cn": "竞品动力表现可作为卖点对标。",
+        },
+    ]
+
+    html = render_email_full(snapshot=snapshot, analytics=_mock_analytics())
+
+    assert "代表性原文证据" in html
+    assert "自有风险证据" in html
+    assert "竞品亮点证据" in html
+    assert "原文：Meat gets stuck in the seams" in html
+    assert "译文：肉屑容易卡在接缝处" in html
+    assert "原文：It handled venison" in html
+
+
+def test_email_full_does_not_label_neutral_evidence_as_highlight():
+    snapshot = _mock_snapshot("2026-05-07")
+    snapshot["reviews"] = [
+        {
+            "id": 3,
+            "product_sku": "OWN-NEUTRAL",
+            "ownership": "own",
+            "rating": 3,
+            "headline": "Okay",
+            "body": "It is okay for occasional use.",
+            "headline_cn": "还可以",
+            "body_cn": "偶尔使用还可以。",
+        }
+    ]
+
+    html = render_email_full(snapshot=snapshot, analytics=_mock_analytics())
+
+    assert "自有新增评论证据" in html
+    assert "自有亮点证据" not in html

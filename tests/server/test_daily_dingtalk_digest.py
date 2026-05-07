@@ -47,6 +47,8 @@ def test_daily_digest_builds_own_and_competitor_top3():
     assert digest["competitor_top"][0]["sku"] == "CMP-1"
     assert "\u6e05\u6d01\u4fbf\u5229" in digest["analysis"]
     assert "SKU:OWN-1" in digest["markdown"]
+    assert "原文：Switch broke after one use" in digest["markdown"]
+    assert "译文：用一次开关就坏了" in digest["markdown"]
 
 
 def test_daily_digest_handles_no_new_reviews():
@@ -91,6 +93,62 @@ def test_daily_digest_truncates_original_text_without_inventing_sku():
     assert len(text) <= 140
     assert "SKU:SKU-ONLY" in digest["markdown"]
     assert "UNKNOWN" not in digest["markdown"]
+
+
+def test_daily_digest_switches_to_own_highlights_when_only_own_positive_reviews():
+    from qbu_crawler.server.daily_digest import build_daily_digest
+
+    digest = build_daily_digest({
+        "run_id": 12,
+        "logical_date": "2026-05-07",
+        "reviews_count": 1,
+        "reviews": [{
+            "id": 401,
+            "product_sku": "OWN-GOOD",
+            "product_name": "Own Good",
+            "ownership": "own",
+            "rating": 5,
+            "headline": "Powerful",
+            "body": "This grinder is powerful and easy to clean.",
+            "body_cn": "这台绞肉机动力很强，也容易清洁。",
+            "analysis_labels": '[{"code":"strong_performance","display":"性能强"}]',
+            "analysis_insight_cn": "自有产品动力表现获得正向验证，可沉淀为卖点证据。",
+        }],
+        "cumulative": {"reviews": [{"ownership": "own"}]},
+    })
+
+    assert "自有亮点 TOP3" in digest["markdown"]
+    assert "自有风险 TOP3" not in digest["markdown"]
+    assert "竞品\n今日无竞品新增评论" in digest["markdown"]
+    assert "亮点 性能强" in digest["markdown"]
+    assert "原文：This grinder is powerful and easy to clean." in digest["markdown"]
+    assert "译文：这台绞肉机动力很强，也容易清洁。" in digest["markdown"]
+    assert "自有产品动力表现获得正向验证" in digest["markdown"]
+
+
+def test_daily_digest_does_not_label_neutral_reviews_as_highlights():
+    from qbu_crawler.server.daily_digest import build_daily_digest
+
+    digest = build_daily_digest({
+        "run_id": 13,
+        "logical_date": "2026-05-07",
+        "reviews_count": 1,
+        "reviews": [{
+            "id": 501,
+            "product_sku": "OWN-NEUTRAL",
+            "ownership": "own",
+            "rating": 3,
+            "headline": "Okay",
+            "body": "It is okay for occasional use.",
+            "body_cn": "偶尔使用还可以。",
+        }],
+    })
+
+    assert "自有新增评论 TOP3" in digest["markdown"]
+    assert "自有亮点 TOP3" not in digest["markdown"]
+    assert "亮点 未分类" not in digest["markdown"]
+    assert "问题/反馈 未分类" in digest["markdown"]
+    assert "自有新增评论集中在 OWN-NEUTRAL" in digest["analysis"]
 
 
 def test_workflow_enqueues_daily_digest_for_no_new_reviews(tmp_path, monkeypatch):

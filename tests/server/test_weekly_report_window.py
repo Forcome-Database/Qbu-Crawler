@@ -97,3 +97,49 @@ def test_weekly_quiet_report_bypasses_quiet_email_throttle(tmp_path, monkeypatch
 
     assert result["email"]["success"] is True
     assert result["email_skipped"] is False
+
+
+def test_weekly_quiet_email_uses_weekly_subject_and_body(monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    captured = {}
+    monkeypatch.setattr(report_snapshot, "get_email_recipients", lambda: ["a@example.com"])
+    monkeypatch.setattr(report_snapshot.report, "send_email", lambda **kwargs: captured.update(kwargs) or {"success": True})
+    monkeypatch.setattr(report_snapshot.models, "get_translate_stats", lambda: {})
+
+    result = report_snapshot._send_mode_email(
+        "quiet",
+        {
+            "logical_date": "2026-05-04",
+            "snapshot_at": "2026-05-04T01:00:00+08:00",
+            "report_window": {"type": "weekly", "label": "本周", "days": 7},
+        },
+        {"kpis": {}},
+        consecutive_quiet=7,
+    )
+
+    assert result["success"] is True
+    assert "产品评论周报" in captured["subject"]
+    assert "本周无新增评论" in captured["body_html"]
+
+
+def test_weekly_change_email_uses_weekly_subject(monkeypatch):
+    from qbu_crawler.server import report_snapshot
+
+    captured = {}
+    monkeypatch.setattr(report_snapshot, "get_email_recipients", lambda: ["a@example.com"])
+    monkeypatch.setattr(report_snapshot.report, "send_email", lambda **kwargs: captured.update(kwargs) or {"success": True})
+
+    result = report_snapshot._send_mode_email(
+        "change",
+        {
+            "logical_date": "2026-05-04",
+            "snapshot_at": "2026-05-04T01:00:00+08:00",
+            "report_window": {"type": "weekly", "label": "本周", "days": 7},
+        },
+        {"kpis": {}},
+        changes={"has_changes": True, "price_changes": [{"sku": "A"}]},
+    )
+
+    assert result["success"] is True
+    assert "产品评论周报" in captured["subject"]

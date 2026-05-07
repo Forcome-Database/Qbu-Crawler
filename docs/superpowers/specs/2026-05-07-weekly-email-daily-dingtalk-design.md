@@ -173,8 +173,9 @@ TOP 选择规则：
   - 优先 5 星或 sentiment=positive 的好评，用于借鉴。
   - 若无好评，再展示竞品差评作为机会点。
 - 原文：
-  - 优先展示中文 `body_cn`，并可附英文原文摘要。
-  - 如果没有中文，展示 `body`。
+  - `原文` 必须展示原始 `body` / `headline`。
+  - `译文` 展示 `body_cn` / `headline_cn`，缺失时显示“翻译中”。
+  - 钉钉只展示少量代表性证据，完整原文、译文、图片和明细进入 HTML / Excel 附件。
 - 问题/亮点：
   - 优先 `analysis_labels[0].code` 映射中文标签。
   - fallback 到 `impact_category/failure_mode`。
@@ -344,9 +345,9 @@ dedupe key：
 - 风险：周报窗口和累计窗口再次混淆。
   - 缓解：引入 `report_window`，模板只通过该字段决定“今日/本周”文案；全景继续消费 `snapshot.cumulative`。
 - 风险：钉钉摘要过长。
-  - 缓解：TOP3 每条限制原文长度，最多自有 3 条 + 竞品 3 条。
+  - 缓解：TOP3 每条限制原文、译文和判断长度，最多自有 3 条 + 竞品 3 条。
 - 风险：当天评论未翻译完成时摘要空白。
-  - 缓解：优先中文，缺失时用英文原文；分析用现有标签 deterministic fallback。
+  - 缓解：原文始终使用原始评论；译文缺失时显示“翻译中”；分析用现有 insight / 标签 deterministic fallback。
 - 风险：weekly snapshot 改动影响日报。
   - 缓解：daily snapshot 冻结语义不变，weekly 仅在邮件生成入口构造派生 snapshot。
 - 风险：已有 tests 认为 quiet 前 3 天发邮件。

@@ -659,6 +659,7 @@ def render_email_full(snapshot, analytics):
         )
     if "health_index" in input_kpis:
         email_analytics.setdefault("report_user_contract", {}).setdefault("kpis", {})["health_index"] = input_kpis["health_index"]
+    email_analytics["email_evidence"] = _build_email_evidence(snapshot or {})
     tpl = env.get_template("email_full.html.j2")
     return tpl.render(
         snapshot=snapshot or {},
@@ -667,7 +668,88 @@ def render_email_full(snapshot, analytics):
     )
 
 
-def _build_email_subject(normalized, logical_date):
+def _build_email_evidence(snapshot):
+    reviews = list((snapshot or {}).get("reviews") or [])
+
+    def rating_value(review, default=0):
+        try:
+            return float(review.get("rating"))
+        except (TypeError, ValueError):
+            return default
+
+    def parse_labels(review):
+        labels = review.get("analysis_labels")
+        if isinstance(labels, str):
+            try:
+                labels = json.loads(labels)
+            except Exception:
+                labels = []
+        if not isinstance(labels, list):
+            return []
+        return [item for item in labels if isinstance(item, dict)]
+
+    def label_display(review):
+        labels = parse_labels(review)
+        if labels:
+            first = labels[0]
+            code = str(first.get("code") or "").strip()
+            return (
+                str(first.get("display") or first.get("label") or "").strip()
+                or _LABEL_DISPLAY.get(code)
+                or code
+            )
+        return str(review.get("impact_category") or review.get("failure_mode") or "").strip()
+
+    def truncate(value, limit=180):
+        text = str(value or "").replace("\n", " ").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1].rstrip() + "…"
+
+    def item(review):
+        return {
+            "sku": review.get("product_sku") or review.get("sku") or "未知 SKU",
+            "rating": review.get("rating"),
+            "issue": label_display(review) or "未分类",
+            "original": truncate(review.get("body") or review.get("headline")),
+            "translation": truncate(review.get("body_cn") or review.get("headline_cn")) or "翻译中",
+            "analysis": truncate(review.get("analysis_insight_cn") or review.get("analysis_insight_en") or label_display(review), 120),
+        }
+
+    own = [r for r in reviews if r.get("ownership") == "own"]
+    competitors = [r for r in reviews if r.get("ownership") == "competitor"]
+    own_risk = sorted(
+        [r for r in own if rating_value(r, 5) <= config.NEGATIVE_THRESHOLD],
+        key=lambda r: (rating_value(r, 5), str(r.get("scraped_at") or "")),
+    )
+    own_positive = sorted(
+        [r for r in own if rating_value(r, 0) >= 4 or str(r.get("sentiment") or "").lower() == "positive"],
+        key=lambda r: (-rating_value(r, 0), str(r.get("scraped_at") or "")),
+    )
+    competitor_positive = sorted(
+        [r for r in competitors if rating_value(r, 0) >= 4 or str(r.get("sentiment") or "").lower() == "positive"],
+        key=lambda r: (-rating_value(r, 0), str(r.get("scraped_at") or "")),
+    )
+    competitor_negative = sorted(
+        [r for r in competitors if rating_value(r, 5) <= config.NEGATIVE_THRESHOLD],
+        key=lambda r: (rating_value(r, 5), str(r.get("scraped_at") or "")),
+    )
+    own_source = own_risk or own_positive or own
+    competitor_source = competitor_positive or competitor_negative or competitors
+    own_title = "自有风险证据" if own_risk else ("自有亮点证据" if own_positive else "自有新增评论证据")
+    competitor_title = (
+        "竞品亮点证据" if competitor_positive
+        else ("竞品机会证据" if competitor_negative else "竞品新增评论证据")
+    )
+    return {
+        "own_title": own_title,
+        "competitor_title": competitor_title,
+        "own": [item(r) for r in own_source[:2]],
+        "competitor": [item(r) for r in competitor_source[:2]],
+    }
+
+
+def _build_email_subject(normalized, logical_date, snapshot=None):
     """Generate a dynamic email subject line with alert level prefix."""
     from qbu_crawler.server.report_common import _compute_alert_level
     alert_level, _ = _compute_alert_level(normalized)
@@ -675,7 +757,10 @@ def _build_email_subject(normalized, logical_date):
     top = (normalized.get("self", {}).get("risk_products") or [None])[0]
     top_name = top["product_name"] if top else ""
     count = normalized.get("kpis", {}).get("product_count", 0)
-    return f"{prefix}产品评论日报 {logical_date} — {top_name} 等 {count} 个产品"
+    report_window = (snapshot or {}).get("report_window") or {}
+    window_type = report_window.get("type")
+    title = "产品评论周报" if window_type == "weekly" else ("产品评论监控起点" if window_type == "bootstrap" else "产品评论日报")
+    return f"{prefix}{title} {logical_date} — {top_name} 等 {count} 个产品"
 
 
 def _ensure_humanized_bullets(normalized):
@@ -689,7 +774,7 @@ def _ensure_humanized_bullets(normalized):
 def build_daily_deep_report_email(snapshot, analytics):
     normalized = normalize_deep_report_analytics(analytics)
     _ensure_humanized_bullets(normalized)
-    subject = _build_email_subject(normalized, snapshot["logical_date"])
+    subject = _build_email_subject(normalized, snapshot["logical_date"], snapshot)
     template_env = _report_template_env()
     body = template_env.get_template("daily_report_email_body.txt.j2").render(
         snapshot=snapshot,
