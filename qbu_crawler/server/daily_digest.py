@@ -118,6 +118,21 @@ def _render_items(items: list[dict], *, empty: str, competitor: bool = False, la
     return lines
 
 
+def _render_neutral_items(items: list[dict], *, title: str) -> list[str]:
+    if not items:
+        return []
+    lines = [title]
+    for index, item in enumerate(items, start=1):
+        lines.append(
+            f"{index}. SKU:{item['sku']}\uff0c{TEXT_NEUTRAL}\uff0c"
+            f"\u8bc4\u5206 {item.get('rating') or TEXT_UNKNOWN} \u5206\uff0c\u53cd\u9988 {item['issue']}"
+        )
+        lines.append(f"  \u539f\u6587\uff1a{item['original']}")
+        lines.append(f"  \u8bd1\u6587\uff1a{item['translation'] or TEXT_TRANSLATING}")
+        lines.append(f"  \u5224\u65ad\uff1a{item['analysis']}")
+    return lines
+
+
 def _build_analysis(payload: dict) -> str:
     if payload["new_review_count"] == 0:
         return (
@@ -172,8 +187,8 @@ def _render_markdown(payload: dict) -> str:
         f"## QBU \u4eca\u65e5\u8bc4\u8bba\u76d1\u63a7 · {payload['logical_date']}",
         "",
         f"{TEXT_HAS_NEW} `{payload['new_review_count']}` \u6761",
-        f"\u81ea\u6709\u65b0\u589e {payload['own_new_count']} \u6761\uff1a\u597d\u8bc4 {payload['own_positive_count']} \u6761\uff0c\u5dee\u8bc4 {payload['own_negative_count']} \u6761",
-        f"\u7ade\u54c1\u65b0\u589e {payload['competitor_new_count']} \u6761\uff1a\u597d\u8bc4 {payload['competitor_positive_count']} \u6761\uff0c\u5dee\u8bc4 {payload['competitor_negative_count']} \u6761",
+        f"\u81ea\u6709\u65b0\u589e {payload['own_new_count']} \u6761\uff1a\u597d\u8bc4 {payload['own_positive_count']} \u6761\uff0c\u4e2d\u8bc4 {payload['own_neutral_count']} \u6761\uff0c\u5dee\u8bc4 {payload['own_negative_count']} \u6761",
+        f"\u7ade\u54c1\u65b0\u589e {payload['competitor_new_count']} \u6761\uff1a\u597d\u8bc4 {payload['competitor_positive_count']} \u6761\uff0c\u4e2d\u8bc4 {payload['competitor_neutral_count']} \u6761\uff0c\u5dee\u8bc4 {payload['competitor_negative_count']} \u6761",
         "",
         f"### {_section_title('own', payload['own_section_type'])}" if payload["own_top"] else "### \u81ea\u6709",
     ]
@@ -188,6 +203,12 @@ def _render_markdown(payload: dict) -> str:
     lines.extend(_render_items(payload["own_top"], empty="\u4eca\u65e5\u65e0\u81ea\u6709\u65b0\u589e\u8bc4\u8bba", label_name=own_label))
     lines.extend(["", f"### {_section_title('competitor', payload['competitor_section_type'])}" if payload["competitor_top"] else "### \u7ade\u54c1"])
     lines.extend(_render_items(payload["competitor_top"], empty="\u4eca\u65e5\u65e0\u7ade\u54c1\u65b0\u589e\u8bc4\u8bba", competitor=True, label_name=competitor_label))
+    if payload["own_neutral_top"] or payload["competitor_neutral_top"]:
+        lines.extend(["", "### \u4e2d\u8bc4\u89c2\u5bdf"])
+        lines.extend(_render_neutral_items(payload["own_neutral_top"], title=f"\u81ea\u6709\u4e2d\u8bc4 {payload['own_neutral_count']} \u6761"))
+        if payload["own_neutral_top"] and payload["competitor_neutral_top"]:
+            lines.append("")
+        lines.extend(_render_neutral_items(payload["competitor_neutral_top"], title=f"\u7ade\u54c1\u4e2d\u8bc4 {payload['competitor_neutral_count']} \u6761"))
     lines.extend(["", f"\u5206\u6790\uff1a{payload['analysis']}"])
     return "\n".join(lines)
 
@@ -204,6 +225,8 @@ def build_daily_digest(snapshot: dict) -> dict:
         if _rating_value(r, 0) >= 4 or _text(r.get("sentiment")).lower() == "positive"
     ]
     competitor_negative = [r for r in competitor_reviews if _rating_value(r, 5) <= config.NEGATIVE_THRESHOLD]
+    own_neutral = [r for r in own_reviews if r not in own_positive and r not in own_negative]
+    competitor_neutral = [r for r in competitor_reviews if r not in competitor_positive and r not in competitor_negative]
     own_section_type = "risk" if own_negative else ("highlight" if own_positive else "neutral")
     competitor_section_type = "highlight" if competitor_positive else ("opportunity" if competitor_negative else "neutral")
     own_source = sorted(own_negative, key=_negative_rank) if own_negative else sorted(own_reviews, key=_positive_rank)
@@ -214,6 +237,8 @@ def build_daily_digest(snapshot: dict) -> dict:
     )
     own_top = [_review_item(r) for r in own_source[:3]]
     competitor_top = [_review_item(r) for r in competitor_source[:3]]
+    own_neutral_top = [_review_item(r) for r in sorted(own_neutral, key=_positive_rank)[:1]]
+    competitor_neutral_top = [_review_item(r) for r in sorted(competitor_neutral, key=_positive_rank)[:1]]
     payload = {
         "run_id": snapshot.get("run_id"),
         "logical_date": snapshot.get("logical_date", ""),
@@ -221,13 +246,17 @@ def build_daily_digest(snapshot: dict) -> dict:
         "own_new_count": len(own_reviews),
         "competitor_new_count": len(competitor_reviews),
         "own_positive_count": len(own_positive),
+        "own_neutral_count": len(own_neutral),
         "own_negative_count": len(own_negative),
         "competitor_positive_count": len(competitor_positive),
+        "competitor_neutral_count": len(competitor_neutral),
         "competitor_negative_count": len(competitor_negative),
         "cumulative_own_count": sum(1 for r in cumulative_reviews if r.get("ownership") == "own"),
         "cumulative_competitor_count": sum(1 for r in cumulative_reviews if r.get("ownership") == "competitor"),
         "own_top": own_top,
         "competitor_top": competitor_top,
+        "own_neutral_top": own_neutral_top,
+        "competitor_neutral_top": competitor_neutral_top,
         "own_section_type": own_section_type,
         "competitor_section_type": competitor_section_type,
         "message_title": TEXT_NO_NEW if not reviews else TEXT_HAS_NEW,

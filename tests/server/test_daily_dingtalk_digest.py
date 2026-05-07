@@ -151,6 +151,70 @@ def test_daily_digest_does_not_label_neutral_reviews_as_highlights():
     assert "自有新增评论集中在 OWN-NEUTRAL" in digest["analysis"]
 
 
+def test_daily_digest_surfaces_neutral_review_counts_and_examples():
+    from qbu_crawler.server.daily_digest import build_daily_digest
+
+    digest = build_daily_digest({
+        "run_id": 14,
+        "logical_date": "2026-05-06",
+        "reviews_count": 4,
+        "reviews": [
+            {
+                "id": 601,
+                "product_sku": "OWN-BAD",
+                "ownership": "own",
+                "rating": 2,
+                "headline": "Noisy",
+                "body": "It gets loud after a few batches.",
+                "body_cn": "处理几批后噪音会变大。",
+                "analysis_labels": '[{"code":"noise_power","display":"噪音与动力"}]',
+                "analysis_insight_cn": "自有产品仍有噪音风险。",
+            },
+            {
+                "id": 602,
+                "product_sku": "OWN-MID",
+                "ownership": "own",
+                "rating": 3,
+                "headline": "Okay",
+                "body": "It works, but setup takes more time than expected.",
+                "body_cn": "可以使用，但安装比预期更花时间。",
+                "analysis_labels": '[{"code":"easy_to_use","display":"易上手"}]',
+                "analysis_insight_cn": "中评分歧集中在安装体验。",
+            },
+            {
+                "id": 603,
+                "product_sku": "CMP-GOOD",
+                "ownership": "competitor",
+                "rating": 5,
+                "headline": "Fast",
+                "body": "It processes meat quickly.",
+                "body_cn": "处理速度很快。",
+                "analysis_labels": '[{"code":"strong_performance","display":"性能强"}]',
+                "analysis_insight_cn": "竞品性能体验值得参考。",
+            },
+            {
+                "id": 604,
+                "product_sku": "CMP-MID",
+                "ownership": "competitor",
+                "rating": 3,
+                "headline": "Average",
+                "body": "The product is acceptable but not especially easy to clean.",
+                "body_cn": "产品可以接受，但清洁并不算特别方便。",
+                "analysis_labels": '[{"code":"cleaning_maintenance","display":"清洁维护"}]',
+                "analysis_insight_cn": "竞品中评也提到清洁维护门槛。",
+            },
+        ],
+    })
+
+    assert "自有新增 2 条：好评 0 条，中评 1 条，差评 1 条" in digest["markdown"]
+    assert "竞品新增 2 条：好评 1 条，中评 1 条，差评 0 条" in digest["markdown"]
+    assert "### 中评观察" in digest["markdown"]
+    assert "自有中评" in digest["markdown"]
+    assert "SKU:OWN-MID，中性，评分 3 分，反馈 易上手" in digest["markdown"]
+    assert "竞品中评" in digest["markdown"]
+    assert "SKU:CMP-MID，中性，评分 3 分，反馈 清洁维护" in digest["markdown"]
+
+
 def test_workflow_enqueues_daily_digest_for_no_new_reviews(tmp_path, monkeypatch):
     from qbu_crawler import config, models
     from qbu_crawler.server import workflows
