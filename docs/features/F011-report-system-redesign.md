@@ -8,6 +8,7 @@
 
 ### 修订记录
 
+- **v1.3 (2026-05-11)**：**§4.2.4.1 时间口径条款已被 [F012](F012-window-semantics-and-weekly-cadence.md) 取代**。`own_new_negative_reviews` 等所有"窗口/最近 N 天/新增"业务判定不再按 `scraped_at`，改为 `first_seen_at`（per-product 基线，详见 F012 FR-1）。本文档其余条款仍有效。
 - v1.0 (2026-04-27 初稿)：基于 7 轮迭代审计文档合成
 - v1.1 (2026-04-27 同日)：合入计划-需求边界审查。修订要点：
   - I2 `KPI 灯"需关注产品"`定义统一为 `near_high_risk + 红/黄灯` 逻辑（删除硬编码 25）
@@ -433,6 +434,14 @@ else:
 - 每条带"影响产品 / 主要问题"短描述
 
 #### 4.2.4.1 时间口径明确（v1.1 新增 / 解决 B4）
+
+> **⚠️ 本节已被 [F012](F012-window-semantics-and-weekly-cadence.md) 取代（v1.3 / 2026-05-11）**
+>
+> 5/11 周报换皮事件证明：以 `scraped_at` 作为"评论新出现"的口径，会被 bootstrap 当天一次性入库与未来扩监控范围两种场景灌水。F012 引入 `reviews.first_seen_at`（per-product 基线，UPSERT 不更新；NULL = 基线），所有"窗口/最近 N 天/新增"业务判定改用 `first_seen_at`。下方 v1.1 写的 `is_new_negative_review` 算法已废弃，新算法请参见 F012 §FR-1.3 切换清单。
+>
+> 仅技术运维管道（translator 等待、scrape_quality 分母、trend 图 fallback、picker 次级排序）继续使用 `scraped_at`，详见 F012 §3.3 字段语义分工矩阵。
+
+---
 
 `own_new_negative_reviews` / `competitor_new_negative_reviews` 等"新"信号的判定**必须按 `scraped_at` 而非 `date_published`**：
 
