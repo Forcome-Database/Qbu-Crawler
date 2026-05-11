@@ -4,7 +4,7 @@ F011 §4.3 — retired: 4 sheets reorganization
 ─────────────────────────────────────────────
 The 5-sheet analytical layout (评论明细 / 产品概览 / 今日变化 / 问题标签 /
 趋势数据) was retired in F011 §4.3. The Excel attachment now produces 4
-sheets (核心数据 / 现在该做什么 / 评论原文 / 竞品启示).
+sheets (核心数据 / 行动建议 / 评论原文 / 竞品启示).
 
 Replacement coverage for the new layout lives in
 ``tests/server/test_excel_sheets.py``.

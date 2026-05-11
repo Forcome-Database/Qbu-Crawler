@@ -20,9 +20,9 @@ def test_daily_digest_builds_own_and_competitor_top3():
                 "rating": 1,
                 "headline": "Broken",
                 "body": "Switch broke after one use",
-                "body_cn": "\u7528\u4e00\u6b21\u5f00\u5173\u5c31\u574f\u4e86",
-                "analysis_labels": '[{"code":"after_sales","display":"\u552e\u540e\u5c65\u7ea6"}]',
-                "analysis_insight_cn": "\u81ea\u6709\u4ea7\u54c1\u51fa\u73b0\u4f4e\u5206\u8d28\u91cf\u4fe1\u53f7\uff0c\u9700\u8981\u4f18\u5148\u590d\u6838\u5f00\u5173\u53ef\u9760\u6027\u3002",
+                "body_cn": "用一次开关就坏了",
+                "analysis_labels": '[{"code":"after_sales","display":"售后履约"}]',
+                "analysis_insight_cn": "自有产品出现低分质量信号，需要优先复核开关可靠性。",
             },
             {
                 "id": 201,
@@ -32,9 +32,9 @@ def test_daily_digest_builds_own_and_competitor_top3():
                 "rating": 5,
                 "headline": "Easy",
                 "body": "Very easy to clean",
-                "body_cn": "\u975e\u5e38\u5bb9\u6613\u6e05\u6d01",
-                "analysis_labels": '[{"code":"cleaning","display":"\u6e05\u6d01\u4fbf\u5229"}]',
-                "analysis_insight_cn": "\u7ade\u54c1\u597d\u8bc4\u96c6\u4e2d\u5728\u6e05\u6d01\u4fbf\u5229\uff0c\u53ef\u4f5c\u4e3a\u81ea\u6709\u8bf4\u660e\u548c\u7ed3\u6784\u4f18\u5316\u53c2\u8003\u3002",
+                "body_cn": "非常容易清洁",
+                "analysis_labels": '[{"code":"cleaning","display":"清洁便利"}]',
+                "analysis_insight_cn": "竞品好评集中在清洁便利，可作为自有说明和结构优化参考。",
             },
         ],
     }
@@ -43,12 +43,76 @@ def test_daily_digest_builds_own_and_competitor_top3():
 
     assert digest["new_review_count"] == 2
     assert digest["own_top"][0]["sku"] == "OWN-1"
-    assert digest["own_top"][0]["issue"] == "\u552e\u540e\u5c65\u7ea6"
+    assert digest["own_top"][0]["issue"] == "售后履约"
     assert digest["competitor_top"][0]["sku"] == "CMP-1"
-    assert "\u6e05\u6d01\u4fbf\u5229" in digest["analysis"]
-    assert "SKU:OWN-1" in digest["markdown"]
-    assert "原文：Switch broke after one use" in digest["markdown"]
-    assert "译文：用一次开关就坏了" in digest["markdown"]
+    assert "清洁便利" in digest["analysis"]
+    # 新格式：SKU 用反引号包裹；译文走 blockquote（无"译文："前缀）；原文以 emoji 锚带"原文："
+    assert "`OWN-1`" in digest["markdown"]
+    assert "用一次开关就坏了" in digest["markdown"]
+    assert "Switch broke after one use" in digest["markdown"]
+
+
+def test_daily_digest_top3_dedup_falls_back_to_same_sku_when_diversity_lacks():
+    """SKU 多样性优先，但只有 1 个 SKU 时仍返回足额 TOP 3（回填同 SKU 次重要评论）。"""
+    from qbu_crawler.server.daily_digest import build_daily_digest
+
+    digest = build_daily_digest({
+        "run_id": 21,
+        "logical_date": "2026-05-08",
+        "reviews_count": 4,
+        "reviews": [
+            {
+                "id": 700 + i,
+                "product_sku": "ONLY-1",
+                "ownership": "own",
+                "rating": 1,
+                "headline": f"bad {i}",
+                "body": f"failure mode #{i}",
+                "body_cn": f"问题 #{i}",
+                "analysis_labels": '[{"code":"struct","display":"结构设计"}]',
+                "analysis_insight_cn": f"问题点 {i}",
+            }
+            for i in range(4)
+        ],
+    })
+
+    # 只有 1 个 SKU 但有 4 条差评 → TOP 应该是 3 条而不是塌缩成 1 条
+    assert len(digest["own_top"]) == 3
+    assert all(item["sku"] == "ONLY-1" for item in digest["own_top"])
+    assert "ONLY-1" in digest["markdown"]
+
+
+def test_daily_digest_top3_dedup_prefers_sku_diversity_when_available():
+    """多 SKU 场景下，TOP 3 优先选不同 SKU 各 1 条。"""
+    from qbu_crawler.server.daily_digest import build_daily_digest
+
+    digest = build_daily_digest({
+        "run_id": 22,
+        "logical_date": "2026-05-08",
+        "reviews_count": 6,
+        "reviews": [
+            *[{
+                "id": 800 + i, "product_sku": "SKU-A", "ownership": "own",
+                "rating": 1, "headline": f"a{i}", "body": f"a body {i}",
+                "body_cn": f"A 问题 {i}",
+                "analysis_labels": '[{"code":"struct","display":"结构设计"}]',
+            } for i in range(4)],
+            {
+                "id": 901, "product_sku": "SKU-B", "ownership": "own",
+                "rating": 1, "body": "b body", "body_cn": "B 问题",
+                "analysis_labels": '[{"code":"ship","display":"包装运输"}]',
+            },
+            {
+                "id": 902, "product_sku": "SKU-C", "ownership": "own",
+                "rating": 1, "body": "c body", "body_cn": "C 问题",
+                "analysis_labels": '[{"code":"clean","display":"清洁维护"}]',
+            },
+        ],
+    })
+
+    skus = [item["sku"] for item in digest["own_top"]]
+    assert len(skus) == 3
+    assert set(skus) == {"SKU-A", "SKU-B", "SKU-C"}, f"expected each SKU once, got {skus}"
 
 
 def test_daily_digest_handles_no_new_reviews():
@@ -63,11 +127,11 @@ def test_daily_digest_handles_no_new_reviews():
     })
 
     assert digest["new_review_count"] == 0
-    assert digest["message_title"] == "\u4eca\u65e5\u65e0\u65b0\u589e\u8bc4\u8bba"
+    assert digest["message_title"] == "今日无新增评论"
     assert digest["own_top"] == []
     assert digest["competitor_top"] == []
-    assert "\u7d2f\u8ba1\u6837\u672c" in digest["analysis"]
-    assert "\u4eca\u65e5\u65e0\u65b0\u589e\u8bc4\u8bba" in digest["markdown"]
+    assert "累计样本" in digest["analysis"]
+    assert "今日无新增评论" in digest["markdown"]
 
 
 def test_daily_digest_truncates_original_text_without_inventing_sku():
@@ -91,7 +155,7 @@ def test_daily_digest_truncates_original_text_without_inventing_sku():
 
     text = digest["own_top"][0]["original"]
     assert len(text) <= 140
-    assert "SKU:SKU-ONLY" in digest["markdown"]
+    assert "`SKU-ONLY`" in digest["markdown"]
     assert "UNKNOWN" not in digest["markdown"]
 
 
@@ -117,13 +181,15 @@ def test_daily_digest_switches_to_own_highlights_when_only_own_positive_reviews(
         "cumulative": {"reviews": [{"ownership": "own"}]},
     })
 
-    assert "自有亮点 TOP3" in digest["markdown"]
-    assert "自有风险 TOP3" not in digest["markdown"]
-    assert "竞品\n今日无竞品新增评论" in digest["markdown"]
-    assert "亮点 性能强" in digest["markdown"]
-    assert "原文：This grinder is powerful and easy to clean." in digest["markdown"]
-    assert "译文：这台绞肉机动力很强，也容易清洁。" in digest["markdown"]
-    assert "自有产品动力表现获得正向验证" in digest["markdown"]
+    md = digest["markdown"]
+    assert "自有亮点" in md and "TOP 3" in md
+    assert "自有风险" not in md
+    # 新格式：无竞品新增时整个竞品 section 被省略（不再显示空占位行）
+    assert "竞品亮点" not in md and "竞品风险" not in md
+    assert "性能强" in md
+    assert "This grinder is powerful and easy to clean." in md
+    assert "这台绞肉机动力很强，也容易清洁。" in md
+    assert "自有产品动力表现获得正向验证" in md
 
 
 def test_daily_digest_does_not_label_neutral_reviews_as_highlights():
@@ -144,10 +210,10 @@ def test_daily_digest_does_not_label_neutral_reviews_as_highlights():
         }],
     })
 
-    assert "自有新增评论 TOP3" in digest["markdown"]
-    assert "自有亮点 TOP3" not in digest["markdown"]
-    assert "亮点 未分类" not in digest["markdown"]
-    assert "问题/反馈 未分类" in digest["markdown"]
+    md = digest["markdown"]
+    assert "自有新增评论" in md
+    assert "自有亮点" not in md
+    assert "未分类" in md
     assert "自有新增评论集中在 OWN-NEUTRAL" in digest["analysis"]
 
 
@@ -206,13 +272,18 @@ def test_daily_digest_surfaces_neutral_review_counts_and_examples():
         ],
     })
 
-    assert "自有新增 2 条：好评 0 条，中评 1 条，差评 1 条" in digest["markdown"]
-    assert "竞品新增 2 条：好评 1 条，中评 1 条，差评 0 条" in digest["markdown"]
-    assert "### 中评观察" in digest["markdown"]
-    assert "自有中评" in digest["markdown"]
-    assert "SKU:OWN-MID，中性，评分 3 分，反馈 易上手" in digest["markdown"]
-    assert "竞品中评" in digest["markdown"]
-    assert "SKU:CMP-MID，中性，评分 3 分，反馈 清洁维护" in digest["markdown"]
+    md = digest["markdown"]
+    # 顶部计数行（新格式：emoji + inline code 数字）
+    assert "差评 自有 `1`" in md
+    assert "好评 自有 `0`" in md
+    assert "中评 自有 `1`" in md
+    assert "差评" in md and "竞品 `0`" in md
+    # 中评观察块
+    assert "中评观察" in md
+    assert "自有中评" in md
+    assert "OWN-MID" in md and "易上手" in md
+    assert "竞品中评" in md
+    assert "CMP-MID" in md and "清洁维护" in md
 
 
 def test_workflow_enqueues_daily_digest_for_no_new_reviews(tmp_path, monkeypatch):
@@ -259,7 +330,7 @@ def test_workflow_enqueues_daily_digest_for_no_new_reviews(tmp_path, monkeypatch
     digest = [n for n in notifications if n["kind"] == "workflow_daily_digest"]
     assert digest
     assert digest[0]["dedupe_key"] == f"workflow:{run_id}:daily-digest"
-    assert digest[0]["payload"]["message_title"] == "\u4eca\u65e5\u65e0\u65b0\u589e\u8bc4\u8bba"
+    assert digest[0]["payload"]["message_title"] == "今日无新增评论"
 
 
 def test_daily_digest_deadletter_does_not_downgrade_full_report(tmp_path, monkeypatch):

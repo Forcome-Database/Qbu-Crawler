@@ -1652,13 +1652,28 @@ ul, ol { list-style: none; }
 .report-main { max-width: 1120px; margin: 0 auto; padding: 0 var(--sp-xl) var(--sp-xl); }
 
 .section-title {
+  position: relative;
   font-family: var(--font-display);
   font-size: var(--fs-xl);
   margin-bottom: var(--sp-sm);
   padding-bottom: var(--sp-sm);
-  border-bottom: 2px solid var(--accent-muted);
+  border-bottom: 1px solid var(--border-subtle);
   display: inline-block;
+  letter-spacing: -0.005em;
 }
+.section-title::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -1px;
+  width: 56px; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+/* When the section title already lives inside its own header band
+   (issues-header has its own border + accent line), suppress the
+   title-level underline to avoid double rules. */
+.issues-header .section-title { border-bottom: 0; padding-bottom: 0; }
+.issues-header .section-title::after { display: none; }
 
 .section-sub { color: var(--text-muted); font-size: var(--fs-sm); margin-bottom: var(--sp-2xl); margin-top: var(--sp-sm); }
 .text-muted { color: var(--text-muted); }
@@ -2928,4 +2943,378 @@ details summary:hover { color: var(--accent); }
   .weakness-row { grid-template-columns: 1fr; }
   .weakness-arrow { transform: rotate(90deg); }
   .gap-row { grid-template-columns: 1fr; }
+}
+
+/* ==========================================================================
+   ISSUE DIAGNOSIS — UPGRADE PASS (问题诊断 视觉升级)
+   - Editorial header with eyebrow + meta pills
+   - Card header: serif drop-numeral, 2-line title block
+   - Card stats: data chips with hairline separators
+   - Deep-analysis: 3-column FMEA / RCA / VOC matrix with icon glyphs
+   ========================================================================== */
+
+/* ---- Section header ---- */
+.issues-header {
+  position: relative;
+  margin-bottom: var(--sp-xl);
+  padding-bottom: var(--sp-lg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.issues-header::after {
+  content: "";
+  position: absolute; left: 0; bottom: -1px;
+  width: 56px; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.issues-eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  margin-bottom: var(--sp-sm);
+}
+.issues-title {
+  margin-bottom: var(--sp-sm) !important;
+  letter-spacing: -0.01em;
+}
+.issues-sub {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.issues-sub strong { font-family: var(--font-display); font-size: var(--fs-md); color: var(--text); font-weight: 700; }
+.issues-sub-pill {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.issues-sub-sep { color: var(--border); }
+.issues-sub-hint { color: var(--text-muted); font-style: italic; }
+
+/* ---- Card-level refinements ---- */
+.issue-card {
+  border-radius: var(--r-xl);
+  position: relative;
+  transition: box-shadow var(--dur-normal), transform var(--dur-normal), border-color var(--dur-normal);
+}
+.issue-card::before { height: 4px; }
+.issue-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* Drop-numeral (#1, #2 ... ) — display serif, accent dot */
+.card-number {
+  font-family: var(--font-display) !important;
+  font-size: var(--fs-xl) !important;
+  font-weight: 700 !important;
+  color: var(--text) !important;
+  font-feature-settings: "tnum";
+  position: relative;
+  padding-right: var(--sp-md);
+  line-height: 1;
+}
+.card-number::after {
+  content: "";
+  position: absolute;
+  right: 4px; top: 50%;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--border);
+  transform: translateY(-50%);
+}
+.issue-card.severity-critical .card-number::after { background: var(--critical); }
+.issue-card.severity-high     .card-number::after { background: var(--high); }
+.issue-card.severity-medium   .card-number::after { background: var(--medium); }
+.issue-card.severity-low      .card-number::after { background: var(--low); }
+
+.card-title-block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.card-title-block .card-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.25;
+}
+.card-title-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+/* ---- Stat chips (replace plain spans) ---- */
+.card-stats {
+  gap: 0 !important;
+  padding: var(--sp-md) 0 var(--sp-lg);
+  margin-bottom: var(--sp-lg);
+  border-bottom: 1px dashed var(--border-subtle);
+}
+.card-stats .stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-body);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 4px 12px 4px 0;
+  margin-right: var(--sp-md);
+  border-right: 1px solid var(--border-subtle);
+  line-height: 1.2;
+}
+.card-stats .stat-chip:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+.card-stats .stat-chip i {
+  display: inline-flex;
+  width: 16px; height: 16px;
+  align-items: center; justify-content: center;
+  font-size: 10px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-style: normal;
+}
+.card-stats .stat-chip--reviews i  { background: var(--accent-soft);   color: var(--accent); }
+.card-stats .stat-chip--products i { background: var(--low-bg);        color: var(--low); }
+.card-stats .stat-chip--recency i  { background: var(--medium-bg);     color: var(--medium); }
+.card-stats .frequent-period {
+  background: linear-gradient(135deg, var(--accent-soft), transparent);
+  border-radius: var(--r-pill);
+  padding: 4px 12px !important;
+  border-right: 0 !important;
+  margin-right: var(--sp-md);
+  color: var(--accent) !important;
+  font-weight: 600;
+}
+.card-stats .frequent-period i { background: transparent; color: var(--accent); }
+
+/* ---- Deep analysis: 3-column FMEA / RCA / VOC ---- */
+.issue-deep-analysis {
+  margin-top: var(--sp-xl);
+  padding-top: var(--sp-lg);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-md);
+  position: relative;
+}
+.issue-deep-analysis[data-cells="1"] { grid-template-columns: 1fr; }
+.issue-deep-analysis[data-cells="2"] { grid-template-columns: 1fr 1fr; }
+
+.diag-rail {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  margin-bottom: var(--sp-xs);
+}
+.diag-rail-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.diag-rail-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+}
+
+.diag-cell {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: var(--sp-lg) var(--sp-md) var(--sp-md);
+  overflow: hidden;
+  transition: box-shadow var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast);
+}
+.diag-cell::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--border);
+}
+.diag-cell:hover {
+  box-shadow: var(--shadow-xs);
+  transform: translateY(-1px);
+}
+.diag-cell--mode::before        { background: linear-gradient(90deg, var(--critical), var(--high)); }
+.diag-cell--cause::before       { background: linear-gradient(90deg, var(--medium), #f59e0b); }
+.diag-cell--workaround::before  { background: linear-gradient(90deg, var(--low), var(--accent)); }
+
+.diag-cell-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-md);
+}
+.diag-cell-glyph {
+  width: 26px; height: 26px;
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
+  font-size: 14px;
+  flex-shrink: 0;
+  font-family: var(--font-display);
+}
+.diag-cell--mode       .diag-cell-glyph { background: var(--critical-bg); color: var(--critical); }
+.diag-cell--cause      .diag-cell-glyph { background: var(--medium-bg);   color: var(--medium); }
+.diag-cell--workaround .diag-cell-glyph { background: var(--accent-soft); color: var(--accent); }
+
+.diag-cell-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  flex: 1;
+  letter-spacing: -0.005em;
+}
+.diag-cell-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+}
+
+.diag-list {
+  list-style: none;
+  counter-reset: diagctr;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+.diag-list li {
+  counter-increment: diagctr;
+  position: relative;
+  padding: 8px 8px 8px 30px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  line-height: 1.55;
+  background: var(--surface-sunken);
+  border-radius: var(--r-sm);
+  border-left: 2px solid transparent;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.diag-list li::before {
+  content: counter(diagctr, decimal-leading-zero);
+  position: absolute;
+  left: 8px;
+  top: 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+.diag-cell--mode       .diag-list li:hover { border-left-color: var(--critical); background: var(--critical-bg); }
+.diag-cell--cause      .diag-list li:hover { border-left-color: var(--medium);   background: var(--medium-bg); }
+.diag-cell--workaround .diag-list li:hover { border-left-color: var(--accent);   background: var(--accent-soft); }
+
+/* ---- Image evidence: tighter aesthetics ---- */
+.issue-image-evidence {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--sp-md);
+}
+.issue-image-evidence figure {
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  transition: box-shadow var(--dur-fast), transform var(--dur-fast), border-color var(--dur-fast);
+}
+.issue-image-evidence figure:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent-muted);
+  transform: translateY(-2px);
+}
+.issue-image-evidence img {
+  height: 140px;
+  max-height: 140px;
+}
+.issue-image-evidence figcaption {
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ---- Quote block in issue cards: refined ---- */
+.issue-card .quote-block {
+  border-left-width: 4px;
+  border-radius: var(--r-md);
+  padding: var(--sp-md) var(--sp-lg);
+  position: relative;
+}
+.issue-card .quote-block::before {
+  content: "\201C";
+  position: absolute;
+  top: -4px; right: var(--sp-md);
+  font-family: var(--font-display);
+  font-size: 36px;
+  line-height: 1;
+  color: var(--negative);
+  opacity: 0.15;
+}
+.issue-card .quote-cn {
+  font-size: var(--fs-base);
+  color: var(--text);
+}
+
+/* ---- Responsive: collapse 3-col matrix ---- */
+@media (max-width: 980px) {
+  .issue-deep-analysis,
+  .issue-deep-analysis[data-cells="2"] { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .issues-eyebrow { font-size: 9px; letter-spacing: 0.18em; }
+  .card-number { font-size: var(--fs-lg) !important; }
+  .card-title-block .card-title { font-size: var(--fs-md); }
+  .card-title-meta { font-size: 9px; }
+  .card-stats .stat-chip { padding-right: 8px; margin-right: 8px; }
+  .diag-cell { padding: var(--sp-md) var(--sp-sm) var(--sp-sm); }
+  .diag-list li { font-size: var(--fs-sm); padding-left: 28px; }
+}
+
+/* ---- Print fidelity ---- */
+@media print {
+  .issue-card::before,
+  .diag-cell::before,
+  .diag-cell-glyph,
+  .stat-chip i,
+  .frequent-period { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .issue-deep-analysis { break-inside: avoid; page-break-inside: avoid; }
+  .diag-cell { break-inside: avoid; page-break-inside: avoid; }
 }

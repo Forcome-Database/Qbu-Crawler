@@ -1,9 +1,9 @@
-"""F011 §3.5 (H5 + H14) — issue cards 高频期 + 现在该做什么 short_title.
+"""F011 §3.5 (H5 + H14) — issue cards 高频期 + 行动建议 short_title.
 
 Covers:
   H5:  issue cards drop misleading "约 8 年" duration_display, render
        "高频期 YYYY-MM ~ YYYY-MM" instead.
-  H14: 现在该做什么 (improvement_priorities) section uses short_title as
+  H14: 行动建议 (improvement_priorities) section uses short_title as
        visible card title; full_action lives inside collapsed <details>.
        Evidence chips link to #review-{id}.
 """
@@ -163,14 +163,18 @@ def test_issue_card_no_misleading_duration():
 
 
 def test_issue_card_shows_frequent_period():
-    """F011 H5 — issue cards display frequent_period (start/end YYYY-MM)."""
+    """F011 H5 — issue cards display frequent_period (start/end YYYY-MM).
+
+    Separator may be '~' (legacy) or '–' (editorial em-dash style); test only
+    checks both endpoints + the prefix word exist on the same chip.
+    """
     analytics = _base_analytics(top_negative_clusters=_cluster_with_dated_window())
     html = render_attachment_html(_base_snapshot(), analytics)
-    m = re.search(r"高频期\s+\d{4}-\d{2}\s*~\s*\d{4}-\d{2}", html)
-    assert m, f"No 高频期 YYYY-MM ~ YYYY-MM marker found in HTML"
+    m = re.search(r"高频期\s+(\d{4}-\d{2})\s*[~–\-]\s*(\d{4}-\d{2})", html)
+    assert m, "No 高频期 YYYY-MM <separator> YYYY-MM marker found in HTML"
     # Specifically the range we set up
-    assert "2024-03" in m.group(0)
-    assert "2024-08" in m.group(0)
+    assert m.group(1) == "2024-03"
+    assert m.group(2) == "2024-08"
 
 
 # ──────────────────────────────────────────────────────────

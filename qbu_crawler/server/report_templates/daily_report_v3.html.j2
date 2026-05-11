@@ -173,8 +173,10 @@
     </section>
 
     <section id="tab-changes" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">{{ change_title }}</h2>
-      <p class="section-sub">只看本期入库信号，不把全量现状和历史趋势混在一起。</p>
+      <header class="section-head">
+        <h2 class="section-title">{{ change_title }}</h2>
+        <p class="section-sub">只看本期入库信号，不把全量现状和历史趋势混在一起。</p>
+      </header>
 
       {# F011 §4.2.4 — bootstrap 单卡 / mature 三层金字塔 #}
       {% if analytics.report_semantics == "bootstrap" or change_digest.view_state == "bootstrap" %}
@@ -535,77 +537,114 @@
     </section>
 
     <section id="tab-issues" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">自有产品问题诊断</h2>
-      {% set _issue_cards = report_contract.get("issue_diagnostics") or analytics.issue_cards or [] %}
-      {# F011 §4.2.3.1 v1.2 — Top 3 default-expanded; remaining wrapped in <details> #}
-      <p class="section-sub">Top 3 默认展开 · 共 {{ _issue_cards | length }} 张诊断卡，点击卡片头部展开/收起</p>
+      <header class="issues-header">
+        <span class="issues-eyebrow">FMEA · 问题诊断</span>
+        <h2 class="section-title issues-title">自有产品问题诊断</h2>
+        {% set _issue_cards = report_contract.get("issue_diagnostics") or analytics.issue_cards or [] %}
+        {% set _expanded_cards = _issue_cards | selectattr("default_expanded", "equalto", true) | list %}
+        {% set _folded_cards = _issue_cards | selectattr("default_expanded", "equalto", false) | list %}
+        <p class="section-sub issues-sub">
+          <span class="issues-sub-pill">Top {{ _expanded_cards | length }} 默认展开</span>
+          <span class="issues-sub-sep">·</span>
+          <span>共 <strong>{{ _issue_cards | length }}</strong> 张诊断卡</span>
+          <span class="issues-sub-sep">·</span>
+          <span class="issues-sub-hint">点击卡片头部展开 / 收起</span>
+        </p>
+      </header>
       {% if not _issue_cards %}
       <div class="empty-state">未发现明确问题簇。</div>
       {% endif %}
 
-      {% set _expanded_cards = _issue_cards | selectattr("default_expanded", "equalto", true) | list %}
-      {% set _folded_cards = _issue_cards | selectattr("default_expanded", "equalto", false) | list %}
+      {% macro issue_card_body(card) %}
+        <div class="card-stats">
+          <span class="stat-chip stat-chip--reviews"><i aria-hidden="true">●</i>{{ card.review_count }} 条评论</span>
+          <span class="stat-chip stat-chip--products"><i aria-hidden="true">▦</i>{{ card.affected_product_count }} 个产品</span>
+          {% if card.recency_display %}<span class="stat-chip stat-chip--recency"><i aria-hidden="true">◷</i>{{ card.recency_display }}</span>{% endif %}
+          {% if card.frequent_period %}
+            <span class="stat-chip frequent-period"><i aria-hidden="true">⌁</i>高频期 {{ card.frequent_period.start }} – {{ card.frequent_period.end }}</span>
+          {% endif %}
+        </div>
+        {% for review in (card.example_reviews or [])[:2] %}
+        <blockquote class="quote-block">
+          <div class="quote-meta">
+            <span class="quote-stars" data-rating="{{ review.rating }}"></span>
+            <span>{{ review.author or "" }}</span>
+            <span>{{ review.date_published or "" }}</span>
+          </div>
+          <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
+        </blockquote>
+        {% endfor %}
+        {% if card.image_evidence %}
+        <div class="issue-image-evidence">
+          {% for image in card.image_evidence %}
+          <figure>
+            <img src="{{ image.data_uri or image.url }}" alt="{{ image.evidence_id or '评论图片证据' }}">
+            <figcaption>{{ image.evidence_id }}</figcaption>
+          </figure>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if card.ai_recommendation or card.recommendation %}
+        <div class="ai-box ai-box-suggest"><p>{{ card.ai_recommendation or card.recommendation }}</p></div>
+        {% endif %}
+        {% if card.failure_modes or card.root_causes or card.user_workarounds %}
+        <div class="issue-deep-analysis" data-cells="{{ (1 if card.failure_modes else 0) + (1 if card.root_causes else 0) + (1 if card.user_workarounds else 0) }}">
+          <div class="diag-rail" aria-hidden="true">
+            <span class="diag-rail-label">深度归因</span>
+            <span class="diag-rail-line"></span>
+          </div>
+          {% if card.failure_modes %}
+          <article class="diag-cell diag-cell--mode">
+            <header class="diag-cell-head">
+              <span class="diag-cell-glyph" aria-hidden="true">⚠</span>
+              <h4 class="diag-cell-title">失效模式</h4>
+              <span class="diag-cell-tag">FMEA</span>
+            </header>
+            <ol class="diag-list">{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item.mode if item.mode is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ol>
+          </article>
+          {% endif %}
+          {% if card.root_causes %}
+          <article class="diag-cell diag-cell--cause">
+            <header class="diag-cell-head">
+              <span class="diag-cell-glyph" aria-hidden="true">⌂</span>
+              <h4 class="diag-cell-title">可能根因</h4>
+              <span class="diag-cell-tag">RCA</span>
+            </header>
+            <ol class="diag-list">{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item.cause if item.cause is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ol>
+          </article>
+          {% endif %}
+          {% if card.user_workarounds %}
+          <article class="diag-cell diag-cell--workaround">
+            <header class="diag-cell-head">
+              <span class="diag-cell-glyph" aria-hidden="true">✦</span>
+              <h4 class="diag-cell-title">用户应对</h4>
+              <span class="diag-cell-tag">VOC</span>
+            </header>
+            <ol class="diag-list">{% for item in card.user_workarounds[:3] %}<li>{{ item }}</li>{% endfor %}</ol>
+          </article>
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endmacro %}
+
+      {% macro issue_card_header(card, idx) %}
+        <div class="card-header">
+          <span class="card-number" data-num="{{ idx }}">#{{ idx }}</span>
+          <div class="card-title-block">
+            <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
+            <span class="card-title-meta">{{ card.review_count }} 条 · {{ card.affected_product_count }} 个产品</span>
+          </div>
+          <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
+          <span class="card-toggle">▾</span>
+        </div>
+      {% endmacro %}
 
       {% for card in _expanded_cards %}
       {% set idx = loop.index %}
       <div class="issue-card severity-{{ card.severity }} reveal">
-        <div class="card-header">
-          <span class="card-number">#{{ idx }}</span>
-          <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
-          <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
-          <span class="card-toggle">▾</span>
-        </div>
+        {{ issue_card_header(card, idx) }}
         <div class="card-body">
-          <div class="card-stats">
-            <span>{{ card.review_count }} 条评论</span>
-            <span>{{ card.affected_product_count }} 个产品</span>
-            {% if card.recency_display %}<span>{{ card.recency_display }}</span>{% endif %}
-            {% if card.frequent_period %}
-              <span class="frequent-period">高频期 {{ card.frequent_period.start }} ~ {{ card.frequent_period.end }}</span>
-            {% endif %}
-          </div>
-          {% for review in (card.example_reviews or [])[:2] %}
-          <blockquote class="quote-block">
-            <div class="quote-meta">
-              <span class="quote-stars" data-rating="{{ review.rating }}"></span>
-              <span>{{ review.author or "" }}</span>
-              <span>{{ review.date_published or "" }}</span>
-            </div>
-            <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
-          </blockquote>
-          {% endfor %}
-          {% if card.image_evidence %}
-          <div class="issue-image-evidence">
-            {% for image in card.image_evidence %}
-            <figure>
-              <img src="{{ image.data_uri or image.url }}" alt="{{ image.evidence_id or '评论图片证据' }}">
-              <figcaption>{{ image.evidence_id }}</figcaption>
-            </figure>
-            {% endfor %}
-          </div>
-          {% endif %}
-          {% if card.ai_recommendation or card.recommendation %}
-          <div class="ai-box ai-box-suggest"><p>{{ card.ai_recommendation or card.recommendation }}</p></div>
-          {% endif %}
-          {% if card.failure_modes or card.root_causes or card.user_workarounds %}
-          <div class="issue-deep-analysis">
-            {% if card.failure_modes %}
-            <div><strong>失效模式</strong>
-              <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item.mode if item.mode is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-            {% if card.root_causes %}
-            <div><strong>可能根因</strong>
-              <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item.cause if item.cause is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-            {% if card.user_workarounds %}
-            <div><strong>用户应对</strong>
-              <ul>{% for item in card.user_workarounds[:3] %}<li>{{ item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-          </div>
-          {% endif %}
+          {{ issue_card_body(card) }}
         </div>
       </div>
       {% endfor %}
@@ -614,71 +653,19 @@
       {% for card in _folded_cards %}
       {% set idx = (_expanded_cards | length) + loop.index %}
       <div class="issue-card severity-{{ card.severity }} card-collapsed reveal">
-        <div class="card-header">
-          <span class="card-number">#{{ idx }}</span>
-          <strong class="card-title">{{ card.feature_display or card.label_display }}</strong>
-          <span class="badge badge-{{ card.severity }}">{{ card.severity_display }}</span>
-          <span class="card-toggle">▾</span>
-        </div>
+        {{ issue_card_header(card, idx) }}
         <div class="card-body">
-          <div class="card-stats">
-            <span>{{ card.review_count }} 条评论</span>
-            <span>{{ card.affected_product_count }} 个产品</span>
-            {% if card.recency_display %}<span>{{ card.recency_display }}</span>{% endif %}
-            {% if card.frequent_period %}
-              <span class="frequent-period">高频期 {{ card.frequent_period.start }} ~ {{ card.frequent_period.end }}</span>
-            {% endif %}
-          </div>
-          {% for review in (card.example_reviews or [])[:2] %}
-          <blockquote class="quote-block">
-            <div class="quote-meta">
-              <span class="quote-stars" data-rating="{{ review.rating }}"></span>
-              <span>{{ review.author or "" }}</span>
-              <span>{{ review.date_published or "" }}</span>
-            </div>
-            <p class="quote-cn">"{{ review.headline_cn or review.headline or "" }}：{{ (review.body_cn or review.body or "")[:200] }}"</p>
-          </blockquote>
-          {% endfor %}
-          {% if card.image_evidence %}
-          <div class="issue-image-evidence">
-            {% for image in card.image_evidence %}
-            <figure>
-              <img src="{{ image.data_uri or image.url }}" alt="{{ image.evidence_id or '评论图片证据' }}">
-              <figcaption>{{ image.evidence_id }}</figcaption>
-            </figure>
-            {% endfor %}
-          </div>
-          {% endif %}
-          {% if card.ai_recommendation or card.recommendation %}
-          <div class="ai-box ai-box-suggest"><p>{{ card.ai_recommendation or card.recommendation }}</p></div>
-          {% endif %}
-          {% if card.failure_modes or card.root_causes or card.user_workarounds %}
-          <div class="issue-deep-analysis">
-            {% if card.failure_modes %}
-            <div><strong>失效模式</strong>
-              <ul>{% for item in card.failure_modes[:3] %}<li>{{ item.name if item.name is defined else item.mode if item.mode is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-            {% if card.root_causes %}
-            <div><strong>可能根因</strong>
-              <ul>{% for item in card.root_causes[:3] %}<li>{{ item.name if item.name is defined else item.cause if item.cause is defined else item.summary if item.summary is defined else item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-            {% if card.user_workarounds %}
-            <div><strong>用户应对</strong>
-              <ul>{% for item in card.user_workarounds[:3] %}<li>{{ item }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-          </div>
-          {% endif %}
+          {{ issue_card_body(card) }}
         </div>
       </div>
       {% endfor %}
     </section>
 
     <section id="tab-products" class="tab-panel" role="tabpanel">
-      <h2 class="section-title">自有产品状态</h2>
-      <p class="section-sub">灯 + 一句原因（详细风险因子悬停查看）。</p>
+      <header class="section-head">
+        <h2 class="section-title">自有产品状态</h2>
+        <p class="section-sub">灯 + 一句原因（详细风险因子悬停查看）。</p>
+      </header>
 
       {% set product_status = (analytics.self or {}).get("product_status") or [] %}
       {% if product_status %}

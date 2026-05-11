@@ -56,6 +56,38 @@ def test_non_weekly_day_skips_business_email(monkeypatch):
     assert decision.report_window_type == "daily"
 
 
+def test_workflow_email_status_from_decision_uses_business_friendly_skip_text():
+    """A3 — _workflow_email_status_from_decision 把 weekly_cadence_skip 等
+    技术词汇映射成业务用户能直接读懂的状态文本。"""
+    from qbu_crawler.server.report_cadence import EmailDecision
+    from qbu_crawler.server.workflows import _workflow_email_status_from_decision
+
+    weekly_skip = EmailDecision(False, "weekly_cadence_skip", "weekly", "daily", 7)
+    assert (
+        _workflow_email_status_from_decision(weekly_skip, email_success=None, untranslated_count=0)
+        == "已跳过（按周发送策略，今天非邮件发送日）"
+    )
+
+    disabled = EmailDecision(False, "email_disabled", "weekly", "daily", 7)
+    assert (
+        _workflow_email_status_from_decision(disabled, email_success=None, untranslated_count=0)
+        == "已跳过（邮件功能已关闭）"
+    )
+
+    bootstrap_disabled = EmailDecision(False, "bootstrap_email_disabled", "bootstrap", "daily", 7)
+    assert (
+        _workflow_email_status_from_decision(bootstrap_disabled, email_success=None, untranslated_count=0)
+        == "已跳过（监控起点邮件已关闭）"
+    )
+
+    # 未识别 reason 退回原始格式，保持可观测性
+    unknown = EmailDecision(False, "future_unknown_reason", "weekly", "daily", 7)
+    assert (
+        _workflow_email_status_from_decision(unknown, email_success=None, untranslated_count=0)
+        == "已跳过（future_unknown_reason）"
+    )
+
+
 def test_daily_cadence_keeps_existing_email_behavior(monkeypatch):
     from qbu_crawler.server.report_cadence import decide_business_email
 

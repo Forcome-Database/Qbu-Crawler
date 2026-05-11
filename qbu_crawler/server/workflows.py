@@ -1078,11 +1078,19 @@ def _workflow_email_status(email_success: bool | None, untranslated_count: int) 
     return "success"
 
 
+_EMAIL_SKIP_REASON_DISPLAY = {
+    "weekly_cadence_skip": "已跳过（按周发送策略，今天非邮件发送日）",
+    "email_disabled": "已跳过（邮件功能已关闭）",
+    "bootstrap_email_disabled": "已跳过（监控起点邮件已关闭）",
+}
+
+
 def _workflow_email_status_from_decision(decision, email_success: bool | None, untranslated_count: int) -> str:
     if not decision.send_email:
-        if decision.reason == "weekly_cadence_skip":
-            return "已跳过（周报频率）"
-        return f"已跳过（{decision.reason}）"
+        return _EMAIL_SKIP_REASON_DISPLAY.get(
+            decision.reason,
+            f"已跳过（{decision.reason}）",
+        )
     return _workflow_email_status(email_success, untranslated_count)
 
 

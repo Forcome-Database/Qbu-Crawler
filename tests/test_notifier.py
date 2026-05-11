@@ -559,16 +559,14 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "excel_path": "./reports/workflow-run-7-full-report.xlsx",
                 "email_status": "success",
                 "report_generation_status": "generated",
-                "workflow_notification_status": "pending",
             },
             (
-                "## ✅ 每日完整报告已生成\n\n"
+                "## ✅ 报告产物已生成\n\n"
                 "- **日期**：2026-03-31\n"
                 "- **workflow**：7\n"
                 "- **本地报告产物**：已生成\n"
                 "- **附件**：./reports/workflow-run-7-full-report.xlsx\n"
-                "- **业务邮件**：已发送\n"
-                "- **workflow 通知**：待投递\n\n"
+                "- **业务邮件**：已发送\n\n"
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
@@ -580,16 +578,14 @@ def test_bridge_accepts_chat_target_when_allowlist_uses_channel_alias():
                 "excel_path": "./reports/workflow-run-8-full-report.xlsx",
                 "email_status": "skipped",
                 "report_generation_status": "generated",
-                "workflow_notification_status": "pending",
             },
             (
-                "## ✅ 每日完整报告已生成\n\n"
+                "## ✅ 报告产物已生成\n\n"
                 "- **日期**：2026-03-31\n"
                 "- **workflow**：8\n"
                 "- **本地报告产物**：已生成\n"
                 "- **附件**：./reports/workflow-run-8-full-report.xlsx\n"
-                "- **业务邮件**：已跳过（无新增评论）\n"
-                "- **workflow 通知**：待投递\n\n"
+                "- **业务邮件**：已跳过（无新增评论）\n\n"
                 "如需，我可以继续补充差评、价格波动和竞品对比解读。"
             ),
         ),
@@ -793,10 +789,107 @@ def test_openclaw_bridge_sender_translates_task_completed_payload_to_human_templ
     assert template_vars["failed_summary"] == "无"
 
 
+def test_openclaw_bridge_sender_synthesizes_full_report_status_from_mode():
+    """workflow_full_report 通知不带显式 report_generation_status 时，应根据
+    report_mode 合成语义化状态串（避免 quiet 模式误显示"已生成"+空附件）。"""
+    from qbu_crawler.server.notifier import OpenClawBridgeSender
+
+    sender = OpenClawBridgeSender("http://bridge.local/notify", auth_token="secret", timeout=10)
+
+    quiet_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_full_report",
+            "payload": {
+                "logical_date": "2026-05-08",
+                "run_id": 42,
+                "report_mode": "quiet",
+                "excel_path": None,
+                "email_status": "skipped",
+            },
+        }
+    )
+    assert quiet_vars["report_generation_status"] == "已生成（精简日报）"
+    assert quiet_vars["excel_path"] == "（本次无 Excel 附件）"
+
+    change_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_full_report",
+            "payload": {
+                "logical_date": "2026-05-08",
+                "run_id": 43,
+                "report_mode": "change",
+                "excel_path": "./reports/run-43-change.xlsx",
+                "email_status": "success",
+            },
+        }
+    )
+    assert change_vars["report_generation_status"] == "已生成（仅变动摘要）"
+    assert change_vars["excel_path"] == "./reports/run-43-change.xlsx"  # 非空保留
+
+    full_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_full_report",
+            "payload": {
+                "logical_date": "2026-05-08",
+                "run_id": 44,
+                "report_mode": "full",
+                "excel_path": "./reports/run-44-full.xlsx",
+                "email_status": "success",
+            },
+        }
+    )
+    assert full_vars["report_generation_status"] == "已生成（完整版）"
+
+    # 显式 status 优先于 mode 合成（保持向后兼容）
+    explicit_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_full_report",
+            "payload": {
+                "logical_date": "2026-05-08",
+                "run_id": 45,
+                "report_mode": "full",
+                "report_generation_status": "failed",
+                "excel_path": "",
+                "email_status": "failed",
+            },
+        }
+    )
+    assert explicit_vars["report_generation_status"] == "failed"
+
+
+def test_openclaw_bridge_sender_passes_run_id_for_workflow_started():
+    """Regression: notifier._template_vars_for previously dropped run_id from
+    workflow_started payload, causing DingTalk message '- workflow:' to render
+    empty. Verify run_id is forwarded so the bridge template can fill it in."""
+    from qbu_crawler.server.notifier import OpenClawBridgeSender
+
+    sender = OpenClawBridgeSender("http://bridge.local/notify", auth_token="secret", timeout=10)
+    template_vars = sender._template_vars_for(
+        {
+            "kind": "workflow_started",
+            "payload": {
+                "logical_date": "2026-05-08",
+                "run_id": 42,
+                "collect_task_ids": [],
+                "scrape_task_ids": ["t-1", "t-2", "t-3"],
+            },
+        }
+    )
+
+    assert template_vars["logical_date"] == "2026-05-08"
+    assert template_vars["run_id"] == 42
+    assert template_vars["collect_count"] == 0
+    assert template_vars["scrape_count"] == 3
+
+
 def test_openclaw_bridge_sender_sanitizes_none_paths_for_change_quiet_modes():
     """When report mode is change or quiet, excel_path/analytics_path/pdf_path
-    may be None. _template_vars_for should sanitize them to empty strings
-    so DingTalk messages don't show the literal string 'None' (Fix-1C)."""
+    may be None. _template_vars_for must:
+      - Never let the literal string 'None' leak into DingTalk (Fix-1C)
+      - For excel_path specifically (展示在 workflow_full_report 模板里), 提供
+        语义化占位符而不是空白行 (A2)
+      - 其它 path 字段不展示给用户，仍统一兜底为空串
+    """
     from qbu_crawler.server.notifier import OpenClawBridgeSender
 
     sender = OpenClawBridgeSender("http://bridge.local/notify", auth_token="secret", timeout=10)
@@ -817,11 +910,14 @@ def test_openclaw_bridge_sender_sanitizes_none_paths_for_change_quiet_modes():
         }
     )
 
-    assert template_vars["excel_path"] == "", "None excel_path should be sanitized to empty string"
-    assert template_vars["analytics_path"] == "", "None analytics_path should be sanitized to empty string"
-    assert template_vars["pdf_path"] == "", "None pdf_path should be sanitized to empty string"
+    # excel_path 进入用户可见模板，None 时给出明确说明
+    assert template_vars["excel_path"] == "（本次无 Excel 附件）"
+    # 不可见 path 仍然空串兜底，确保不渲染成 "None"
+    assert template_vars["analytics_path"] == ""
+    assert template_vars["pdf_path"] == ""
     assert template_vars["html_path"] == "/reports/change-report.html", "Non-None paths should be preserved"
-    assert template_vars["excel_path"] != "None", "Should not be the string 'None'"
+    for key in ("excel_path", "analytics_path", "pdf_path", "html_path"):
+        assert template_vars[key] != "None", f"{key} 不应为字面量 'None'"
 
 
 def test_openclaw_bridge_sender_classifies_retryable_and_permanent_failures():

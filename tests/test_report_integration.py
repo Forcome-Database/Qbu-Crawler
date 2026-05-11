@@ -355,7 +355,7 @@ class TestExcelGeneration:
         assert Path(path).exists()
 
     def test_generate_analytical_excel_has_four_sheets(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
-        """F011 §4.3 — replaced 5-sheet layout with 4-sheet (核心数据 / 现在该做什么 / 评论原文 / 竞品启示)."""
+        """F011 §4.3 — replaced 5-sheet layout with 4-sheet (核心数据 / 行动建议 / 评论原文 / 竞品启示)."""
         monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
         analytics = report_analytics.build_report_analytics(sample_snapshot)
         normalized = report_common.normalize_deep_report_analytics(analytics)
@@ -369,7 +369,7 @@ class TestExcelGeneration:
         import openpyxl
         wb = openpyxl.load_workbook(path)
         assert len(wb.sheetnames) == 4
-        assert set(wb.sheetnames) == {"核心数据", "现在该做什么", "评论原文", "竞品启示"}
+        assert set(wb.sheetnames) == {"核心数据", "行动建议", "评论原文", "竞品启示"}
 
     def test_review_original_sheet_has_sentiment_column(self, populated_db, sample_snapshot, tmp_path, monkeypatch):
         """F011 §4.3 — '评论明细' renamed to '评论原文'; sentiment column retained."""

@@ -741,11 +741,35 @@ def _build_email_evidence(snapshot):
         "竞品亮点证据" if competitor_positive
         else ("竞品机会证据" if competitor_negative else "竞品新增评论证据")
     )
+
+    def select_diverse(reviews, limit=2):
+        """SKU 多样性优先 + 不足时回填同 SKU 次重要评论（与 daily_digest 同语义）。
+
+        例：
+          多 SKU → 前 N 条来自不同产品（避免单一产品霸占证据卡）
+          单 SKU → 同 SKU 的前 N 条最重要评论（不塌缩成 1 条）
+        """
+        if not reviews:
+            return []
+        seen, primary, leftover = set(), [], []
+        for r in reviews:
+            sku = str(r.get("product_sku") or r.get("sku") or "").strip() or "__nosku__"
+            if sku in seen:
+                leftover.append(r)
+            else:
+                seen.add(sku)
+                primary.append(r)
+        result = primary[:limit]
+        if len(result) < limit:
+            result.extend(leftover[: limit - len(result)])
+        return result
+
     return {
         "own_title": own_title,
         "competitor_title": competitor_title,
-        "own": [item(r) for r in own_source[:2]],
-        "competitor": [item(r) for r in competitor_source[:2]],
+        # TOP 3 与钉钉每日摘要保持一致；select_diverse 保证多 SKU 时按多样性，单 SKU 时回填同 SKU 次重要评论
+        "own": [item(r) for r in select_diverse(own_source, 3)],
+        "competitor": [item(r) for r in select_diverse(competitor_source, 3)],
     }
 
 
@@ -917,7 +941,7 @@ def _generate_analytical_excel(
     Sheets (in order):
       1. 核心数据   — per-product summary with status lamp + dual-denominator
                       negative rate (H10) + 主要问题 from product_status
-      2. 现在该做什么 — report_user_contract.action_priorities with short_title +
+      2. 行动建议   — report_user_contract.action_priorities with short_title +
                       affected_products + full_action + evidence_count
       3. 评论原文   — raw reviews with normalized impact_category enum (H12) and
                       failure_mode 9-class enum (H19), distinct from labels
@@ -1108,9 +1132,9 @@ def _generate_analytical_excel(
     _auto_widths(ws_core)
 
     # ─────────────────────────────────────────────────────────────────────
-    # Sheet 2: 现在该做什么 (F011 §4.3.2 — 7 cols, top-5 priorities)
+    # Sheet 2: 行动建议 (F011 §4.3.2 — 7 cols, top-5 priorities)
     # ─────────────────────────────────────────────────────────────────────
-    ws_reco = wb.create_sheet("现在该做什么")
+    ws_reco = wb.create_sheet("行动建议")
     reco_headers = [
         "序号", "短标题", "影响产品数", "影响产品列表",
         "用户原话(典型)", "改良方向", "证据数",

@@ -271,7 +271,7 @@ def test_e2e_excel_has_4_sheets_no_legacy(e2e_db):
 
     wb = openpyxl.load_workbook(excel_path)
     assert sorted(wb.sheetnames) == sorted(
-        ["核心数据", "现在该做什么", "评论原文", "竞品启示"]
+        ["核心数据", "行动建议", "评论原文", "竞品启示"]
     )
     # Legacy sheets must not appear
     assert "今日变化" not in wb.sheetnames

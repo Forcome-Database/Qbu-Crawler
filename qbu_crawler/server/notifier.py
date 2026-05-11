@@ -30,6 +30,20 @@ _OWNERSHIP_DISPLAY = {
     "own": "自有",
     "competitor": "竞品",
 }
+_FULL_REPORT_STATUS_BY_MODE = {
+    "full": "已生成（完整版）",
+    "change": "已生成（仅变动摘要）",
+    "quiet": "已生成（精简日报）",
+    "bootstrap": "已生成（监控起点版）",
+}
+
+
+def _full_report_status_display(report_mode: str | None) -> str:
+    """根据 report_mode 给 workflow_full_report 通知挑一个语义清晰的状态串。
+    未识别 mode 落到通用"已生成"，保留旧行为兜底。"""
+    if not report_mode:
+        return "已生成"
+    return _FULL_REPORT_STATUS_BY_MODE.get(str(report_mode).lower(), "已生成")
 
 
 @dataclass
@@ -122,6 +136,7 @@ class OpenClawBridgeSender:
         if kind == "workflow_started":
             return {
                 "logical_date": payload.get("logical_date", ""),
+                "run_id": payload.get("run_id", ""),
                 "collect_count": len(payload.get("collect_task_ids") or []),
                 "scrape_count": len(payload.get("scrape_task_ids") or []),
             }
@@ -141,8 +156,15 @@ class OpenClawBridgeSender:
             if result.get(path_key) is None:
                 result[path_key] = ""
         if kind == "workflow_full_report":
-            result.setdefault("report_generation_status", payload.get("report_generation_status", "generated"))
-            result.setdefault("workflow_notification_status", payload.get("workflow_notification_status", "pending"))
+            # 让 report_generation_status 携带 mode 语义，避免 quiet/change 模式
+            # 显示"已生成"但附件为空的矛盾感。upstream 仍可显式传 status 覆盖。
+            raw_status = payload.get("report_generation_status")
+            if not raw_status:
+                raw_status = _full_report_status_display(payload.get("report_mode"))
+            result["report_generation_status"] = raw_status
+            # Excel 附件为空时给出明确说明，避免空白行
+            if not result.get("excel_path"):
+                result["excel_path"] = "（本次无 Excel 附件）"
         return result
 
 

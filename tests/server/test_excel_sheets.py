@@ -2,7 +2,7 @@
 
 Tests for the new Excel layout:
 - 核心数据 (core data with status lamp + dual-denominator negative rate)
-- 现在该做什么 (recommendations with short_title + full_action + evidence_count)
+- 行动建议 (recommendations with short_title + full_action + evidence_count)
 - 评论原文 (raw reviews with failure_mode enum + impact_category distinct from labels)
 - 竞品启示 (competitor benchmarks with type/topic/evidence_count)
 """
@@ -15,7 +15,7 @@ from qbu_crawler import config
 from qbu_crawler.server.report import generate_excel
 
 
-_NEW_SHEETS = ["核心数据", "现在该做什么", "评论原文", "竞品启示"]
+_NEW_SHEETS = ["核心数据", "行动建议", "评论原文", "竞品启示"]
 
 
 def _build_analytics(**overrides):
@@ -241,9 +241,9 @@ def test_review_original_sheet_impact_category_distinct_from_labels(excel_path):
 
 
 def test_recommendations_sheet_uses_short_title(excel_path):
-    """F011 §4.3 — 现在该做什么 sheet 列：短标题 + 影响产品 + 全文 action."""
+    """F011 §4.3 — 行动建议 sheet 列：短标题 + 影响产品 + 全文 action."""
     wb = openpyxl.load_workbook(excel_path)
-    ws = wb["现在该做什么"]
+    ws = wb["行动建议"]
     headers = [c.value for c in ws[1]]
     assert "短标题" in headers
     assert "改良方向" in headers  # full_action

@@ -54,8 +54,7 @@ DEFAULT_TEMPLATES = {
         "- **workflow**：{run_id}\n"
         "- **本地报告产物**：{report_generation_status}\n"
         "- **附件**：{excel_path}\n"
-        "- **业务邮件**：{email_status}\n"
-        "- **workflow 通知**：{workflow_notification_status}\n\n"
+        "- **业务邮件**：{email_status}\n\n"
         "如需，我可以继续补充差评、价格波动和竞品对比解读。"
     ),
     "workflow_daily_digest": "{markdown}",

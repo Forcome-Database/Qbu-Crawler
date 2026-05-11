@@ -58,7 +58,7 @@ def test_test7_replay_html_excel_email_consume_contract(tmp_path, monkeypatch):
         output_path=str(tmp_path / "test7-replay.xlsx"),
     )
     wb = openpyxl.load_workbook(excel_path)
-    actions_ws = wb["现在该做什么"]
+    actions_ws = wb["行动建议"]
     action_headers = [cell.value for cell in actions_ws[1]]
     full_action_col = action_headers.index("改良方向") + 1
     full_actions = [
@@ -77,5 +77,7 @@ def test_test7_replay_html_excel_email_consume_contract(tmp_path, monkeypatch):
     assert "竞品包装容易破损" in competitor_values
 
     email_html = render_email_full(snapshot, analytics)
-    assert "需关注产品 2" in email_html
+    # 新版邮件 label / count 分列 — 分别断言而非连续字符串
+    assert "需关注产品" in email_html
+    assert ">2<" in email_html
     assert "复核结构尺寸" in email_html

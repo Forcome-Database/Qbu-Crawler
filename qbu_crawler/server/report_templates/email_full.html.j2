@@ -3,11 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no, url=no">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>QBU 评论分析</title>
+  <!--[if mso]>
+  <style type="text/css">
+    table, td { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+  </style>
+  <![endif]-->
+  <style type="text/css">
+    /* 全局基础（部分客户端会忽略 inline，再补一层兜底） */
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; border-collapse: collapse !important; }
+    img { border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    /* 长 SKU / 长英文原文换行（iOS 与 Gmail 默认会撑爆容器） */
+    .qbu-wrap { word-break: break-word; overflow-wrap: anywhere; }
+
+    /* ── 移动端断点 (iPhone / 安卓 / 钉钉邮箱 / Gmail App) ── */
+    @media only screen and (max-width: 600px) {
+      .qbu-shell      { width: 100% !important; max-width: 100% !important; border-radius: 10px !important; }
+      .qbu-pad-lg     { padding-left: 18px !important; padding-right: 18px !important; }
+      .qbu-pad-lg-t   { padding-top: 22px !important; }
+      .qbu-pad-md     { padding: 14px 14px !important; }
+      .qbu-hero-num   { font-size: 20px !important; }
+      .qbu-num        { font-size: 16px !important; }
+      .qbu-title      { font-size: 19px !important; line-height: 1.3 !important; }
+      .qbu-eyebrow    { font-size: 9px !important; letter-spacing: 0.18em !important; }
+      .qbu-meta       { font-size: 11px !important; line-height: 1.6 !important; }
+      .qbu-body-md    { font-size: 13px !important; line-height: 1.7 !important; }
+      .qbu-body-sm    { font-size: 11px !important; line-height: 1.6 !important; }
+      .qbu-section-h  { font-size: 9px !important; letter-spacing: 0.16em !important; }
+      .qbu-quote      { padding: 12px 14px !important; }
+      /* 评论卡 meta 行：SKU/星形 与 issue tag 在窄屏堆叠 */
+      .qbu-meta-stack         { display: block !important; width: 100% !important; }
+      .qbu-meta-stack-right   { display: block !important; width: 100% !important; padding-top: 6px !important; text-align: left !important; }
+      /* Top3 卡序号字号略缩 */
+      .qbu-rank       { font-size: 20px !important; }
+      /* 副描述（健康指数 / ≥4 星 自有评论 / ≤2 星 自有评论）窄屏堆叠到主标签下一行，避免与右侧数字挤压 */
+      .qbu-sub        { display: block !important; margin-left: 22px !important; margin-top: 2px !important; font-size: 10px !important; }
+    }
+  </style>
 </head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#f4f3ee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue','Noto Sans SC','PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#1a1a2e;-webkit-font-smoothing:antialiased;word-break:break-word;">
 {# ──────────────────────────────────────────────────────────
-   F011 §4.1 — email_full.html.j2 重构 (4 KPI 灯 + Hero + Top 3 + 产品状态)
-   max-width 640px / table 布局 / 内联 CSS / 无 JS / 无外部 CSS
+   F011 §4.1 — email_full.html.j2 (Refined Editorial Briefing)
+   max-width 640px / table-based / 内联样式 / 无 JS / 无外部 CSS
+   样式语言与 daily_report_v3 对齐：editorial、克制、Apple HIG 风
    ────────────────────────────────────────────────────────── #}
 
 {% set _analytics    = analytics or {} %}
@@ -42,45 +84,31 @@
 {# ── 健康灯阈值 ≥85 绿 / [70,85) 黄 / <70 红 ── #}
 {% set _health_num = _health if _health is number else (_health | float if _health else 0) %}
 {% if _health is none or _health == "" %}
-  {% set _health_lamp = "gray" %}
-  {% set _health_emoji = "⚪" %}
-  {% set _health_label = "无数据" %}
+  {% set _health_lamp = "gray" %}{% set _health_label = "无数据" %}
 {% elif _health_num >= 85 %}
-  {% set _health_lamp = "green" %}
-  {% set _health_emoji = "🟢" %}
-  {% set _health_label = "优秀" %}
+  {% set _health_lamp = "green" %}{% set _health_label = "优秀" %}
 {% elif _health_num >= 70 %}
-  {% set _health_lamp = "yellow" %}
-  {% set _health_emoji = "🟡" %}
-  {% set _health_label = "关注" %}
+  {% set _health_lamp = "yellow" %}{% set _health_label = "关注" %}
 {% else %}
-  {% set _health_lamp = "red" %}
-  {% set _health_emoji = "🔴" %}
-  {% set _health_label = "警戒" %}
+  {% set _health_lamp = "red" %}{% set _health_label = "警戒" %}
 {% endif %}
 
-{# ── 差评率灯（参考阈值：≤2% 绿 / (2%,5%] 黄 / >5% 红） ── #}
+{# ── 差评率灯 ≤2% 绿 / (2%,5%] 黄 / >5% 红 ── #}
 {% set _neg_pct = (_own_neg_rate * 100) if _own_neg_rate else 0 %}
 {% if _own_total == 0 %}
   {% set _neg_lamp = "gray" %}
-  {% set _neg_emoji = "⚪" %}
 {% elif _neg_pct <= 2 %}
   {% set _neg_lamp = "green" %}
-  {% set _neg_emoji = "🟢" %}
 {% elif _neg_pct <= 5 %}
   {% set _neg_lamp = "yellow" %}
-  {% set _neg_emoji = "🟡" %}
 {% else %}
   {% set _neg_lamp = "red" %}
-  {% set _neg_emoji = "🔴" %}
 {% endif %}
 
-{# ── 好评率灯（统一绿色，量级判断） ── #}
-{% set _pos_emoji = "🟢" if _own_total else "⚪" %}
+{# ── 好评率灯 ── #}
 {% set _pos_lamp = "green" if _own_total else "gray" %}
 
-{# ── 需关注产品计数（v1.1 / I2：黄+红灯产品数，非硬编码 risk_score≥25）
-       Jinja 的 {% set %} 在 for 循环内是局部作用域，必须用 namespace 跨循环聚合 ── #}
+{# ── 需关注产品计数 ── #}
 {% set _attention_count_from_kpi = _kpis.get("attention_product_count") %}
 {% set _ns = namespace(count=0, first="") %}
 {% for ps in _product_status %}
@@ -93,136 +121,244 @@
 {% set _attention_first = _ns.first %}
 {% if _attention_count == 0 %}
   {% set _attention_lamp = "green" %}
-  {% set _attention_emoji = "🟢" %}
 {% elif _attention_count <= 1 %}
   {% set _attention_lamp = "yellow" %}
-  {% set _attention_emoji = "🟡" %}
 {% else %}
   {% set _attention_lamp = "red" %}
-  {% set _attention_emoji = "🔴" %}
 {% endif %}
 
-{# ── 产品状态灯 emoji 映射 ── #}
-{% set _lamp_emoji_map = {"red": "🔴", "yellow": "🟡", "green": "🟢", "gray": "⚪"} %}
+{# ── 颜色映射（编辑级配色，与 v3 web 报告一致） ── #}
+{% set _lamp_dot = {"red": "#b91c1c", "yellow": "#b45309", "green": "#047857", "gray": "#9ca3af"} %}
+{% set _lamp_text = {"red": "#991b1b", "yellow": "#92400e", "green": "#065f46", "gray": "#6b7280"} %}
+{% set _lamp_bg = {"red": "#fef2f2", "yellow": "#fefce8", "green": "#ecfdf5", "gray": "#f3f4f6"} %}
+{% set _lamp_border = {"red": "#fecaca", "yellow": "#fde68a", "green": "#a7f3d0", "gray": "#e5e7eb"} %}
 
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f3ee;">
   <tr>
-    <td align="center" style="padding:20px 12px;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+    <td align="center" style="padding:28px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="qbu-shell" style="max-width:640px;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e4e0;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
 
-        {# ── 1. 标题 + 副标题 ── #}
+        {# ── 1. Header — eyebrow + 标题 + meta + accent rule ── #}
         <tr>
-          <td style="padding:20px 24px 8px;">
-            <div style="font-size:18px;font-weight:800;color:#0f172a;line-height:1.3;">QBU 评论分析 · {{ _window_label }} · {{ logical_date }}</div>
-            <div style="font-size:12px;color:#64748b;margin-top:6px;">
-              累计 自有 {{ _own_pc }} 款 / 竞品 {{ _comp_pc }} 款 / 共 {{ _ingested }} 条评论；{{ _window_label }}新增 {{ _window_reviews or 0 }} 条评论
+          <td class="qbu-pad-lg qbu-pad-lg-t" style="padding:32px 32px 20px;">
+            <div class="qbu-eyebrow" style="font-size:10px;font-weight:700;color:#4f46e5;letter-spacing:0.24em;text-transform:uppercase;font-family:'SF Mono','DM Mono',Consolas,Menlo,monospace;">
+              QBU · {% if _report_window.type == "weekly" %}WEEKLY{% elif _report_window.type == "bootstrap" %}BOOTSTRAP{% else %}DAILY{% endif %} BRIEFING
             </div>
+            <div class="qbu-title" style="font-size:22px;font-weight:700;color:#0f172a;line-height:1.25;margin-top:10px;letter-spacing:-0.01em;font-family:Georgia,'Noto Serif SC',serif;">
+              评论分析 · {{ _window_label }}
+            </div>
+            <div class="qbu-meta" style="font-size:12px;color:#6b7280;margin-top:6px;letter-spacing:0.02em;line-height:1.7;">
+              {{ logical_date }} &nbsp;·&nbsp; 自有 <strong style="color:#374151;font-weight:600;">{{ _own_pc }}</strong> 款 &nbsp;·&nbsp; 竞品 <strong style="color:#374151;font-weight:600;">{{ _comp_pc }}</strong> 款 &nbsp;·&nbsp; 累计 <strong style="color:#374151;font-weight:600;">{{ _ingested }}</strong> 条 &nbsp;·&nbsp; {{ _window_label }}新增 <strong style="color:#4f46e5;font-weight:700;">+{{ _window_reviews or 0 }}</strong>
+            </div>
+            <div style="margin-top:18px;width:48px;height:2px;background:#4f46e5;font-size:0;line-height:0;">&nbsp;</div>
           </td>
         </tr>
 
-        {# ── 2. KPI 灯条（4 张语义灯） ── #}
+        {# ── 2. KPI 卡（统一外框 + 内部 hairline 分隔 + 右对齐数值） ── #}
         <tr>
-          <td style="padding:12px 24px 16px;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              {# 总体口碑 #}
-              <tr class="lamp-{{ _health_lamp }}">
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
-                  <span style="font-size:16px;">{{ _health_emoji }}</span>
-                  <strong style="margin-left:6px;">总体口碑</strong>
-                  <span style="margin-left:8px;color:#475569;">
-                    {{ _health_label }}{% if _health is not none and _health != "" %} ({{ _health }}){% endif %}
-                  </span>
+          <td class="qbu-pad-lg" style="padding:0 32px 24px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e5e4e0;border-radius:10px;overflow:hidden;background:#ffffff;">
+
+              {# 总体口碑（Hero KPI — 大字数值） #}
+              <tr>
+                <td class="qbu-pad-md" style="padding:18px 18px;background:#ffffff;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:8px;background:{{ _lamp_dot[_health_lamp] }};vertical-align:middle;"></span>
+                        <span style="font-size:13px;font-weight:600;color:#0f172a;margin-left:10px;letter-spacing:0.01em;">总体口碑</span>
+                        <span class="qbu-sub" style="font-size:11px;color:#9ca3af;margin-left:8px;">健康指数</span>
+                      </td>
+                      <td align="right" style="vertical-align:middle;white-space:nowrap;">
+                        {% if _health is not none and _health != "" %}
+                        <span class="qbu-hero-num" style="font-size:24px;font-weight:700;color:{{ _lamp_text[_health_lamp] }};letter-spacing:-0.02em;font-family:Georgia,'Noto Serif SC',serif;">{{ _health }}</span>
+                        <span style="font-size:11px;color:#9ca3af;margin-left:2px;">/100</span>
+                        {% else %}
+                        <span style="font-size:14px;color:#9ca3af;">—</span>
+                        {% endif %}
+                        <span style="display:inline-block;font-size:10px;color:{{ _lamp_text[_health_lamp] }};background:{{ _lamp_bg[_health_lamp] }};border:1px solid {{ _lamp_border[_health_lamp] }};padding:2px 8px;border-radius:999px;margin-left:8px;font-weight:600;letter-spacing:0.04em;vertical-align:middle;">{{ _health_label }}</span>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              <tr><td style="border-top:1px solid #f1f0ec;height:0;line-height:0;font-size:0;">&nbsp;</td></tr>
+
               {# 好评率 #}
-              <tr class="lamp-{{ _pos_lamp }}">
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
-                  <span style="font-size:16px;">{{ _pos_emoji }}</span>
-                  <strong style="margin-left:6px;">好评率</strong>
-                  <span style="margin-left:8px;color:#475569;">{{ _positive_rate_display }}</span>
+              <tr>
+                <td class="qbu-pad-md" style="padding:14px 18px;background:#ffffff;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:8px;background:{{ _lamp_dot[_pos_lamp] }};vertical-align:middle;"></span>
+                        <span style="font-size:13px;font-weight:600;color:#0f172a;margin-left:10px;">好评率</span>
+                        <span class="qbu-sub" style="font-size:11px;color:#9ca3af;margin-left:8px;">≥4 星 / 自有评论</span>
+                      </td>
+                      <td align="right" style="vertical-align:middle;white-space:nowrap;">
+                        <span class="qbu-num" style="font-size:18px;font-weight:700;color:{{ _lamp_text[_pos_lamp] }};letter-spacing:-0.01em;font-family:Georgia,serif;">{{ _positive_rate_display }}</span>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              <tr><td style="border-top:1px solid #f1f0ec;height:0;line-height:0;font-size:0;">&nbsp;</td></tr>
+
               {# 差评率 #}
-              <tr class="lamp-{{ _neg_lamp }}">
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
-                  <span style="font-size:16px;">{{ _neg_emoji }}</span>
-                  <strong style="margin-left:6px;">差评率</strong>
-                  <span style="margin-left:8px;color:#475569;">
-                    {{ _own_neg_rate_display or ((_neg_pct | round(1)) ~ "%") }} (≤2 星 / 自有评论)
-                  </span>
+              <tr>
+                <td class="qbu-pad-md" style="padding:14px 18px;background:#ffffff;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:8px;background:{{ _lamp_dot[_neg_lamp] }};vertical-align:middle;"></span>
+                        <span style="font-size:13px;font-weight:600;color:#0f172a;margin-left:10px;">差评率</span>
+                        <span class="qbu-sub" style="font-size:11px;color:#9ca3af;margin-left:8px;">≤2 星 / 自有评论</span>
+                      </td>
+                      <td align="right" style="vertical-align:middle;white-space:nowrap;">
+                        <span class="qbu-num" style="font-size:18px;font-weight:700;color:{{ _lamp_text[_neg_lamp] }};letter-spacing:-0.01em;font-family:Georgia,serif;">{{ _own_neg_rate_display or ((_neg_pct | round(1)) ~ "%") }}</span>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              <tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>
+              <tr><td style="border-top:1px solid #f1f0ec;height:0;line-height:0;font-size:0;">&nbsp;</td></tr>
+
               {# 需关注产品 #}
-              <tr class="lamp-{{ _attention_lamp }}">
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fbfdff;font-size:13px;color:#0f172a;">
-                  <span style="font-size:16px;">{{ _attention_emoji }}</span>
-                  <strong style="margin-left:6px;">需关注产品 {{ _attention_count }} 个</strong>
-                  {% if _attention_first %}
-                  <span style="margin-left:8px;color:#475569;">{{ _attention_first }}{% if _attention_count > 1 %} 等{% endif %}</span>
-                  {% endif %}
+              <tr>
+                <td style="padding:14px 18px;background:{{ _lamp_bg[_attention_lamp] }};">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:8px;background:{{ _lamp_dot[_attention_lamp] }};vertical-align:middle;"></span>
+                        <span style="font-size:13px;font-weight:600;color:#0f172a;margin-left:10px;">需关注产品</span>
+                        {% if _attention_first %}
+                        <span style="font-size:11px;color:{{ _lamp_text[_attention_lamp] }};margin-left:8px;">{{ _attention_first }}{% if _attention_count > 1 %} 等{% endif %}</span>
+                        {% endif %}
+                      </td>
+                      <td align="right" style="vertical-align:middle;white-space:nowrap;">
+                        <span class="qbu-num" style="font-size:18px;font-weight:700;color:{{ _lamp_text[_attention_lamp] }};letter-spacing:-0.01em;font-family:Georgia,serif;">{{ _attention_count }}</span>
+                        <span style="font-size:11px;color:{{ _lamp_text[_attention_lamp] }};margin-left:3px;">款</span>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
             </table>
           </td>
         </tr>
 
-        {# ── 3. 关键判断（Hero + 3 bullets） ── #}
+        {# ── 3. 关键判断（Hero + bullets） ── #}
         {% if _hero or _bullets %}
         <tr>
-          <td style="padding:0 24px 16px;">
-            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">关键判断</div>
+          <td class="qbu-pad-lg" style="padding:0 32px 24px;">
+            <div style="font-size:10px;font-weight:700;color:#4f46e5;letter-spacing:0.22em;text-transform:uppercase;font-family:'SF Mono','DM Mono',Consolas,monospace;margin-bottom:12px;">关键判断 · Key Insight</div>
             {% if _hero %}
-            <div style="margin-top:8px;padding:12px 14px;background:#f1f5f9;border-left:3px solid #1d4ed8;border-radius:0 8px 8px 0;font-size:14px;color:#0f172a;line-height:1.55;">
+            <div class="qbu-wrap qbu-quote" style="padding:14px 18px;background:#fafaf7;border-left:3px solid #4f46e5;border-radius:0 8px 8px 0;font-size:15px;color:#1a1a2e;line-height:1.6;font-weight:500;letter-spacing:-0.005em;">
               {{ _hero }}
             </div>
             {% endif %}
             {% if _bullets %}
-            <ul style="margin:10px 0 0;padding-left:20px;color:#334155;font-size:13px;line-height:1.7;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
               {% for b in _bullets %}
-              <li>{{ b }}</li>
+              <tr>
+                <td valign="top" width="20" style="padding:6px 0 0;font-size:13px;color:#4f46e5;font-weight:700;font-family:Georgia,serif;line-height:1.5;">{{ loop.index }}.</td>
+                <td valign="top" style="padding:4px 0 4px 4px;font-size:13px;color:#374151;line-height:1.7;">{{ b }}</td>
+              </tr>
               {% endfor %}
-            </ul>
+            </table>
             {% endif %}
           </td>
         </tr>
         {% endif %}
 
+        {# ── 4. 代表性原文证据 ── #}
         {% if _own_evidence or _competitor_evidence %}
         <tr>
-          <td style="padding:0 24px 16px;">
-            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">代表性原文证据</div>
+          <td class="qbu-pad-lg" style="padding:0 32px 24px;">
+            <div style="font-size:10px;font-weight:700;color:#4f46e5;letter-spacing:0.22em;text-transform:uppercase;font-family:'SF Mono','DM Mono',Consolas,monospace;margin-bottom:14px;">代表性原文证据 · Voice of Customer</div>
+
+            {# 评分→星形显示（视觉化，不影响数据） #}
+            {% macro star_display(rating) -%}
+              {%- set r = (rating | float) if rating else 0 -%}
+              {%- set full = (r | int) -%}
+              {%- for i in range(5) -%}{% if i < full %}★{% else %}☆{% endif %}{%- endfor -%}
+            {%- endmacro %}
+
             {% if _own_evidence %}
-            <div style="margin-top:8px;font-size:13px;font-weight:700;color:#0f172a;">{{ _email_evidence.get("own_title") or "自有证据" }}</div>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+            <div style="font-size:11px;font-weight:700;color:#991b1b;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">
+              <span style="display:inline-block;width:4px;height:12px;background:#b91c1c;vertical-align:middle;margin-right:8px;border-radius:2px;"></span>{{ _email_evidence.get("own_title") or "自有风险证据" }}
+            </div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               {% for item in _own_evidence %}
               <tr>
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;font-size:12px;color:#334155;line-height:1.65;">
-                  <strong>SKU: {{ item.sku }}</strong> · 评分 {{ item.rating or "未知" }} 分 · {{ item.issue }}<br>
-                  原文：{{ item.original }}<br>
-                  译文：{{ item.translation }}<br>
-                  判断：{{ item.analysis }}
+                <td style="padding:16px 18px;border:1px solid #fee2e2;border-left:3px solid #b91c1c;border-radius:0 10px 10px 0;background:#fffafa;">
+                  {# Meta 行：SKU chip + 星形评分 + issue tag #}
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
+                    <tr>
+                      <td class="qbu-meta-stack" valign="middle" style="vertical-align:middle;">
+                        <span style="display:inline-block;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:10px;font-weight:700;color:#991b1b;background:#ffffff;border:1px solid #fecaca;padding:2px 8px;border-radius:4px;letter-spacing:0.04em;">{{ item.sku }}</span>
+                        <span style="font-size:12px;color:#dc2626;margin-left:10px;letter-spacing:1px;font-family:'SF Mono',Consolas,monospace;vertical-align:middle;">{{ star_display(item.rating) }}</span>
+                        <span style="font-size:10px;color:#9ca3af;margin-left:4px;vertical-align:middle;">{{ item.rating or "—" }}</span>
+                      </td>
+                      <td class="qbu-meta-stack-right" align="right" valign="middle" style="vertical-align:middle;white-space:nowrap;">
+                        <span style="display:inline-block;font-size:10px;background:#fee2e2;padding:2px 9px;border-radius:999px;color:#991b1b;font-weight:600;letter-spacing:0.04em;">{{ item.issue }}</span>
+                      </td>
+                    </tr>
+                  </table>
+                  {# 主信号：译文（完整） #}
+                  <div class="qbu-wrap qbu-body-md" style="font-size:14px;color:#0f172a;line-height:1.7;font-weight:500;letter-spacing:-0.005em;">{{ item.translation }}</div>
+                  {# 次信号：原文（完整，dim 中性灰，monospace label） #}
+                  {% if item.original %}
+                  <div style="font-size:11px;color:#9ca3af;line-height:1.6;font-style:italic;margin-top:10px;padding-top:10px;border-top:1px dashed #fee2e2;">
+                    <span style="display:inline-block;font-style:normal;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:9px;font-weight:600;color:#9ca3af;letter-spacing:0.12em;text-transform:uppercase;margin-right:6px;">EN&nbsp;原文</span><span class="qbu-wrap">{{ item.original }}</span>
+                  </div>
+                  {% endif %}
+                  {# 三信号：AI 判断（完整，去掉嵌套 box，统一节奏） #}
+                  {% if item.analysis %}
+                  <div style="font-size:12px;color:#475569;line-height:1.65;margin-top:10px;padding-top:10px;border-top:1px dashed #fee2e2;">
+                    <span style="display:inline-block;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:9px;font-weight:700;color:#4f46e5;letter-spacing:0.12em;text-transform:uppercase;margin-right:6px;">AI&nbsp;诊断</span><span class="qbu-wrap">{{ item.analysis }}</span>
+                  </div>
+                  {% endif %}
                 </td>
               </tr>
-              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% if not loop.last %}<tr><td style="height:10px;line-height:10px;font-size:0;">&nbsp;</td></tr>{% endif %}
               {% endfor %}
             </table>
             {% endif %}
+
             {% if _competitor_evidence %}
-            <div style="margin-top:10px;font-size:13px;font-weight:700;color:#0f172a;">{{ _email_evidence.get("competitor_title") or "竞品证据" }}</div>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+            <div style="font-size:11px;font-weight:700;color:#065f46;letter-spacing:0.06em;text-transform:uppercase;margin:20px 0 10px;">
+              <span style="display:inline-block;width:4px;height:12px;background:#047857;vertical-align:middle;margin-right:8px;border-radius:2px;"></span>{{ _email_evidence.get("competitor_title") or "竞品亮点证据" }}
+            </div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               {% for item in _competitor_evidence %}
               <tr>
-                <td style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;font-size:12px;color:#334155;line-height:1.65;">
-                  <strong>SKU: {{ item.sku }}</strong> · 评分 {{ item.rating or "未知" }} 分 · {{ item.issue }}<br>
-                  原文：{{ item.original }}<br>
-                  译文：{{ item.translation }}<br>
-                  判断：{{ item.analysis }}
+                <td style="padding:16px 18px;border:1px solid #d1fae5;border-left:3px solid #047857;border-radius:0 10px 10px 0;background:#f7fdfb;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
+                    <tr>
+                      <td class="qbu-meta-stack" valign="middle" style="vertical-align:middle;">
+                        <span style="display:inline-block;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:10px;font-weight:700;color:#065f46;background:#ffffff;border:1px solid #a7f3d0;padding:2px 8px;border-radius:4px;letter-spacing:0.04em;">{{ item.sku }}</span>
+                        <span style="font-size:12px;color:#059669;margin-left:10px;letter-spacing:1px;font-family:'SF Mono',Consolas,monospace;vertical-align:middle;">{{ star_display(item.rating) }}</span>
+                        <span style="font-size:10px;color:#9ca3af;margin-left:4px;vertical-align:middle;">{{ item.rating or "—" }}</span>
+                      </td>
+                      <td class="qbu-meta-stack-right" align="right" valign="middle" style="vertical-align:middle;white-space:nowrap;">
+                        <span style="display:inline-block;font-size:10px;background:#d1fae5;padding:2px 9px;border-radius:999px;color:#065f46;font-weight:600;letter-spacing:0.04em;">{{ item.issue }}</span>
+                      </td>
+                    </tr>
+                  </table>
+                  <div class="qbu-wrap qbu-body-md" style="font-size:14px;color:#0f172a;line-height:1.7;font-weight:500;letter-spacing:-0.005em;">{{ item.translation }}</div>
+                  {% if item.original %}
+                  <div style="font-size:11px;color:#9ca3af;line-height:1.6;font-style:italic;margin-top:10px;padding-top:10px;border-top:1px dashed #d1fae5;">
+                    <span style="display:inline-block;font-style:normal;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:9px;font-weight:600;color:#9ca3af;letter-spacing:0.12em;text-transform:uppercase;margin-right:6px;">EN&nbsp;原文</span><span class="qbu-wrap">{{ item.original }}</span>
+                  </div>
+                  {% endif %}
+                  {% if item.analysis %}
+                  <div style="font-size:12px;color:#475569;line-height:1.65;margin-top:10px;padding-top:10px;border-top:1px dashed #d1fae5;">
+                    <span style="display:inline-block;font-family:'SF Mono','DM Mono',Consolas,monospace;font-size:9px;font-weight:700;color:#4f46e5;letter-spacing:0.12em;text-transform:uppercase;margin-right:6px;">AI&nbsp;诊断</span><span class="qbu-wrap">{{ item.analysis }}</span>
+                  </div>
+                  {% endif %}
                 </td>
               </tr>
-              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% if not loop.last %}<tr><td style="height:10px;line-height:10px;font-size:0;">&nbsp;</td></tr>{% endif %}
               {% endfor %}
             </table>
             {% endif %}
@@ -230,66 +366,91 @@
         </tr>
         {% endif %}
 
-        {# ── 4. Top 3 行动建议 ── #}
+        {# ── 5. Top 3 行动建议（serif rank + 编号 chip） ── #}
         {% if _priorities %}
         <tr>
-          <td style="padding:0 24px 16px;">
-            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">Top 3 行动建议</div>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+          <td class="qbu-pad-lg" style="padding:0 32px 24px;">
+            <div style="font-size:10px;font-weight:700;color:#4f46e5;letter-spacing:0.22em;text-transform:uppercase;font-family:'SF Mono','DM Mono',Consolas,monospace;margin-bottom:14px;">Top 3 行动建议 · Priorities</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               {% for item in _priorities %}
               {% set _affected_count = item.get("affected_products_count") or ((item.get("affected_products") or []) | length) %}
               <tr>
-                <td style="padding:10px 12px;background:#fef9c3;border:1px solid #fde68a;border-radius:8px;font-size:13px;color:#713f12;">
-                  <strong>{{ loop.index }}.</strong>
-                  {% if item.get("label_display") %}[{{ item.get("label_display") }}] {% endif %}
-                  {{ item.get("short_title") or item.get("label_display") or "" }}
-                  · 影响 {{ _affected_count }} 款
+                <td style="padding:0;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">
+                    <tr>
+                      <td class="qbu-rank" width="44" align="center" valign="middle" style="padding:14px 0 14px 12px;font-size:24px;font-weight:700;color:#b45309;font-family:Georgia,'Noto Serif SC',serif;line-height:1;letter-spacing:-0.02em;">{{ loop.index }}</td>
+                      <td valign="middle" style="padding:12px 16px 12px 8px;">
+                        {% if item.get("label_display") %}
+                        <div style="font-size:10px;color:#92400e;font-family:'SF Mono','DM Mono',Consolas,monospace;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;">{{ item.get("label_display") }}</div>
+                        {% endif %}
+                        <div style="font-size:13px;color:#451a03;line-height:1.5;font-weight:600;">
+                          {{ item.get("short_title") or item.get("label_display") or "" }}
+                        </div>
+                        <div style="font-size:11px;color:#92400e;margin-top:4px;">影响 <strong style="font-weight:700;">{{ _affected_count }}</strong> 款产品</div>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              {% if not loop.last %}<tr><td style="height:6px;line-height:6px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% if not loop.last %}<tr><td style="height:8px;line-height:8px;font-size:0;">&nbsp;</td></tr>{% endif %}
               {% endfor %}
             </table>
           </td>
         </tr>
         {% endif %}
 
-        {# ── 5. 自有产品状态（Task 3.4 才会填充 product_status；为空时整块跳过） ── #}
+        {# ── 6. 自有产品状态（list with hairlines） ── #}
         {% if _product_status %}
         <tr>
-          <td style="padding:0 24px 16px;">
-            <div style="font-size:11px;font-weight:700;color:#1e293b;letter-spacing:0.08em;text-transform:uppercase;">自有产品状态</div>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+          <td class="qbu-pad-lg" style="padding:0 32px 24px;">
+            <div style="font-size:10px;font-weight:700;color:#4f46e5;letter-spacing:0.22em;text-transform:uppercase;font-family:'SF Mono','DM Mono',Consolas,monospace;margin-bottom:14px;">自有产品状态 · Product Health</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e5e4e0;border-radius:10px;overflow:hidden;background:#ffffff;">
               {% for ps in _product_status[:5] %}
               {% set _lamp = ps.get("status_lamp") or "gray" %}
               <tr>
-                <td style="padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#ffffff;font-size:13px;color:#0f172a;">
-                  <span style="font-size:14px;">{{ _lamp_emoji_map.get(_lamp, "⚪") }}</span>
-                  <span style="margin-left:6px;font-weight:600;">{{ ps.get("product_name") or "(未知产品)" }}</span>
-                  <span style="margin-left:10px;color:#475569;">
-                    {{ ps.get("primary_concern") or ("无数据" if _lamp == "gray" else "健康") }}
-                  </span>
+                <td style="padding:12px 16px;background:#ffffff;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td width="20" valign="middle" style="vertical-align:middle;">
+                        <span style="display:inline-block;width:8px;height:8px;border-radius:8px;background:{{ _lamp_dot[_lamp] }};vertical-align:middle;"></span>
+                      </td>
+                      <td valign="middle" style="vertical-align:middle;">
+                        <div style="font-size:13px;font-weight:600;color:#0f172a;line-height:1.4;">{{ ps.get("product_name") or "(未知产品)" }}</div>
+                        <div style="font-size:11px;color:{{ _lamp_text[_lamp] }};margin-top:2px;line-height:1.4;">
+                          {{ ps.get("primary_concern") or ("无数据" if _lamp == "gray" else "运行健康") }}
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
-              {% if not loop.last %}<tr><td style="height:4px;line-height:4px;font-size:0;">&nbsp;</td></tr>{% endif %}
+              {% if not loop.last %}<tr><td style="border-top:1px solid #f1f0ec;height:0;line-height:0;font-size:0;">&nbsp;</td></tr>{% endif %}
               {% endfor %}
             </table>
           </td>
         </tr>
         {% endif %}
 
-        {# ── 6. 附件链接 ── #}
+        {# ── 7. 附件链接（编辑级 hint，非按钮） ── #}
         <tr>
-          <td style="padding:4px 24px 18px;">
-            <div style="font-size:12px;color:#475569;line-height:1.8;">
-              ▶ 详情 / 评论原文见附件 HTML<br>
-              ▶ 数据下钻见 Excel 附件
+          <td style="padding:8px 32px 28px;">
+            <div style="border-top:1px solid #e5e4e0;padding-top:18px;font-size:12px;color:#6b7280;line-height:1.9;">
+              <div style="margin-bottom:4px;">
+                <span style="color:#4f46e5;font-weight:600;letter-spacing:0.04em;">→</span>
+                <span style="margin-left:6px;">详情 / 评论原文见 <strong style="color:#374151;font-weight:600;">HTML 附件</strong></span>
+              </div>
+              <div>
+                <span style="color:#4f46e5;font-weight:600;letter-spacing:0.04em;">→</span>
+                <span style="margin-left:6px;">数据下钻见 <strong style="color:#374151;font-weight:600;">Excel 附件</strong></span>
+              </div>
             </div>
           </td>
         </tr>
 
+        {# ── 8. Footer ── #}
         <tr>
-          <td style="padding:12px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;line-height:1.6;">
-            本邮件为 QBU 自动生成报告，仅供内部参考。
+          <td style="padding:14px 32px;background:#fafaf7;border-top:1px solid #e5e4e0;font-size:10px;color:#9ca3af;line-height:1.7;letter-spacing:0.04em;text-align:center;">
+            FSH-QBU · AI自动生成报告 · 仅供内部参考
           </td>
         </tr>
       </table>

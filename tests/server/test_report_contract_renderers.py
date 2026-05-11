@@ -80,7 +80,7 @@ def test_excel_actions_can_render_from_contract_only(tmp_path, monkeypatch):
     )
 
     wb = openpyxl.load_workbook(path)
-    ws = wb["现在该做什么"]
+    ws = wb["行动建议"]
     values = [cell.value for row in ws.iter_rows() for cell in row]
     assert "复核结构尺寸" in values
     assert "复核结构尺寸并验证肉饼成型路径" in values
@@ -108,7 +108,10 @@ def test_email_top_actions_can_render_from_contract_only():
     html = render_email_full(snapshot, analytics)
 
     assert "复核结构尺寸" in html
-    assert "需关注产品 1 个" in html
+    # 新版邮件把 label / 数值 分到 KPI 行的左右两侧（label 在左、count + 单位 + pill 在右），
+    # 所以不再断言连续字符串，只要 label 与计数都出现即可。
+    assert "需关注产品" in html
+    assert ">1<" in html or "> 1<" in html
 
 
 def test_html_refreshes_missing_snapshot_contract(monkeypatch):
